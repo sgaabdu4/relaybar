@@ -20,7 +20,7 @@ if [ "${1:-}" = "--install" ]; then
   while pgrep -x Relaybar > /dev/null; do sleep 0.2; done
   rm -rf "$HOME/Applications/Relaybar.app"
   ditto "$app" "$HOME/Applications/Relaybar.app"
-  for attempt in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     open "$HOME/Applications/Relaybar.app" && break
     sleep 1
   done
