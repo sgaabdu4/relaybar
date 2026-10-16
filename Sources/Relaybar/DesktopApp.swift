@@ -1,4 +1,5 @@
 import AppKit
+import RelaybarCore
 
 enum DesktopApp {
     static var logos: [String: NSImage] = [:]
@@ -37,11 +38,11 @@ enum DesktopApp {
         try manager.createDirectory(atPath: launcher + "/Contents/MacOS", withIntermediateDirectories: true)
         try manager.createDirectory(atPath: launcher + "/Contents/Resources", withIntermediateDirectories: true)
         let script = """
-        #!/bin/bash
-        export \(kind.variable)=\(quote(configDir))
-        exec \(quote(runtime + "/Contents/MacOS/" + executable)) --user-data-dir=\(quote(dataDir))
+            #!/bin/bash
+            export \(kind.variable)=\(quote(configDir))
+            exec \(quote(runtime + "/Contents/MacOS/" + executable)) --user-data-dir=\(quote(dataDir))
 
-        """
+            """
         try script.write(toFile: launcher + "/Contents/MacOS/launch", atomically: true, encoding: .utf8)
         try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher + "/Contents/MacOS/launch")
         let slug = name.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: "-")
@@ -58,8 +59,8 @@ enum DesktopApp {
 
     static func updateIcon(configDir: String, tag: String, color: NSColor) {
         guard let found = find(configDir: configDir), let runtime = found.runtime else { return }
-        let tool = found.script.contains("CODEX_HOME=") ? Kind.codex.tool : Kind.claude.tool
-        try? applyIcon(tool: tool, launcher: found.launcher, runtime: runtime, tag: tag, color: color)
+        let tool = found.isCodex ? Kind.codex.tool : Kind.claude.tool
+        try? applyIcon(tool: tool, launcher: found.app, runtime: runtime, tag: tag, color: color)
     }
 
     static func exists(configDir: String) -> Bool {
@@ -67,31 +68,15 @@ enum DesktopApp {
     }
 
     static func launcher(configDir: String) -> String? {
-        find(configDir: configDir)?.launcher
+        find(configDir: configDir)?.app
     }
 
     static func targets(configDir: String) -> [String] {
-        guard let found = find(configDir: configDir) else { return [] }
-        var targets = [found.launcher]
-        if let runtime = found.runtime {
-            let folder = (runtime as NSString).deletingLastPathComponent
-            targets.append(folder.hasSuffix("-Runtime") ? folder : runtime)
-        }
-        if let data = match(#"--user-data-dir=["']([^"']+)["']"#, in: found.script) { targets.append(data) }
-        return targets
+        find(configDir: configDir)?.targets ?? []
     }
 
-    private static func find(configDir: String) -> (launcher: String, runtime: String?, script: String)? {
-        let apps = (try? FileManager.default.contentsOfDirectory(atPath: "/Applications")) ?? []
-        for app in apps where app.hasSuffix(".app") {
-            let launcher = "/Applications/" + app
-            guard let script = try? String(contentsOfFile: launcher + "/Contents/MacOS/launch", encoding: .utf8) else { continue }
-            let points = ["CLAUDE_CONFIG_DIR", "CODEX_HOME"].contains { variable in
-                script.contains("\(variable)=\"\(configDir)\"") || script.contains("\(variable)='\(configDir)'")
-            }
-            if points { return (launcher, match(#"["']([^"']+\.app)/Contents/MacOS/"#, in: script), script) }
-        }
-        return nil
+    private static func find(configDir: String) -> Launcher? {
+        Launcher.find(configDir: configDir, in: URL(fileURLWithPath: "/Applications"))
     }
 
     private static func applyIcon(tool: String, launcher: String, runtime: String, tag: String, color: NSColor) throws {
@@ -117,12 +102,14 @@ enum DesktopApp {
             Render.tint(logo, .white).draw(in: tile.insetBy(dx: unit * 0.21, dy: unit * 0.21))
             guard !tag.isEmpty else { return true }
             let size = unit * 0.16
-            let font = NSFont.systemFont(ofSize: size, weight: .heavy).fontDescriptor.withDesign(.rounded)
+            let font =
+                NSFont.systemFont(ofSize: size, weight: .heavy).fontDescriptor.withDesign(.rounded)
                 .flatMap { NSFont(descriptor: $0, size: size) } ?? NSFont.systemFont(ofSize: size, weight: .heavy)
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: bottom]
             let text = (tag as NSString).size(withAttributes: attributes)
             let height = unit * 0.23
-            let pill = NSRect(x: tile.minX + unit * 0.09, y: tile.minY + unit * 0.09, width: max(height, text.width + unit * 0.1), height: height)
+            let pill = NSRect(
+                x: tile.minX + unit * 0.09, y: tile.minY + unit * 0.09, width: max(height, text.width + unit * 0.1), height: height)
             NSColor.white.setFill()
             NSBezierPath(roundedRect: pill, xRadius: height / 2, yRadius: height / 2).fill()
             (tag as NSString).draw(at: NSPoint(x: pill.midX - text.width / 2, y: pill.midY - text.height / 2), withAttributes: attributes)
@@ -149,9 +136,11 @@ enum DesktopApp {
     }
 
     private static func png(_ image: NSImage, pixels: Int) throws -> Data {
-        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
-                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                                            bytesPerRow: 0, bitsPerPixel: 0)
+        guard
+            let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0)
         else { throw failure("Could not draw the app icon.") }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
@@ -159,14 +148,6 @@ enum DesktopApp {
         NSGraphicsContext.restoreGraphicsState()
         guard let data = bitmap.representation(using: .png, properties: [:]) else { throw failure("Could not save the app icon.") }
         return data
-    }
-
-    private static func match(_ pattern: String, in text: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let found = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let range = Range(found.range(at: 1), in: text)
-        else { return nil }
-        return String(text[range])
     }
 
     private static func quote(_ text: String) -> String {

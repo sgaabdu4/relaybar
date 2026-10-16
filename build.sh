@@ -13,7 +13,18 @@ for size in 16 32 128 256 512; do
   sips -z $((size * 2)) $((size * 2)) Resources/AppIcon.png --out "$iconset/icon_${size}x${size}@2x.png" > /dev/null
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
-swiftc -Osize -wmo -swift-version 5 -target arm64-apple-macos14.0 Sources/*/*.swift -o "$app/Contents/MacOS/Relaybar"
+swift build -c release --product Relaybar --arch arm64 --arch x86_64 -Xswiftc -Osize
+products="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+cp "$products/Relaybar" "$app/Contents/MacOS/Relaybar"
+mkdir -p "$app/Contents/Frameworks"
+ditto .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework "$app/Contents/Frameworks/Sparkle.framework"
+if [ -n "${RELAYBAR_VERSION:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELAYBAR_VERSION" "$app/Contents/Info.plist"
+fi
+if [ -n "${RELAYBAR_BUILD:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RELAYBAR_BUILD" "$app/Contents/Info.plist"
+fi
+codesign --force --sign - "$app/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign - "$app"
 if [ "${1:-}" = "--install" ]; then
   pkill -x Relaybar || true

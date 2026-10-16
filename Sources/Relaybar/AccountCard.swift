@@ -1,4 +1,5 @@
 import AppKit
+import RelaybarCore
 
 final class AccountCard: NSView {
     private let account: Account
@@ -38,8 +39,9 @@ final class AccountCard: NSView {
             NSColor.quaternaryLabelColor.setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 1), xRadius: 6, yRadius: 6).fill()
         }
-        Render.tint(logo, account.tint.color).draw(in: NSRect(x: inset, y: 7, width: 14, height: 14), from: .zero,
-                                                   operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        Render.tint(logo, account.tint.color).draw(
+            in: NSRect(x: inset, y: 7, width: 14, height: 14), from: .zero,
+            operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         let name = account.tag.isEmpty ? (account.isClaude ? "Claude" : "Codex") : account.tag
         draw(name, font: Self.nameFont, color: .labelColor, at: NSPoint(x: inset + 21, y: 5), maxWidth: 160)
 
@@ -52,8 +54,9 @@ final class AccountCard: NSView {
         if account.stale {
             draw("Login expired", font: Self.smallFont, color: .systemOrange, at: NSPoint(x: inset, y: y), maxWidth: 200)
         } else if account.session == nil && account.weekly == nil {
-            draw("Waiting for \(account.isClaude ? "Claude" : "Codex")", font: Self.smallFont, color: .tertiaryLabelColor,
-                 at: NSPoint(x: inset, y: y), maxWidth: 200)
+            draw(
+                "Waiting for \(account.isClaude ? "Claude" : "Codex")", font: Self.smallFont, color: .tertiaryLabelColor,
+                at: NSPoint(x: inset, y: y), maxWidth: 200)
         }
     }
 
@@ -87,8 +90,9 @@ final class AccountCard: NSView {
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: style]
-        (text as NSString).draw(in: NSRect(x: point.x, y: point.y, width: maxWidth, height: font.boundingRectForFont.height),
-                                withAttributes: attributes)
+        (text as NSString).draw(
+            in: NSRect(x: point.x, y: point.y, width: maxWidth, height: font.boundingRectForFont.height),
+            withAttributes: attributes)
     }
 
     static func resets(_ window: Window) -> String {

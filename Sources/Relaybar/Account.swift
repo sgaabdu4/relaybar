@@ -1,15 +1,10 @@
-import CryptoKit
 import Foundation
-
-enum Provider {
-    case claude(service: String)
-    case codex(authFile: URL)
-}
+import RelaybarCore
 
 @MainActor
 final class Account {
     let id: String
-    let provider: Provider
+    let provider: AccountInfo.Source
     let label: String
     private let defaultTag: String
     private let defaultTint: Tint
@@ -22,11 +17,11 @@ final class Account {
     private var retryAt = Date.distantPast
     private var backoff: TimeInterval = 120
 
-    init(id: String, provider: Provider, label: String, defaultTag: String, defaultTint: Tint) {
-        self.id = id
-        self.provider = provider
-        self.label = label
-        self.defaultTag = defaultTag
+    init(_ info: AccountInfo, defaultTint: Tint) {
+        self.id = info.id
+        self.provider = info.source
+        self.label = info.label
+        self.defaultTag = info.defaultTag
         self.defaultTint = defaultTint
         if let saved = UserDefaults.standard.array(forKey: "usage:" + id) as? [Double], saved.count == 4 {
             session = Self.window(saved, 0)
@@ -93,59 +88,11 @@ final class Account {
     }
 
     static func discover() -> [Account] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: home.path)) ?? []
-        var claude: [Account] = []
-        var codex: [Account] = []
-        for name in names.sorted() {
-            let dir = home.appendingPathComponent(name)
-            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
-            if name == ".claude" || name.hasPrefix(".claude-") {
-                let isDefault = name == ".claude"
-                let config = isDefault ? home.appendingPathComponent(".claude.json") : dir.appendingPathComponent(".claude.json")
-                guard let data = try? Data(contentsOf: config),
-                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let oauth = root["oauthAccount"] as? [String: Any],
-                      let email = oauth["emailAddress"] as? String
-                else { continue }
-                let service = isDefault ? "Claude Code-credentials" : "Claude Code-credentials-" + shortHash(dir.path)
-                let org = oauth["organizationName"] as? String ?? ""
-                let tag = org.isEmpty || org.hasSuffix("'s Organization") ? String(email.prefix(2)).uppercased() : initials(org)
-                claude.append(Account(id: dir.path, provider: .claude(service: service), label: email, defaultTag: tag,
-                                      defaultTint: Tint.palette[claude.count % Tint.palette.count]))
-            } else if name == ".codex" || name.hasPrefix(".codex-") {
-                let auth = dir.appendingPathComponent("auth.json")
-                guard FileManager.default.fileExists(atPath: auth.path) else { continue }
-                let suffix = name.dropFirst(".codex".count).drop { $0 == "-" }
-                codex.append(Account(id: dir.path, provider: .codex(authFile: auth),
-                                     label: codexEmail(auth) ?? name, defaultTag: String(suffix.prefix(2)).uppercased(),
-                                     defaultTint: .plain))
-            }
+        var claudeCount = 0
+        return AccountScanner.scan(home: FileManager.default.homeDirectoryForCurrentUser).map { info in
+            guard case .claude = info.source else { return Account(info, defaultTint: .plain) }
+            defer { claudeCount += 1 }
+            return Account(info, defaultTint: Tint.palette[claudeCount % Tint.palette.count])
         }
-        return claude + codex
-    }
-
-    private static func shortHash(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func initials(_ text: String) -> String {
-        let words = text.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-        return String(words.prefix(2).compactMap(\.first)).uppercased()
-    }
-
-    private static func codexEmail(_ auth: URL) -> String? {
-        guard let data = try? Data(contentsOf: auth),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = (root["tokens"] as? [String: Any])?["id_token"] as? String
-        else { return nil }
-        let parts = token.split(separator: ".")
-        guard parts.count > 1 else { return nil }
-        var payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
-        guard let decoded = Data(base64Encoded: payload),
-              let claims = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any]
-        else { return nil }
-        return claims["email"] as? String
     }
 }

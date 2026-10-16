@@ -1,4 +1,5 @@
 import AppKit
+import RelaybarCore
 
 enum Tint: String, CaseIterable {
     case orange, blue, green, purple, pink, teal, yellow, red, plain
@@ -63,8 +64,9 @@ enum Render {
                 } else {
                     y = index == 0 ? height / 2 - 1.5 : height / 2 - lineSize.height + 1.5
                 }
-                (line.text as NSString).draw(at: NSPoint(x: x + textWidth - lineSize.width, y: y),
-                                             withAttributes: [.font: font, .foregroundColor: line.color])
+                (line.text as NSString).draw(
+                    at: NSPoint(x: x + textWidth - lineSize.width, y: y),
+                    withAttributes: [.font: font, .foregroundColor: line.color])
             }
             return true
         }

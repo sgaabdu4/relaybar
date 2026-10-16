@@ -1,6 +1,77 @@
 {
   "version": 1,
-  "packages": [],
+  "packages": [
+    {
+      "name": "relaybar",
+      "path": ".",
+      "checks": [
+        {
+          "name": "lockfile",
+          "role": "lockfiles",
+          "command": [
+            "swift",
+            "package",
+            "resolve",
+            "--only-use-versions-from-resolved-file"
+          ]
+        },
+        {
+          "name": "vulnerabilities",
+          "role": "vulnerabilities",
+          "parallel": true,
+          "command": [
+            "osv-scanner",
+            "scan",
+            "source",
+            "--all-packages",
+            "--lockfile=Package.resolved",
+            "--format=json",
+            "--output-file=coverage/osv.json"
+          ],
+          "report": {
+            "type": "osv",
+            "path": "coverage/osv.json"
+          }
+        },
+        {
+          "name": "format",
+          "role": "format",
+          "parallel": true,
+          "command": [
+            "swift",
+            "format",
+            "lint",
+            "--strict",
+            "--recursive",
+            "Package.swift",
+            "Sources",
+            "Tests"
+          ]
+        },
+        {
+          "name": "tests",
+          "role": "swift-tests",
+          "command": [
+            "scripts/test.sh"
+          ]
+        },
+        {
+          "name": "build",
+          "role": "build",
+          "command": [
+            "./build.sh"
+          ]
+        },
+        {
+          "name": "efficiency",
+          "role": "efficiency",
+          "command": [
+            "scripts/efficiency.sh"
+          ]
+        }
+      ]
+    }
+  ],
   "shared": [
     {
       "name": "secrets-files",
@@ -73,7 +144,27 @@
       "name": "shellcheck",
       "role": "shell",
       "parallel": true,
-      "command": ["shellcheck", "--", "build.sh"]
+      "command": [
+        "shellcheck",
+        "--",
+        "build.sh",
+        "scripts/test.sh",
+        "scripts/efficiency.sh"
+      ]
     }
-  ]
+  ],
+  "shipping": {
+    "base": "main",
+    "checks": [
+      "hard-eng"
+    ],
+    "ui_paths": [
+      "Sources/Relaybar/*",
+      "Resources/*",
+      "Info.plist"
+    ],
+    "ci_seconds": 900,
+    "pre_push_seconds": 600,
+    "delivery": []
+  }
 }

@@ -20,5 +20,15 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/sgaabdu4/relaybar/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>uGMfz3Xdl6qHxQvmg+IuJB1q8uW9jrul6cp60wrQvCY=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 </dict>
 </plist>

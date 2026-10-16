@@ -7,16 +7,19 @@ final class Watcher {
 
     init(paths: [String], handler: @escaping ([String]) -> Void) {
         self.handler = handler
-        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
-                                           retain: nil, release: nil, copyDescription: nil)
+        var context = FSEventStreamContext(
+            version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil, release: nil, copyDescription: nil)
         let callback: FSEventStreamCallback = { _, info, _, paths, _, _ in
             guard let info else { return }
             let watcher = Unmanaged<Watcher>.fromOpaque(info).takeUnretainedValue()
             watcher.handler(unsafeBitCast(paths, to: NSArray.self) as? [String] ?? [])
         }
-        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
-        guard let stream = FSEventStreamCreate(nil, callback, &context, paths as CFArray,
-                                               FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 2, flags)
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
+        guard
+            let stream = FSEventStreamCreate(
+                nil, callback, &context, paths as CFArray,
+                FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 5, flags)
         else { return }
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)

@@ -1,10 +1,13 @@
 import AppKit
+import RelaybarCore
 import ServiceManagement
+import Sparkle
 
 @MainActor
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accounts: [Account] = []
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private var watcher: Watcher?
     private var cards: [AccountCard] = []
     private var timer: Timer?
@@ -37,7 +40,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Set(visibleAccounts().map(\.id)) != known {
             reload()
         } else {
-            accounts.forEach { refresh($0) }
+            for account in accounts { refresh(account) }
         }
     }
 
@@ -47,15 +50,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated { self?.filesChanged(paths) }
         }
         redraw()
-        accounts.forEach { refresh($0) }
+        for account in accounts { refresh(account) }
     }
 
     private func filesChanged(_ paths: [String]) {
         for account in accounts {
             let touched = paths.filter { $0.hasPrefix(account.id + "/") }
             guard !touched.isEmpty else { continue }
-            if !account.isClaude, let log = touched.last(where: { $0.hasSuffix(".jsonl") }),
-               let result = Fetch.codexLog(URL(fileURLWithPath: log)) {
+            if !account.isClaude, let folder = touched.last, let result = Fetch.newestCodexLog(in: URL(fileURLWithPath: folder)) {
                 account.apply(result)
                 redraw()
             } else if account.isClaude {
@@ -93,11 +95,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func redraw() {
         let parts = accounts.map { account in
             let lines = [account.session, account.weekly].compactMap { $0.map { ("\($0.left)", account.tint.color(for: $0)) } }
-            return Render.image(logo: logo(for: account), color: account.tint.color, tag: account.tag,
-                                lines: lines.isEmpty ? [("…", NSColor.secondaryLabelColor)] : lines)
+            return Render.image(
+                logo: logo(for: account), color: account.tint.color, tag: account.tag,
+                lines: lines.isEmpty ? [("…", NSColor.secondaryLabelColor)] : lines)
         }
         item.button?.image = Render.row(parts)
-        cards.forEach { $0.needsDisplay = true }
+        for card in cards { card.needsDisplay = true }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -123,6 +126,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let login = action("Open at login", #selector(toggleLogin), nil)
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
+        let update = NSMenuItem(
+            title: "Check for updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        update.target = updater
+        menu.addItem(update)
         menu.addItem(action("Quit Relaybar", #selector(NSApplication.terminate(_:)), nil))
     }
 
@@ -184,7 +191,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let first = NSAlert()
         first.messageText = "Remove \(name)?"
-        first.informativeText = isMain
+        first.informativeText =
+            isMain
             ? "This is your main \(tool) folder, so Relaybar can only hide it. Nothing is deleted."
             : "Hide it from Relaybar, or delete the account from this Mac."
         first.addButton(withTitle: "Hide from Relaybar")
@@ -334,7 +342,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         desktop.state = FileManager.default.fileExists(atPath: kind.source) ? .on : .off
         desktop.isEnabled = desktop.state == .on
         guard ask("Add a \(kind.tool) account", "Your browser opens the \(kind.tool) sign-in page.", stack([name, tag, colors, desktop])),
-              let slug = slug(name.stringValue) else { return }
+            let slug = slug(name.stringValue)
+        else { return }
         let dir = home(".\(kind.tool.lowercased())-" + slug)
         guard create(dir) else { return }
         saveTag(tag.stringValue, for: dir)
@@ -503,7 +512,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stack.alignment = .leading
         stack.spacing = 8
         stack.frame = NSRect(x: 0, y: 0, width: 300, height: CGFloat(views.count) * 30)
-        views.compactMap { $0 as? NSTextField }.forEach { $0.widthAnchor.constraint(equalToConstant: 300).isActive = true }
+        for field in views.compactMap({ $0 as? NSTextField }) { field.widthAnchor.constraint(equalToConstant: 300).isActive = true }
         return stack
     }
 
