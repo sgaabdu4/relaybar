@@ -57,6 +57,10 @@ The account appears in the menu bar a few seconds later. Relaybar also:
 
 <img src="docs/desktop-apps.jpg" alt="Desktop app icons for four accounts, each in its own colour with its tag" width="900">
 
+In T3 Code, every account shows up in the model picker with its own tag, ready to choose per chat.
+
+<img src="docs/t3-code.jpg" alt="T3 Code's model picker listing the new Studio account next to the other accounts, each with its tag" width="700">
+
 ## Remove an account
 
 Click Relaybar, then **Customize**, the account, then **Remove**. You can hide it, or delete it from your Mac: its folder, desktop app, saved login and T3 Code entry. Deleting asks three times, and files go to the Trash. Your main `~/.claude` and `~/.codex` folders can only be hidden.
