@@ -18,6 +18,12 @@ See how much of each Claude and Codex limit is left, live, for every account on 
 
 </div>
 
+## Watch it work
+
+Add a Claude account, sign in, open its own desktop app and use it in T3 Code. All names are sample accounts.
+
+https://github.com/user-attachments/assets/65b1f635-a769-4021-8cd1-288c8367ca0d
+
 ## Why Relaybar
 
 - **Know which account has room.** The 5-hour session and weekly limit of every account, at a glance.
