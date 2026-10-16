@@ -26,13 +26,14 @@ Authority: Owner chat 2026-10-16: release on GitHub as a public repo like Captur
 - [ ] Desktop app lookup → a test finds the launcher, runtime folder and data folder from a fixture launcher script.
 - [ ] Automatic updates → `Info.plist` has `SUFeedURL` on the latest GitHub release, `SUPublicEDKey`, an hourly check, and the menu has "Check for updates…" wired to Sparkle's updater.
 - [ ] Release workflow → pull requests build and pack a DMG; a merge to main publishes `vX.Y.Z` (next patch after the newest tag, or the `CFBundleShortVersionString` floor) as the latest release; with the signing secrets it is Developer ID signed, notarised and carries `appcast.xml`; without them it stays ad-hoc signed with no feed. `actionlint` passes.
+- [ ] Open from the menu → clicking an account card opens its desktop app (main accounts open Claude.app or the Codex app; accounts without one do nothing) → lookup test gives the right app per fixture account; tooltip shows the app name, never an email.
 - [ ] Privacy → no real names, emails, account details or local paths in tracked files or images; README screenshots use mock accounts.
 - [ ] README → icon, one-line pitch, screenshot, download link with release badge, features, how adding and removing accounts works, privacy, build from source, credits for the logos and their trademark owners, MIT licence.
 
 ## Baseline + execution
 
-Result: Pending
-Evidence: Pending — starting `python3 .hooks/hard-eng.py check --plan-stage Draft` on the installed scaffold.
+Result: Passed
+Evidence: `python3 .hooks/hard-eng.py check --plan-stage Draft` on 6fcba3c exited 0: secrets-files, secrets-history, security (Semgrep, 0 findings) and shellcheck passed. The first run failed on shellcheck SC2034 in `build.sh`; fixed in 6fcba3c.
 Execution: One builder (this session), sequential: Swift package + tests first, then Sparkle, then gates and CI, then README, then repository creation and the first release run.
 
 ## Risks + recovery
