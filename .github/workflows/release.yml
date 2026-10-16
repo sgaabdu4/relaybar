@@ -1,0 +1,254 @@
+name: Release
+
+# Pull requests and pushes run the Hard Eng checks on macOS. A merge to main
+# that changes the app then builds Relaybar.app in the protected release
+# environment as the next patch version after the newest vX.Y.Z tag (or the
+# Info.plist version when that is higher), signs it with the Developer ID
+# certificate, notarises it and publishes it as the latest GitHub release with
+# the Sparkle feed the app checks every hour. Without the signing secrets the
+# release stays ad-hoc signed and has no feed.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hard-eng:
+    name: hard-eng
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: read # Verify the installed source release.
+      pull-requests: read # Find the merged PR whose passed checks cover a base-branch push.
+    env:
+      MISE_FETCH_REMOTE_VERSIONS_CACHE: 0s
+      MISE_PREFER_OFFLINE: 'false'
+      MISE_USE_VERSIONS_HOST: 'false'
+      MISE_MINIMUM_RELEASE_AGE: 0s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Find whether only docs changed
+        id: impact
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "MISE_DATA_DIR=$RUNNER_TEMP/hard-eng-tools/mise/data"
+            echo "MISE_CACHE_DIR=$RUNNER_TEMP/hard-eng-tools/mise/cache"
+            echo "MISE_STATE_DIR=$RUNNER_TEMP/hard-eng-tools/mise/state"
+            echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/hard-eng-tools/bun/cache"
+            echo "MISE_PACKAGE=@jdxcode/mise-darwin-$(echo "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')@latest"
+          } >> "$GITHUB_ENV"
+          python3 .hooks/hard-eng.py impact --base "$BASE_SHA" >> "$GITHUB_OUTPUT" || echo docs_only=false >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - name: Run the secret scan for docs-only changes
+        if: steps.impact.outputs.docs_only == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          bun x --package="$MISE_PACKAGE" mise --no-config install uv@latest &&
+          bun x --package="$MISE_PACKAGE" mise --no-config exec uv@latest -- uv run --no-project --with pyyaml python .hooks/hard-eng.py check --base "$BASE_SHA"
+      - name: Run required checks
+        if: steps.impact.outputs.docs_only != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SDK_TOOLS: ${{ steps.impact.outputs.tools || 'uv@latest python@3.12' }}
+        run: |
+          read -r -a tools <<< "$SDK_TOOLS"
+          bun x --package="$MISE_PACKAGE" mise --no-config install "${tools[@]}" &&
+          MISE_FETCH_REMOTE_VERSIONS_CACHE=1h bun x --package="$MISE_PACKAGE" mise --no-config exec "${tools[@]}" -- uv run --no-project --with pyyaml python .hooks/hard-eng.py check --base "$BASE_SHA"
+
+  changes:
+    name: changes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # Compare the changed files.
+    outputs:
+      app: ${{ steps.diff.outputs.app }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Look for app changes since the last release
+        id: diff
+        run: |
+          latest="$(git tag -l 'v*' --sort=-version:refname | head -n 1)"
+          if [ -z "$latest" ]; then
+            echo "No release yet: build the first one."
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$latest" HEAD | grep -Eq '^(Sources/|Resources/|Info\.plist$|Package\.(swift|resolved)$|build\.sh$)'; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing in the app changed since $latest: nothing to publish."
+            echo "app=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Pick the version
+        id: version
+        if: steps.diff.outputs.app == 'true'
+        # The next patch after the newest vX.Y.Z tag, or the Info.plist
+        # version when that is higher, which is how a minor or major release
+        # is made.
+        run: |
+          floor="$(sed -n '/CFBundleShortVersionString/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' Info.plist)"
+          latest="$(git tag -l 'v*' | sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -n 1)"
+          version="$floor"
+          if [ -n "$latest" ]; then
+            version="$(printf '%s\n' "$floor" "${latest%.*}.$((${latest##*.} + 1))" | sort -V | tail -n 1)"
+          fi
+          echo "Releasing $version."
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: release
+    needs: [changes, hard-eng]
+    if: github.event_name == 'push' && needs.changes.outputs.app == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write # Create the release and upload the DMG.
+      pull-requests: read # Read the merged pull request's What's New text.
+    env:
+      VERSION: ${{ needs.changes.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build Relaybar.app
+        env:
+          RELAYBAR_BUILD: ${{ github.run_number }}
+        # The run number is the build number Sparkle compares.
+        run: RELAYBAR_VERSION="$VERSION" ./build.sh
+      - name: Sign with the Developer ID certificate
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo "No MACOS_CERTIFICATE secret: the release stays ad-hoc signed."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n 1)"
+          if [ -z "$identity" ]; then
+            echo "MACOS_CERTIFICATE holds no Developer ID Application identity."
+            exit 1
+          fi
+          app=build/Relaybar.app
+          # Nested code first: Sparkle's helpers, then the framework, then the app.
+          sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+          for helper in XPCServices/Installer.xpc XPCServices/Downloader.xpc Autoupdate Updater.app; do
+            codesign --force --timestamp --options runtime --preserve-metadata=entitlements \
+              --sign "$identity" "$sparkle/$helper"
+          done
+          codesign --force --timestamp --options runtime --sign "$identity" "$app/Contents/Frameworks/Sparkle.framework"
+          codesign --force --timestamp --options runtime --sign "$identity" "$app"
+          codesign --verify --deep --strict "$app"
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Pack the DMG
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage"
+          cp -R build/Relaybar.app "$stage/"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -volname Relaybar -srcfolder "$stage" -ov -format UDZO "$RUNNER_TEMP/Relaybar.dmg"
+          if [ -n "${SIGN_IDENTITY:-}" ]; then
+            codesign --force --timestamp --sign "$SIGN_IDENTITY" "$RUNNER_TEMP/Relaybar.dmg"
+          fi
+          hdiutil verify "$RUNNER_TEMP/Relaybar.dmg"
+      - name: Notarise the DMG
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          if [ -z "${SIGN_IDENTITY:-}" ] || [ -z "$NOTARY_KEY" ]; then
+            echo "Not signed with Developer ID or no NOTARY_KEY secret: skipping notarisation."
+            exit 0
+          fi
+          key="$RUNNER_TEMP/notary-key.p8"
+          printf '%s\n' "$NOTARY_KEY" > "$key"
+          xcrun notarytool submit "$RUNNER_TEMP/Relaybar.dmg" \
+            --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait
+          rm "$key"
+          xcrun stapler staple "$RUNNER_TEMP/Relaybar.dmg"
+          echo "NOTARISED=true" >> "$GITHUB_ENV"
+      - name: Name the DMG
+        run: |
+          mkdir "$RUNNER_TEMP/release"
+          mv "$RUNNER_TEMP/Relaybar.dmg" "$RUNNER_TEMP/release/Relaybar-${VERSION}.dmg"
+      - name: Write the update feed
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        # Only notarised builds go in the feed the app installs from.
+        run: |
+          if [ "${NOTARISED:-}" != true ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "Not notarised or no SPARKLE_PRIVATE_KEY secret: no update feed."
+            exit 0
+          fi
+          printf '%s' "$SPARKLE_PRIVATE_KEY" |
+            .build/artifacts/sparkle/Sparkle/bin/generate_appcast --ed-key-file - \
+              --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/v${VERSION}/" \
+              -o "$RUNNER_TEMP/release/appcast.xml" "$RUNNER_TEMP/release"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          text="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" --jq '.[0].body // ""' | tr -d '\r' |
+            awk '/^## /{on = tolower($0) ~ /^## what.*s new[[:space:]]*$/; next} on' | sed '/[^[:space:]]/,$!d')"
+          [ -n "$text" ] || text="Bug fixes and improvements."
+          {
+            printf '%s\n\n' "$text"
+            echo "Install: open the DMG and drag Relaybar into Applications. Relaybar then updates itself."
+            echo
+            if [ "${NOTARISED:-}" = true ]; then
+              echo "Signed with a Developer ID and notarised by Apple."
+            else
+              echo "This build is not notarised. The first time you open it, macOS says it cannot check the app. Open System Settings, then Privacy & Security, and choose Open Anyway for Relaybar."
+            fi
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "v${VERSION}" "$RUNNER_TEMP/release/"* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SHA" \
+            --latest \
+            --title "Relaybar ${VERSION}" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          if [ -f "$keychain" ]; then
+            security delete-keychain "$keychain"
+          fi
