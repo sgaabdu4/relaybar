@@ -53,7 +53,7 @@ Review: Owner reviewed and approved the card layout, colours and low-limit colou
 ## Verification
 
 Result: Passed
-Evidence: `python3 .hooks/hard-eng.py check --plan-stage Draft` passed all gates (lockfile, format, tests 86% core coverage, build, efficiency, shellcheck, vulnerabilities, secrets, security); the pre-push run on main passed the same gates. Limits: Developer ID signing, notarisation and the appcast need the owner's secrets; until then releases are ad-hoc signed with no feed.
+Evidence: `python3 .hooks/hard-eng.py check --plan-stage Draft` passed all gates (lockfile, format, tests 86% core coverage, build, efficiency, shellcheck, vulnerabilities, secrets, security); the pre-push run on main passed the same gates. First CI run on PR #1 failed before any check ran: this Hard Eng release installs its tools with Bun, not pnpm; the `hard-eng` job now uses `oven-sh/setup-bun` and the macOS mise package. Limits: Developer ID signing, notarisation and the appcast need the owner's secrets; until then releases are ad-hoc signed with no feed.
 E2E: Passed — `scripts/efficiency.sh` launches the real built app with a fixture home holding a demo Claude and a demo Codex account, checks it stays running, under 30 MB and under 1% idle CPU.
 
 Delivery target: Merge; Delivery: Pending — merge of the release PR, the `hard-eng` CI job on macOS and the first release run on main.
