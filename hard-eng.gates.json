@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "packages": [],
+  "shared": [
+    {
+      "name": "secrets-files",
+      "role": "secrets-files",
+      "parallel": true,
+      "command": [
+        "gitleaks",
+        "dir",
+        ".",
+        "--redact=100",
+        "--no-banner",
+        "--report-format",
+        "sarif",
+        "--report-path",
+        "coverage/gitleaks-files.sarif"
+      ],
+      "report": {
+        "type": "gitleaks",
+        "path": "coverage/gitleaks-files.sarif"
+      }
+    },
+    {
+      "name": "secrets-history",
+      "role": "secrets-history",
+      "parallel": true,
+      "command": [
+        "gitleaks",
+        "git",
+        ".",
+        "--redact=100",
+        "--no-banner",
+        "--log-opts=--all",
+        "--report-format",
+        "sarif",
+        "--report-path",
+        "coverage/gitleaks-history.sarif"
+      ],
+      "report": {
+        "type": "gitleaks",
+        "path": "coverage/gitleaks-history.sarif"
+      }
+    },
+    {
+      "name": "security",
+      "role": "security",
+      "parallel": true,
+      "command": [
+        "semgrep",
+        "scan",
+        "--config",
+        "p/default",
+        "--exclude=.agents",
+        "--exclude=.hooks",
+        "--jobs",
+        "2",
+        "--error",
+        "--strict",
+        "--time",
+        "--json",
+        "--output",
+        "coverage/semgrep.json",
+        "."
+      ],
+      "report": {
+        "type": "semgrep",
+        "path": "coverage/semgrep.json"
+      }
+    },
+    {
+      "name": "shellcheck",
+      "role": "shell",
+      "parallel": true,
+      "command": ["shellcheck", "--", "build.sh"]
+    }
+  ]
+}

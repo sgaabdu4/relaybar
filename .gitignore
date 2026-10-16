@@ -1,0 +1,8 @@
+build/
+.git/
+__pycache__/
+.hard-eng/
+.claude/worktrees/
+coverage/
+.coverage
+.coverage.*
