@@ -8,7 +8,7 @@
 
 See how much of each Claude and Codex limit is left, live, for every account on your Mac.
 
-[![Latest release](https://img.shields.io/github/v/release/sgaabdu4/relaybar)](https://github.com/sgaabdu4/relaybar/releases/latest)
+[![Download the latest release](https://img.shields.io/badge/download-latest%20release-0a84ff)](https://github.com/sgaabdu4/relaybar/releases/latest)
 ![macOS 14 or later](https://img.shields.io/badge/macOS-14%2B-black)
 [![MIT licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
