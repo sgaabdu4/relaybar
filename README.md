@@ -94,7 +94,20 @@ Relaybar also runs on Windows 10 and 11. It is one small `Relaybar.exe` with no 
 
 ### Install on Windows
 
-Download `Relaybar-<version>-windows.zip` from the [latest release](https://github.com/sgaabdu4/relaybar/releases/latest), unzip it and run `Relaybar.exe`. Or build it from source in PowerShell:
+Download `RelaybarSetup-<version>.exe` from the [latest release](https://github.com/sgaabdu4/relaybar/releases/latest) and run it. The setup screen:
+
+- lists the Claude and Codex accounts already on the PC;
+- lets you add more accounts, each with a name, a short tag and a colour;
+- installs Relaybar to `%LOCALAPPDATA%\Programs\Relaybar` (no admin rights needed) and adds it to the Start menu;
+- signs in to each new account in turn. A terminal opens and your browser shows the Claude or Codex sign-in page. Relaybar never sees your password.
+
+Signing in needs [Claude Code](https://claude.com/claude-code) for Claude accounts and the [Codex CLI](https://github.com/openai/codex) for Codex accounts. The setup screen tells you if one is missing.
+
+The setup file is not code-signed yet. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**.
+
+To remove Relaybar, open **Settings**, then **Apps** and **Installed apps**, and uninstall **Relaybar**. Your Claude and Codex accounts stay as they are.
+
+To build it from source in PowerShell:
 
 ```powershell
 git clone https://github.com/sgaabdu4/relaybar.git
@@ -102,7 +115,7 @@ cd relaybar
 powershell -ExecutionPolicy Bypass -File windows\build.ps1 -Install
 ```
 
-`-Install` copies Relaybar to `%LOCALAPPDATA%\Programs\Relaybar`, adds it to the Start menu and starts it. `windows\test.ps1` runs the Windows tests. The build uses the C# compiler that comes with Windows, so you do not need Visual Studio or the .NET SDK.
+The build writes `build\windows\RelaybarSetup.exe`. `-Install` also copies Relaybar to `%LOCALAPPDATA%\Programs\Relaybar`, adds it to the Start menu and starts it. `windows\test.ps1` runs the Windows tests. The build uses the C# compiler that comes with Windows, so you do not need Visual Studio or the .NET SDK.
 
 ### Show the icons
 
@@ -111,12 +124,12 @@ Windows hides new tray icons. Open **Settings**, then **Personalization**, **Tas
 ### How Windows differs
 
 - **One tray icon per account.** Each icon shows session left on top and weekly left below, in the account's colour. Point at an icon to see its name. Click any icon for the menu.
-- **Sign-in opens a terminal.** Add account opens a small terminal window that runs `claude auth login` or `codex login`. It closes by itself after you sign in.
+- **Sign-in opens a terminal.** Setup and **Add account** open a small terminal window that runs `claude auth login` or `codex login`. It closes by itself after you sign in. **Add account** then **Several accounts…** opens the setup screen again.
 - **Desktop apps are Start menu shortcuts.** **Make desktop app** adds a shortcut such as **Claude Work** with your tag and colour. It opens a separate Claude window with that account's login. This works with the Claude desktop app from the Microsoft Store or claude.ai. Codex desktop apps are not supported on Windows yet.
 - **Logins.** Relaybar reads them from each account's `.credentials.json` or `auth.json`. It never copies or renews them.
 - **Delete moves files to the Recycle Bin.** The account's login is in its folder, so it goes too.
 - **Settings** are in `%APPDATA%\Relaybar\settings.json`. **Open at login** adds Relaybar to your startup apps.
-- **No automatic updates yet.** Download the new zip or rebuild to update.
+- **No automatic updates yet.** Run the new setup file to update. It keeps your accounts and settings.
 
 ## Build from source
 

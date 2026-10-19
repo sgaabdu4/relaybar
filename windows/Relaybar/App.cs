@@ -17,7 +17,6 @@ namespace Relaybar
     sealed class App : ApplicationContext
     {
         const double ActiveGap = 60;
-        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
         readonly Control invoker = new Control();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
@@ -230,9 +229,11 @@ namespace Relaybar
             var add = Item("Add account", null, colors);
             add.DropDownItems.Add(Item("Claude…", () => AddAccount(Kind.Claude), colors));
             add.DropDownItems.Add(Item("Codex…", () => AddAccount(Kind.Codex), colors));
+            add.DropDownItems.Add(new ToolStripSeparator());
+            add.DropDownItems.Add(Item("Several accounts…", AddSeveral, colors));
             menu.Items.Add(add);
             var login = Item("Open at login", ToggleLogin, colors);
-            login.Checked = StartsAtLogin;
+            login.Checked = Installer.StartsAtLogin;
             menu.Items.Add(login);
             menu.Items.Add(Item("Quit Relaybar", Quit, colors));
         }
@@ -408,34 +409,37 @@ namespace Relaybar
             };
             if (!Dialog.Ask("Add a " + kind.Tool + " account", "A terminal window opens to sign in, and your browser opens the " + kind.Tool + " sign-in page.", Dialog.Stack(name, tag, colors, desktop)))
                 return;
-            var slug = Slug(name.Text);
-            if (slug == null) return;
-            var dir = Path.Combine(Account.Home, "." + kind.Tool.ToLowerInvariant() + "-" + slug);
-            if (!Create(dir)) return;
-            var shortName = tag.Text.Trim();
-            if (shortName.Length > 0) Prefs.Set("tag:" + dir, shortName.Length > 3 ? shortName.Substring(0, 3) : shortName);
             var tint = colors.SelectedItem is Tint ? (Tint)colors.SelectedItem : Tint.Orange;
-            Prefs.Set("color:" + dir, tint.Raw());
-            var title = name.Text.Trim();
-            if (desktop.Checked)
+            var warnings = new List<string>();
+            string dir;
+            try { dir = NewAccount.Create(kind, name.Text, tag.Text, tint, desktop.Checked, Application.ExecutablePath, warnings); }
+            catch (IOException error)
             {
-                try { DesktopApp.Make(title, dir, Prefs.Str("tag:" + dir) ?? "", tint.Icon()); }
-                catch (IOException error) { Dialog.Tell("The account was added, but the desktop app was not made", error.Message); }
-                catch (UnauthorizedAccessException error) { Dialog.Tell("The account was added, but the desktop app was not made", error.Message); }
+                Dialog.Tell("Could not add the account", error.Message);
+                return;
             }
-            try { T3Code.Add(kind.IsClaude, title, tint.Icon(), dir); }
-            catch (IOException error) { Dialog.Tell("The account was added, but not to T3 Code", error.Message); }
-            catch (UnauthorizedAccessException error) { Dialog.Tell("The account was added, but not to T3 Code", error.Message); }
-            SignIn(kind, dir);
+            catch (UnauthorizedAccessException error)
+            {
+                Dialog.Tell("Could not add the account", error.Message);
+                return;
+            }
+            if (warnings.Count > 0) Dialog.Tell("The account was added, but not everything worked", string.Join("\n", warnings));
+            if (!NewAccount.ToolInstalled(kind))
+            {
+                Dialog.Tell(
+                    "Install " + (kind.IsClaude ? "Claude Code" : "the Codex CLI") + " to sign in",
+                    "Get it from " + NewAccount.InstallPage(kind) + ", then use Add account again.");
+                return;
+            }
+            try { NewAccount.SignIn(kind, dir).Dispose(); }
+            catch (Win32Exception error) { Dialog.Tell("Could not open a terminal to sign in", error.Message); }
             WaitForLogin();
         }
 
-        static void SignIn(Kind kind, string dir)
+        void AddSeveral()
         {
-            var info = new ProcessStartInfo("cmd.exe", "/d /c " + kind.Login + " || pause") { UseShellExecute = false };
-            info.EnvironmentVariables[kind.Variable] = dir;
-            try { Process.Start(info).Dispose(); }
-            catch (Win32Exception error) { Dialog.Tell("Could not open a terminal to sign in", error.Message); }
+            using (var setup = new SetupForm()) setup.ShowDialog();
+            Reload();
         }
 
         void WaitForLogin()
@@ -469,7 +473,7 @@ namespace Relaybar
             }
             try
             {
-                var shortcut = DesktopApp.Make(title, account.Id, account.Tag, account.Tint.Icon());
+                var shortcut = DesktopApp.Make(title, account.Id, account.Tag, account.Tint.Icon(), Application.ExecutablePath);
                 Process.Start("explorer.exe", "/select,\"" + shortcut + "\"").Dispose();
             }
             catch (IOException error) { Dialog.Tell("Could not make the desktop app", error.Message); }
@@ -497,54 +501,9 @@ namespace Relaybar
             return string.Join(" ", words.Select(word => char.ToUpperInvariant(word[0]) + word.Substring(1)));
         }
 
-        static string Slug(string name)
-        {
-            var words = System.Text.RegularExpressions.Regex.Split(name.ToLowerInvariant(), @"[^\p{L}\p{N}]+").Where(word => word.Length > 0);
-            var slug = string.Join("-", words);
-            if (slug.Length > 0) return slug;
-            Dialog.Tell("Please enter a name", "The name is used for the account's folder.");
-            return null;
-        }
-
-        static bool Create(string dir)
-        {
-            if (Directory.Exists(dir) || File.Exists(dir))
-            {
-                Dialog.Tell("That account already exists", dir);
-                return false;
-            }
-            try
-            {
-                Directory.CreateDirectory(dir);
-                return true;
-            }
-            catch (IOException error) { Dialog.Tell("Could not create the account folder", error.Message); }
-            catch (UnauthorizedAccessException error) { Dialog.Tell("Could not create the account folder", error.Message); }
-            return false;
-        }
-
-        static string RunCommand { get { return "\"" + Application.ExecutablePath + "\""; } }
-
-        static bool StartsAtLogin
-        {
-            get
-            {
-                using (var key = Registry.CurrentUser.OpenSubKey(RunKey))
-                    return key != null && string.Equals(key.GetValue("Relaybar") as string, RunCommand, StringComparison.OrdinalIgnoreCase);
-            }
-        }
-
         static void ToggleLogin()
         {
-            try
-            {
-                var enabled = StartsAtLogin;
-                using (var key = Registry.CurrentUser.CreateSubKey(RunKey))
-                {
-                    if (enabled) key.DeleteValue("Relaybar", false);
-                    else key.SetValue("Relaybar", RunCommand);
-                }
-            }
+            try { Installer.SetStartsAtLogin(!Installer.StartsAtLogin, Application.ExecutablePath); }
             catch (UnauthorizedAccessException error) { Dialog.Tell("Could not change the login setting", error.Message); }
         }
 

@@ -72,6 +72,7 @@ namespace Relaybar
                     form.Activate();
                     var input = FirstInput(extra);
                     if (input != null) input.Focus();
+                    else ((Button)form.AcceptButton).Focus();
                 };
                 form.ShowDialog();
                 return buttons.Length > 1 && chosen == buttons.Length - 1 ? -1 : chosen;

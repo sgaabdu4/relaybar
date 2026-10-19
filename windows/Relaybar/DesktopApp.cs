@@ -5,7 +5,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Windows.Forms;
 
 namespace Relaybar
 {
@@ -53,7 +52,7 @@ namespace Relaybar
             return launcher == null ? new string[0] : launcher.Targets;
         }
 
-        public static string Make(string name, string configDir, string tag, Color color)
+        public static string Make(string name, string configDir, string tag, Color color, string relaybar)
         {
             if (Source(true) == null) throw new IOException("The Claude desktop app was not found.");
             if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new IOException("The name can't contain \\ / : * ? \" < > or |.");
@@ -61,7 +60,7 @@ namespace Relaybar
             if (File.Exists(shortcut)) throw new IOException(shortcut + " already exists. It was left as it is.");
             var icon = Path.Combine(configDir, IconName);
             File.WriteAllBytes(icon, Render.DesktopIcon(tag, color));
-            Shortcuts.Save(shortcut, Application.ExecutablePath, Launcher.OpenArguments(configDir), icon, "Claude for " + name);
+            Shortcuts.Save(shortcut, relaybar, Launcher.OpenArguments(configDir), icon, "Claude for " + name);
             return shortcut;
         }
 

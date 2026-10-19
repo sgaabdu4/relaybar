@@ -39,7 +39,8 @@ $sources = (Get-ChildItem (Join-Path $PSScriptRoot 'Relaybar\*.cs')).FullName
   /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
   "/resource:$root\Resources\claude.svg,claude.svg" "/resource:$root\Resources\codex.svg,codex.svg" $sources
 if ($LASTEXITCODE) { throw 'The build failed.' }
-Write-Output "Built $exe"
+Copy-Item $exe (Join-Path $out 'RelaybarSetup.exe') -Force
+Write-Output "Built $exe and RelaybarSetup.exe"
 
 if ($Install) {
   $target = Join-Path $env:LOCALAPPDATA 'Programs\Relaybar'

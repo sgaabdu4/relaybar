@@ -257,7 +257,7 @@ jobs:
             printf '%s\n\n' "$text"
             echo "Install: open the DMG and drag Relaybar into Applications. Relaybar then updates itself."
             echo
-            echo "Windows: unzip Relaybar-${VERSION}-windows.zip and run Relaybar.exe. It does not update itself yet."
+            echo "Windows: run RelaybarSetup-${VERSION}.exe to install it and add your accounts. It does not update itself yet."
             echo
             if [ "${NOTARISED:-}" = true ]; then
               echo "Signed with a Developer ID and notarised by Apple."
@@ -301,7 +301,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = "Relaybar-$env:VERSION-windows.zip"
-          Compress-Archive build/windows/Relaybar.exe $zip
-          gh release upload "v$env:VERSION" $zip --repo $env:GITHUB_REPOSITORY
+          $setup = "RelaybarSetup-$env:VERSION.exe"
+          Copy-Item build/windows/RelaybarSetup.exe $setup
+          gh release upload "v$env:VERSION" $setup --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
