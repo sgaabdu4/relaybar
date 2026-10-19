@@ -35,3 +35,11 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Do show "…" while waiting for numbers and "Login expired" only for a rejected or expired login.
 - Don't dim accounts with transparency; dark colours become unreadable.
 - Don't show emails or account details in the menu bar or in tooltips.
+
+## Windows
+
+- Tray: one icon per account at the system small-icon size. Session left on top and weekly left below, bold Segoe UI digits, right-aligned, in the account colour. While waiting, the icon shows the tinted logo. The tooltip shows the tag, tool and numbers, never the email. Owner: `Render.Tray` in `windows/Relaybar/Render.cs`.
+- Colours: the same Apple system colour values, light variants on light surfaces and dark variants on the dark taskbar or dark menus. Low warning uses the same light red. Owner: `Tints`.
+- Menu: the same cards (`AccountCard`), then Customize, Add account, Open at login, Quit. It follows the Windows app theme (light or dark). Owner: `MenuRenderer`.
+- Desktop shortcuts: the same tile, logo and tag pill as the macOS app icon, written as an `.ico` in the account folder. Owner: `Render.DesktopIcon`.
+- Dialogs: small fixed dialogs with a bold title, text, fields and OK on the left of Cancel. Owner: `Dialog`.

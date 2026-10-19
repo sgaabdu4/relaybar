@@ -1,13 +1,14 @@
 name: Release
 
-# Pull requests and pushes run the Hard Eng checks on macOS. A merge to main
-# that changes the app then builds Relaybar.app in the protected release
-# environment as the next patch version after the newest vX.Y.Z tag (or the
-# Info.plist version when that is higher), signs it with the Developer ID
-# certificate, notarises it and publishes it as the latest GitHub release with
-# the Sparkle feed the app checks every hour. Without the signing secrets the
-# release stays ad-hoc signed and has no feed. Running the workflow by hand
-# on main publishes the next version even when the app did not change.
+# Pull requests and pushes run the Hard Eng checks on macOS and the Windows
+# tests and build on Windows. A merge to main that changes the app then builds
+# Relaybar.app in the protected release environment as the next patch version
+# after the newest vX.Y.Z tag (or the Info.plist version when that is higher),
+# signs it with the Developer ID certificate, notarises it and publishes it as
+# the latest GitHub release with the Sparkle feed the app checks every hour,
+# then attaches the Windows build. Without the signing secrets the release
+# stays ad-hoc signed and has no feed. Running the workflow by hand on main
+# publishes the next version even when the app did not change.
 on:
   push:
     branches:
@@ -79,6 +80,23 @@ jobs:
           bun x --package="$MISE_PACKAGE" mise --no-config install "${tools[@]}" &&
           MISE_FETCH_REMOTE_VERSIONS_CACHE=1h bun x --package="$MISE_PACKAGE" mise --no-config exec "${tools[@]}" -- uv run --no-project --with pyyaml python .hooks/hard-eng.py check ${BASE_SHA:+--base "$BASE_SHA"}
 
+  windows:
+    name: windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the Windows tests
+        shell: powershell
+        run: ./windows/test.ps1
+      - name: Build Relaybar.exe
+        shell: powershell
+        run: ./windows/build.ps1
+
   changes:
     name: changes
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -104,7 +122,7 @@ jobs:
           elif [ -z "$latest" ]; then
             echo "No release yet: build the first one."
             echo "app=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$latest" HEAD | grep -Eq '^(Sources/|Resources/|Info\.plist$|Package\.(swift|resolved)$|build\.sh$)'; then
+          elif git diff --name-only "$latest" HEAD | grep -Eq '^(Sources/|Resources/|windows/|Info\.plist$|Package\.(swift|resolved)$|build\.sh$)'; then
             echo "app=true" >> "$GITHUB_OUTPUT"
           else
             echo "Nothing in the app changed since $latest: nothing to publish."
@@ -128,7 +146,7 @@ jobs:
 
   release:
     name: release
-    needs: [changes, hard-eng]
+    needs: [changes, hard-eng, windows]
     if: needs.changes.outputs.app == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
@@ -239,6 +257,8 @@ jobs:
             printf '%s\n\n' "$text"
             echo "Install: open the DMG and drag Relaybar into Applications. Relaybar then updates itself."
             echo
+            echo "Windows: unzip Relaybar-${VERSION}-windows.zip and run Relaybar.exe. It does not update itself yet."
+            echo
             if [ "${NOTARISED:-}" = true ]; then
               echo "Signed with a Developer ID and notarised by Apple."
             else
@@ -258,3 +278,30 @@ jobs:
           if [ -f "$keychain" ]; then
             security delete-keychain "$keychain"
           fi
+
+  release-windows:
+    name: release-windows
+    needs: [changes, release]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write # Attach the Windows build to the release.
+    env:
+      VERSION: ${{ needs.changes.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build Relaybar.exe
+        shell: powershell
+        run: ./windows/build.ps1
+      - name: Attach it to the release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "Relaybar-$env:VERSION-windows.zip"
+          Compress-Archive build/windows/Relaybar.exe $zip
+          gh release upload "v$env:VERSION" $zip --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

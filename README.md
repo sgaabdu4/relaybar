@@ -6,10 +6,11 @@
 
 **Every Claude and Codex account. One menu bar.**
 
-See how much of each Claude and Codex limit is left, live, for every account on your Mac.
+See how much of each Claude and Codex limit is left, live, for every account on your Mac or Windows PC.
 
 [![Download the latest release](https://img.shields.io/badge/download-latest%20release-0a84ff)](https://github.com/sgaabdu4/relaybar/releases/latest)
 ![macOS 14 or later](https://img.shields.io/badge/macOS-14%2B-black)
+![Windows 10 or 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4)
 [![MIT licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
 **[Download the latest release](https://github.com/sgaabdu4/relaybar/releases/latest)**
@@ -86,6 +87,36 @@ Relaybar updates itself. It checks for a new version every hour and installs it 
 - macOS 14 or later, on Apple silicon or Intel.
 - [Claude Code](https://claude.com/claude-code) or the [Codex CLI](https://github.com/openai/codex), to sign in new accounts.
 - The Claude or Codex desktop app, for per-account desktop apps.
+
+## Windows
+
+Relaybar also runs on Windows 10 and 11. It is one small `Relaybar.exe` with no installer and nothing else to install.
+
+### Install on Windows
+
+Download `Relaybar-<version>-windows.zip` from the [latest release](https://github.com/sgaabdu4/relaybar/releases/latest), unzip it and run `Relaybar.exe`. Or build it from source in PowerShell:
+
+```powershell
+git clone https://github.com/sgaabdu4/relaybar.git
+cd relaybar
+powershell -ExecutionPolicy Bypass -File windows\build.ps1 -Install
+```
+
+`-Install` copies Relaybar to `%LOCALAPPDATA%\Programs\Relaybar`, adds it to the Start menu and starts it. `windows\test.ps1` runs the Windows tests. The build uses the C# compiler that comes with Windows, so you do not need Visual Studio or the .NET SDK.
+
+### Show the icons
+
+Windows hides new tray icons. Open **Settings**, then **Personalization**, **Taskbar** and **Other system tray icons**, and turn on each Relaybar entry. You can also drag the icons from the `^` overflow onto the taskbar.
+
+### How Windows differs
+
+- **One tray icon per account.** Each icon shows session left on top and weekly left below, in the account's colour. Point at an icon to see its name. Click any icon for the menu.
+- **Sign-in opens a terminal.** Add account opens a small terminal window that runs `claude auth login` or `codex login`. It closes by itself after you sign in.
+- **Desktop apps are Start menu shortcuts.** **Make desktop app** adds a shortcut such as **Claude Work** with your tag and colour. It opens a separate Claude window with that account's login. This works with the Claude desktop app from the Microsoft Store or claude.ai. Codex desktop apps are not supported on Windows yet.
+- **Logins.** Relaybar reads them from each account's `.credentials.json` or `auth.json`. It never copies or renews them.
+- **Delete moves files to the Recycle Bin.** The account's login is in its folder, so it goes too.
+- **Settings** are in `%APPDATA%\Relaybar\settings.json`. **Open at login** adds Relaybar to your startup apps.
+- **No automatic updates yet.** Download the new zip or rebuild to update.
 
 ## Build from source
 

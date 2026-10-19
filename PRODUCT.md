@@ -1,6 +1,6 @@
 # Relaybar
 
-A native macOS menu bar app that shows how much of each Claude and Codex subscription limit is left, live, for several accounts on one Mac.
+A native macOS menu bar app, with a Windows tray version, that shows how much of each Claude and Codex subscription limit is left, live, for several accounts on one computer.
 
 ## Register
 
@@ -29,7 +29,7 @@ Calm, small and exact. Plain words, short labels ("5h", "7d", "Login expired"), 
 
 ## Boundaries
 
-- macOS 14 or later only; no Windows, Linux or iPhone.
+- macOS 14 or later, and Windows 10 or 11 through the tray version in `windows/`; no Linux or iPhone.
 - Reads usage; never changes plans, buys credits or renews logins (renewing would sign the account out of Claude Code).
 - No analytics, no server of its own; tokens stay in the Keychain and the tools' own files.
 - Not affiliated with Anthropic or OpenAI.
@@ -37,3 +37,5 @@ Calm, small and exact. Plain words, short labels ("5h", "7d", "Login expired"), 
 ## Stack
 
 Swift and AppKit only (no SwiftUI, no web views) to keep memory small. Sources in `Sources/Relaybar` (app) and `Sources/RelaybarCore` (logic without UI); bundle assembly in `build.sh`.
+
+Windows: C# 5 and WinForms on the .NET Framework 4.8 that ships with Windows, built by its own `csc.exe`, so it needs no SDK. Sources in `windows/Relaybar` (`Core.cs` holds the logic without UI); build and tests in `windows/build.ps1` and `windows/test.ps1`.
