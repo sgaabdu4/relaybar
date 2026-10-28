@@ -242,6 +242,12 @@ POLL_HOOK: JsonObject = {
     "matcher": "Bash",
     "hooks": [{"type": "command", "command": POLL_COMMAND, "timeout": 5}],
 }
+PREVIEW_COMMAND = 'python3 "$(git rev-parse --show-toplevel 2>/dev/null)/.hooks/previews.py" 2>/dev/null || true'
+PREVIEW_HOOK: JsonObject = {
+    "matcher": "Artifact",
+    "hooks": [{"type": "command", "command": PREVIEW_COMMAND, "timeout": 5}],
+}
+CLAUDE_TOOL_HOOKS = [POLL_HOOK, PREVIEW_HOOK]
 CODEX_HOOK_STATUS = {
     "session": "Hard Eng: updating project setup",
     "stop": "Hard Eng: verifying changes",
@@ -556,6 +562,18 @@ def session_context(root: Path, payload: JsonObject) -> str:
     if note := restore_note(root):
         messages.append(note)
     messages.append(gate_status(root))
+    if os.name == "posix":
+        from process_group import stop_idle_codex_brokers
+
+        try:
+            brokers, processes = stop_idle_codex_brokers()
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            messages.append(f"Idle Codex broker cleanup failed: {error}")
+            brokers = processes = 0
+        if brokers:
+            messages.append(
+                f"Stopped {brokers} idle Codex brokers ({processes} processes)."
+            )
     messages.append(
         "Open the task's skill first: he-plan, he-build, he-ship or code-review. "
         "Tests fail before your edits → fix only that and stop; the feature waits until that fix merges."
@@ -838,6 +856,7 @@ def completion(root: Path, payload: JsonObject, agent: str | None = None) -> Jso
     if (paused := paused_turn(payload)) is not None:
         return paused
     state = session_state(root, payload)
+    recorded = state is not None and state.exists()
     base, before = saved_session(state)
     try:
         base = subprocess.check_output(
@@ -860,7 +879,7 @@ def completion(root: Path, payload: JsonObject, agent: str | None = None) -> Jso
                 "reason": notice
                 + ". Only authorized planning/verification; ask real blockers. No authority to implement, expand scope or edit read-only work → report + stop.",
             }
-        if not changed.strip() and state is not None and state.exists():
+        if not changed.strip() and recorded:
             return unchanged_notice(root, notice)
         if notice and planning_only(root, set(changed.splitlines())):
             return with_freshness(
@@ -910,6 +929,10 @@ def checked_changes(
     returncode, output = run_check(root, base, building)
     decisions = show_decisions(root, changed.splitlines(), state)
     if returncode == 0:
+        if state is not None and not state.exists():
+            # A session that began outside this project passes once, then compares later turns.
+            state.parent.mkdir(parents=True, exist_ok=True)
+            state.write_text(json.dumps({"base": base, "dirty": {}}))
         remember_pass(state, verified)
         if decisions:
             return {"decision": "block", "reason": decisions.strip()}
