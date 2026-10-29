@@ -88,7 +88,7 @@ struct PoolTeardownTests {
         let settings = try harness.home.json(".t3/userdata/settings.json")
         #expect(settings["defaultModelSelection"] as? [String: String] == ["instanceId": "codex", "model": "m"])
         #expect((settings["providerInstances"] as? [String: Any])?.isEmpty == true)
-        #expect((settings["usageLimitSources"] as? [String: Any])?.isEmpty == true)
+        #expect(settings["usageLimitSources"] == nil)
         #expect(Set(harness.trashed.urls.map(\.lastPathComponent)) == [".claude-hub", ".codex-hub"])
         #expect(!FileManager.default.fileExists(atPath: harness.paths.claudeAll.path))
         #expect(FileManager.default.fileExists(atPath: harness.paths.codexAll.path))
