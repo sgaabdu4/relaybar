@@ -879,7 +879,7 @@ EOF
   [ -s "$work/access-key" ] && [ -s "$work/mgmt-secret" ] || fail "the hub settings have no access key or management secret"
   keysBefore="$(remote "cat $homeDir/.ssh/authorized_keys")"
   printf '%s' '{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}' > "$work/settings-before.json"
-  clientRemote "umask 077; mkdir -p $homeDir/.t3/userdata && cat > $homeDir/.t3/userdata/settings.json" < "$work/settings-before.json" || fail "cannot write the T3 Code fixture on the client"
+  clientRemote "umask 077; mkdir -p $homeDir/.t3/userdata $homeDir/.claude && echo '{}' > $homeDir/.claude/.credentials.json && cat > $homeDir/.t3/userdata/settings.json" < "$work/settings-before.json" || fail "cannot write the T3 Code fixture on the client"
   (cd "$repo" && perl -e 'alarm shift; exec @ARGV or exit 127' 1800 swift build --build-tests) > "$work/swift-build.log" 2>&1 || fail "swift build failed: $(cat "$work/swift-build.log")"
 
   swiftStep add e2eAddsTheClient
@@ -922,7 +922,7 @@ if "usageLimitSources" in data:
 
   swiftStep remove e2eRemovesTheClient
 
-  out="$(clientRemote "find $homeDir -iname '*relaybar*' -not -name '*.relaybar-backup' 2> /dev/null; ls -A $homeDir/.claude-hub $homeDir/.codex-hub $homeDir/.local/bin/claude-all $homeDir/.local/bin/codex-all $homeDir/.t3/userdata/secrets 2> /dev/null; systemctl --user is-active relaybar-tunnel.service; true")"
+  out="$(clientRemote "find $homeDir -iname '*relaybar*' -not -name '*.relaybar-backup' 2> /dev/null; ls -A $homeDir/.local/bin/claude+ $homeDir/.local/bin/codex+ $homeDir/.t3/userdata/secrets 2> /dev/null; systemctl --user is-active relaybar-tunnel.service; true")"
   [ "$out" = "inactive" ] || [ "$out" = "unknown" ] || fail "the client still has Relaybar files or an active tunnel: $out"
   clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-restored.json"
   python3 -I -c '
