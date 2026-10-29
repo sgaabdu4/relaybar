@@ -65,6 +65,19 @@ enum PoolDialogs {
             go: "Stop", destructive: true)
     }
 
+    static func removeComputerFirst(host: String) -> Bool {
+        stopAlert(
+            "Remove \(host)?",
+            "Relaybar removes claude-all, codex-all and the T3 Code entries from \(host), and its key from the home computer. Your accounts stay in the helper.",
+            go: "Continue…", destructive: false)
+    }
+
+    static func removeComputerSecond(host: String) -> Bool {
+        stopAlert(
+            "Are you sure?", "\(host) will stop using your accounts. To use them there again, choose Add a computer.", go: "Remove",
+            destructive: true)
+    }
+
     enum Done {
         case openT3
         case close

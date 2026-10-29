@@ -301,26 +301,16 @@ extension PoolController {
         app.show("Some steps could not be undone", lines + "\n\nFix that, then choose Stop combining again to finish.")
     }
 
-    @objc func useOnLinux() {
-        guard !busy, let hub = state?.tunnelDestination else { return }
-        var text = ""
-        var problem: String?
-        var host: String?
-        while let typed = PoolDialogs.address(
-            text: text, error: problem, title: "Which Linux computer should use your accounts?",
-            message: "Relaybar adds claude-all and codex-all there. That computer also needs SSH access to \(hub).",
-            accept: "Set Up")
-        {
-            do {
-                host = try PoolHubPicker.validate(typed)
-                break
-            } catch {
-                text = typed
-                problem = error.localizedDescription
-            }
+    @objc func addComputer() {
+        guard !busy, let state else { return }
+        let config = paths.home.appendingPathComponent(".ssh/config")
+        let names = PoolHubPicker.parseSSHConfig((try? String(contentsOf: config, encoding: .utf8)) ?? "")
+        let skip = [state.ssh, state.tailscale].compactMap { $0 } + state.linuxClients.map(\.host)
+        Task {
+            let hosts = await Task.detached { PoolHubPicker.addable(hosts: names, excluding: skip, run: PoolProcess.run) }.value
+            guard let host = AddComputerDialog(hosts: hosts).run() else { return }
+            await setUpLinux(host)
         }
-        guard let host else { return }
-        Task { await setUpLinux(host) }
     }
 
     private func setUpLinux(_ host: String) async {
@@ -331,14 +321,34 @@ extension PoolController {
         panel.showSetup(title: title, message: "Starting")
         let setup = PoolSetup(env: environment())
         let report = progress(panel)
+        var added: PoolLinuxClient?
         let worked = await attempt(host: host, title: title, panel: panel) {
-            try await Task.detached { try setup.useOnLinux(host: host, progress: report) }.value
+            added = try await Task.detached { try setup.useOnLinux(host: host, progress: report) }.value
         }
-        guard worked else { return }
         panel.close()
-        app.show(
-            "\(host) can use your accounts",
-            "Run claude-all or codex-all there. Stop combining removes them again.")
+        guard worked, let added else { return }
+        let t3 = added.t3Entries ? "T3 Code there now shows Claude, all accounts. " : ""
+        app.show("\(host) can use your accounts", t3 + "In a terminal, run claude-all or codex-all.")
+    }
+
+    @objc func removeComputer(_ sender: NSMenuItem) {
+        guard !busy, let host = sender.representedObject as? String, PoolDialogs.removeComputerFirst(host: host),
+            PoolDialogs.removeComputerSecond(host: host)
+        else { return }
+        Task { await performRemoveComputer(host) }
+    }
+
+    private func performRemoveComputer(_ host: String) async {
+        busy = true
+        defer { busy = false }
+        let title = "Removing \(host)"
+        let panel = PoolProgressPanel()
+        panel.showSetup(title: title, message: "Starting")
+        let setup = PoolSetup(env: environment())
+        _ = await attempt(host: host, title: title, panel: panel) {
+            try await Task.detached { try setup.removeComputer(host: host) }.value
+        }
+        panel.close()
     }
 
     private static func words(_ step: PoolStep) -> String {
@@ -350,7 +360,7 @@ extension PoolController {
         case .tunnelAgent: "Removing the connection to the home computer"
         case .remoteHelper: "Removing the helper from the home computer"
         case .keepOn: "Turning sleep back on at the home computer"
-        case .linuxClient: "Removing the setup from the Linux computers"
+        case .linuxClient: "Removing the setup from the other computers"
         case .hubFolders: "Moving the all accounts folders to the Trash"
         case .terminalCommands: "Removing claude-all and codex-all"
         case .t3Entries: "Removing the entries from T3 Code"

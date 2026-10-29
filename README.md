@@ -91,6 +91,7 @@ How it works:
 - **Order:** new chats use your first account until it has less than 10% left, then the next one. Open chats stay on their account, so their prompt cache is not rewritten. Change it in **All accounts**, then **Change order…**.
 - **Pause:** in **All accounts**, untick an account to pause it. Tick it to use it again.
 - **Other Macs:** Relaybar finds a home computer that already runs the helper and offers **Use combined accounts**.
+- **Linux computers:** in **All accounts**, click **Add a computer…** and pick one. Relaybar gives it its own SSH key that the home computer accepts only for the helper, and adds `claude-all`, `codex-all` and, if T3 Code is there, its two entries. Remove it from **Computers** in **All accounts**; it asks twice.
 - **Updates:** each night, the computer that runs the helper installs a new helper version by itself. It waits until a version is 3 days old, checks the download, tests it, and goes back to the old version if the test fails. Relaybar keeps a [block list](pool/blocked-versions.txt) of bad versions.
 - **Stop:** **All accounts**, then **Stop combining…**. It asks twice, then removes everything it added.
 

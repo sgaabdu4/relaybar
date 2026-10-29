@@ -26,7 +26,7 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Atoms: logo (Claude or Codex SVG, tinted), tag pill, bar, value text.
 - Molecules: menu bar account group (logo, tag, stacked numbers); limit row (label, bar, value, reset).
 - Organisms: `AccountCard` (one account, clickable when it has an app to open); the status item image (`Render.row`).
-- Templates: the dropdown — account cards, then "Combine accounts…" or "All accounts ›" (subtitle "On homebox" or "On this Mac"), Customize, Add account, Open at login, Quit. The "All accounts" submenu has Claude and Codex section headers, one tickable row per account (states as a second line), "Change order…" and "Stop combining…".
+- Templates: the dropdown — account cards, then "Combine accounts…" or "All accounts ›" (subtitle "On homebox" or "On this Mac"), Customize, Add account, Open at login, Quit. The "All accounts" submenu has Claude and Codex section headers, one tickable row per account (states as a second line), "Change order…", a "Computers" section (one row per added computer, each with "Remove <host>…"), "Add a computer…" and "Stop combining…".
 - Pages: the dropdown and the add, rename, remove and make-desktop-app dialogs (standard `NSAlert`).
 
 ## Do's and Don'ts
