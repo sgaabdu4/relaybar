@@ -215,13 +215,30 @@ final class PoolController: NSObject {
             item.isEnabled = false
             menu.addItem(item)
         }
+        let computers = state?.linuxClients ?? []
+        if !computers.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: "Computers"))
+            for computer in computers { menu.addItem(computerItem(computer.host)) }
+        }
         menu.addItem(.separator())
-        if state?.ssh != nil { menu.addItem(action("Use on a Linux computer…", #selector(useOnLinux))) }
+        if state?.ssh != nil { menu.addItem(action("Add a computer…", #selector(addComputer))) }
         if state?.needsTailscale == true { menu.addItem(action("Use it away from home…", #selector(setUpTailscale))) }
         menu.addItem(action("Stop combining…", #selector(stopCombining)))
         let item = NSMenuItem(title: "All accounts", action: nil, keyEquivalent: "")
         item.submenu = menu
         subtitle(item, "On \(hostName)")
+        return item
+    }
+
+    private func computerItem(_ host: String) -> NSMenuItem {
+        let remove = NSMenuItem(title: "Remove \(host)…", action: #selector(removeComputer(_:)), keyEquivalent: "")
+        remove.target = self
+        remove.representedObject = host
+        let menu = NSMenu()
+        menu.addItem(remove)
+        let item = NSMenuItem(title: host, action: nil, keyEquivalent: "")
+        item.submenu = menu
         return item
     }
 

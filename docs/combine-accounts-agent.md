@@ -19,6 +19,7 @@ Give this file to Claude Code or Codex when Relaybar's **Combine accounts** need
 | Linux helper | `~/.local/share/relaybar-helper/` and `~/.local/share/relaybar/relaybar-helper.sh` |
 | Linux services | user units `relaybar-helper.service`, `relaybar-helper-update.service` and `relaybar-helper-update.timer` |
 | Keys | Mac Keychain items "Relaybar access key" and "Relaybar management secret" |
+| Added computer | on the added Linux computer: user unit `relaybar-tunnel.service`, and in `~/.config/relaybar/` the files `hub_key`, `hub_key.pub`, `known_hosts` and `access-key`; on the home computer: one line ending `relaybar-client:<name>` in `~/.ssh/authorized_keys` (backup: `authorized_keys.relaybar-backup`) |
 | Tools | `~/.claude-hub`, `~/.codex-hub/config.toml`, `~/.local/bin/claude-all`, `~/.local/bin/codex-all` |
 | T3 Code | entries "Claude, all accounts" and "Codex, all accounts", and the usage source "All accounts" |
 
@@ -75,8 +76,8 @@ unset key
 ## Use combined accounts from a terminal
 
 - On a Mac with Relaybar: `claude-all` and `codex-all`.
-- On a Linux computer the user named in Relaybar: the same commands. The key is in a private file there.
-- Anywhere else: do not set this up by hand. Ask the user to add the computer in Relaybar.
+- On a Linux computer added in Relaybar: the same commands. The key is in a private file there.
+- Anywhere else: do not set this up by hand. Ask the user to use Relaybar: **All accounts**, then **Add a computer…**. A Mac runs Relaybar itself and connects in one click.
 
 ## Stop
 
