@@ -138,6 +138,8 @@ struct FakeClientHost: Sendable {
     static let probe = "new:.claude-hub\nnew:.codex-hub\nnew:.config/relaybar\nlinger:off"
 
     var system = "Linux\n"
+    var systemStatus: Int32 = 0
+    var systemError = ""
     var probe = Self.probe
     var facts = Self.hubFacts
     var route = "ok:192.168.1.20\n"
@@ -148,11 +150,11 @@ struct FakeClientHost: Sendable {
     func answer(_ command: Command) -> CommandResult? {
         guard command.executable == "/usr/bin/ssh" else { return nil }
         let text = remoteScript(command)
-        if text.contains("uname -s") { return CommandResult(output: system) }
+        if text.contains("uname -s") { return CommandResult(status: systemStatus, output: system, error: systemError) }
         if text.contains("printf %s \"$HOME\"") { return CommandResult(output: "/home/sam") }
         if text.contains("for d in") { return CommandResult(output: probe) }
         if text.contains("hostkey=") { return CommandResult(output: facts) }
-        if text.contains("ssh-keygen") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
+        if text.contains("ssh-keygen -q") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
         if text.contains("authorized_keys"), text.contains("cat >> ") { return CommandResult(output: hubAdds) }
         if text.contains("echo ok:$a") { return CommandResult(output: route) }
         if text.contains("&& echo changed:linger") { return CommandResult(output: "changed:linger\n") }

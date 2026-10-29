@@ -7,6 +7,9 @@ public enum PoolSetupError: Error, Equatable, LocalizedError {
     case notAnswering
     case hubExists(String)
     case helperNotConfirmed(String)
+    case notCombining
+    case hubIsThisMac
+    case accessKeyMissing
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +20,12 @@ public enum PoolSetupError: Error, Equatable, LocalizedError {
             return "The helper did not start. Nothing was kept. Check the internet connection and try again."
         case .hubExists(let host):
             return "\(host) already combines accounts. Relaybar left it alone. Use it from this Mac instead."
+        case .notCombining: return "Accounts are not combined yet. Choose Combine accounts first."
+        case .hubIsThisMac:
+            return
+                "The helper runs on this Mac, and other computers cannot reach it from here. Combine accounts on a home computer to use them on other computers."
+        case .accessKeyMissing:
+            return "Relaybar cannot read the access key from the Keychain. Choose Stop combining, then combine your accounts again."
         case .helperNotConfirmed(let host):
             return
                 "Something other than the helper from \(host) answered. Nothing was kept. Check that the helper runs on \(host), then try again."
@@ -133,9 +142,9 @@ public struct PoolSetup: Sendable {
 
     @discardableResult
     public func useOnLinux(host typed: String, progress: @Sendable (String) -> Void = { _ in }) throws -> PoolLinuxClient {
-        guard var state = PoolState.load(env.paths), let hub = state.tunnelDestination, let access = accessKey() else {
-            throw PoolSetupError.notAnswering
-        }
+        guard var state = PoolState.load(env.paths) else { throw PoolSetupError.notCombining }
+        guard let hub = state.tunnelDestination else { throw PoolSetupError.hubIsThisMac }
+        guard let access = accessKey() else { throw PoolSetupError.accessKeyMissing }
         let host = try PoolHubPicker.validate(typed)
         if let old = state.linuxClients.first(where: { $0.host == host }) {
             progress("Clearing the earlier setup on \(host)")

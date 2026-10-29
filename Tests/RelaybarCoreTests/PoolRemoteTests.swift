@@ -361,7 +361,7 @@ struct PoolJoinTests {
         #expect(backup.lowerBound < drop.lowerBound)
         #expect(client.hubKey)
         #expect(client.hubCreated == ["ssh", "keys"])
-        let keygen = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("ssh-keygen") })
+        let keygen = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("ssh-keygen -q") })
         #expect(keygen.contains("-N ''"))
         #expect(keygen.contains("hub_key"))
         #expect(keygen.contains("rm -f \"$HOME/.config/relaybar/hub_key\""))
@@ -415,12 +415,12 @@ struct PoolJoinTests {
         clientHost(recorder, FakeClientHost(route: "ok:172.17.0.1\n"))
         _ = try add(recorder)
         let tries = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("echo ok:$a") })
-        #expect(tries.hasPrefix("for a in 192.168.1.20 172.17.0.1 100.64.0.7; do ssh "))
+        #expect(tries.hasPrefix("e=''; p=''; for a in 192.168.1.20 172.17.0.1 100.64.0.7; do e=$(ssh "))
         for option in [
             "'-i' '/home/sam/.config/relaybar/hub_key'", "'IdentitiesOnly=yes'",
             "'UserKnownHostsFile=/home/sam/.config/relaybar/known_hosts'",
             "'StrictHostKeyChecking=yes'", "'-p' '22'", "-o BatchMode=yes", "-o ConnectTimeout=5", "\"sam@$a\" true",
-            "[ $? -ne 255 ]",
+            "[ $r -eq 1 ]",
         ] {
             #expect(tries.contains(option), "missing \(option)")
         }
@@ -429,7 +429,9 @@ struct PoolJoinTests {
         clientHost(recorder, FakeClientHost(route: "none\n"))
         let before = recorder.commands.count
         let failure = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
-        #expect(failure == .noRoute(host: "laptop", tried: ["192.168.1.20", "172.17.0.1", "100.64.0.7"]))
+        #expect(tries.contains("*'Permission denied'*) p=$e;;"))
+        #expect(!tries.contains("-ne 255"))
+        #expect(failure == .noRoute(host: "laptop", tried: ["192.168.1.20", "172.17.0.1", "100.64.0.7"], reason: nil))
         let message = failure?.errorDescription ?? ""
         #expect(message.contains("192.168.1.20, 172.17.0.1, 100.64.0.7"))
         #expect(message.contains("Put both computers on the same network or on Tailscale, then try again."))
@@ -442,7 +444,103 @@ struct PoolJoinTests {
         #expect(facts.addresses == ["10.0.0.5", "100.64.0.7"])
         #expect(PoolHubFacts.parse("user=-bad\nhostkey=ssh-ed25519 AAAA\n") == nil)
         #expect(PoolHubFacts.parse("user=sam\nhostkey=not a key\n") == nil)
-        #expect(PoolClientError.noRoute(host: "laptop", tried: []).errorDescription?.contains("gave no home address") == true)
+        #expect(PoolClientError.noRoute(host: "laptop", tried: [], reason: nil).errorDescription?.contains("gave no home address") == true)
+    }
+
+    @Test func explainsWhyNoAddressWorked() throws {
+        let recorder = Recorder()
+        let denied = "err:sam@192.168.1.20: Permission denied (publickey)."
+        clientHost(recorder, FakeClientHost(route: "none\n" + denied + "\n"))
+        let refused = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
+        let reason = try #require(refused?.errorDescription)
+        #expect(reason.contains("homebox refused the key of laptop. Check that SSH on homebox reads ~/.ssh/authorized_keys"))
+        #expect(!reason.contains("Put both computers on the same network"))
+        #expect(!reason.hasPrefix(PoolHubPicker.keyProblem))
+        #expect(refused?.offersRetry == true)
+        clientHost(recorder, FakeClientHost(route: "none\nerr:ssh: connect to host 100.64.0.7 port 22: Connection timed out\n"))
+        let timedOut = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
+        #expect(timedOut?.errorDescription?.contains("homebox did not answer. Check that it is on and on the same network") == true)
+        #expect(PoolClientError.mac("laptop").offersRetry == false)
+    }
+
+    @Test func saysWhyAComputerCannotBeAdded() throws {
+        let harness = try Harness()
+        let setup = PoolSetup(env: harness.env())
+        #expect(throws: PoolSetupError.notCombining) { _ = try setup.useOnLinux(host: "laptop") }
+        try PoolState().save(harness.paths)
+        #expect(throws: PoolSetupError.hubIsThisMac) { _ = try setup.useOnLinux(host: "laptop") }
+        try PoolState(ssh: "homebox").save(harness.paths)
+        #expect(throws: PoolSetupError.accessKeyMissing) { _ = try setup.useOnLinux(host: "laptop") }
+        #expect(harness.recorder.commands.allSatisfy { $0.executable != "/usr/bin/ssh" })
+        let said = [PoolSetupError.notCombining, .hubIsThisMac, .accessKeyMissing].compactMap(\.errorDescription)
+        #expect(said.count == 3)
+        #expect(Set(said).count == 3)
+        #expect(said.allSatisfy { $0 != PoolSetupError.notAnswering.errorDescription })
+        #expect(said[2].contains("access key from the Keychain"))
+    }
+
+    @Test func namesAMissingTool() throws {
+        let recorder = Recorder()
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + "\nmissing:curl\nmissing:systemctl"))
+        let missing = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
+        #expect(missing == .missingTool(host: "laptop", tool: "curl"))
+        #expect(missing?.errorDescription == "laptop needs curl. Install it, then try again.")
+        #expect(!recorder.commands.contains { $0.stdin != nil })
+        let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
+        #expect(probe.contains("for t in curl ssh ssh-keygen systemctl; do command -v \"$t\" >/dev/null 2>&1 || echo missing:$t; done"))
+    }
+
+    @Test func usesTheSSHProgramTheComputerHas() throws {
+        let recorder = Recorder()
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + "\nssh:/opt/openssh/bin/ssh"))
+        _ = try add(recorder)
+        let unit = try #require(recorder.commands.first { remoteScript($0).contains("relaybar-tunnel.service\"") && $0.stdin != nil })
+        #expect(String(decoding: unit.stdin ?? Data(), as: UTF8.self).contains("do \"/opt/openssh/bin/ssh\" \"-N\""))
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + "\nssh:"))
+        _ = try add(recorder)
+        let fallback = try #require(recorder.commands.last { remoteScript($0).contains("relaybar-tunnel.service\"") && $0.stdin != nil })
+        #expect(String(decoding: fallback.stdin ?? Data(), as: UTF8.self).contains("do \"/usr/bin/ssh\" \"-N\""))
+    }
+
+    @Test func refusesAComputerAnotherMacAlreadySetUp() throws {
+        let recorder = Recorder()
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + "\nkey:yes"))
+        let used = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
+        #expect(used == .alreadyUsed("laptop"))
+        #expect(
+            used?.errorDescription
+                == "laptop already uses your accounts, set up from another Mac or under another name. Remove it there first.")
+        #expect(!recorder.commands.contains { $0.stdin != nil })
+        let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
+        #expect(probe.contains("test -e \"$HOME/.config/relaybar/hub_key\" && echo key:yes"))
+    }
+
+    @Test func neverWritesThroughALinkedKeyFileOnTheHub() throws {
+        let recorder = Recorder()
+        clientHost(recorder, FakeClientHost(hubAdds: "link\n"))
+        #expect(throws: PoolFileError.link("homebox:.ssh/authorized_keys")) { _ = try add(recorder) }
+        let adding = try #require(onHub(recorder).map(plainScript).first { $0.contains("cat >> ") })
+        let guardAt = try #require(adding.range(of: "if [ -L \"$f\" ]; then echo link; exit 0; fi;"))
+        #expect(guardAt.lowerBound < (try #require(adding.range(of: "mkdir -m 700"))).lowerBound)
+        #expect(guardAt.lowerBound < (try #require(adding.range(of: "cp -p"))).lowerBound)
+        let removal = try #require(onHub(recorder).map(plainScript).last { $0.contains("rmdir") || $0.contains("mktemp") })
+        #expect(removal.contains("if [ -e \"$f\" ] && [ ! -L \"$f\" ]; then"))
+    }
+
+    @Test func tellsAComputerThatIsNotLinuxFromAnSSHFailure() throws {
+        let recorder = Recorder()
+        let windows = FakeClientHost(
+            system: "", systemStatus: 1, systemError: "'sh' is not recognized as an internal or external command")
+        clientHost(recorder, windows)
+        let other = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
+        #expect(other == .notLinux("laptop"))
+        clientHost(recorder, FakeClientHost(system: "", systemStatus: 127))
+        #expect(throws: PoolClientError.notLinux("laptop")) { _ = try add(recorder) }
+        clientHost(recorder, FakeClientHost(system: "", systemStatus: 255, systemError: "Connection refused"))
+        #expect(throws: PoolSSHError.self) { _ = try add(recorder) }
+        clientHost(recorder, FakeClientHost(system: "", systemStatus: CommandResult.timedOut, systemError: "timed out"))
+        #expect(throws: PoolSSHError.self) { _ = try add(recorder) }
+        #expect(!recorder.commands.contains { $0.stdin != nil })
     }
 
     private let t3File = #"{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}"#
@@ -493,7 +591,7 @@ struct PoolJoinTests {
         let bad = Recorder()
         clientHost(bad, FakeClientHost(probe: FakeClientHost.probe + "\nt3:yes", settings: "not json"))
         #expect(throws: PoolClientError.t3Unreadable("laptop")) { _ = try add(bad) }
-        #expect(!bad.commands.contains { $0.stdin != nil || remoteScript($0).contains("ssh-keygen") })
+        #expect(!bad.commands.contains { $0.stdin != nil || remoteScript($0).contains("ssh-keygen -q") })
     }
 
     @Test func onlyLinuxIsAdded() throws {
@@ -623,7 +721,7 @@ struct PoolJoinTests {
         ) { _ = try add(recorder) }
         #expect(remoteScript(try #require(recorder.commands.last)).contains("rmdir"))
         recorder.respond = { command in
-            plainScript(command).contains("ssh-keygen")
+            plainScript(command).contains("ssh-keygen -q")
                 ? CommandResult(output: "nokeygen\n") : FakeClientHost().answer(command) ?? CommandResult()
         }
         #expect(throws: PoolClientError.noKeyTool("laptop")) { _ = try add(recorder) }
