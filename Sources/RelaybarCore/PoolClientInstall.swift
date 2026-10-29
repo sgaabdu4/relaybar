@@ -54,6 +54,7 @@ public struct PoolAddHooks: Sendable {
     public var password: @Sendable (Bool, String) async -> String?
     public var signIn: @Sendable (URL) -> Void
     public var pair: @Sendable (URL) -> Void
+    public var linkFailed: @Sendable (String) async -> Bool
     public var pause: @Sendable (TimeInterval) async -> Void
 
     public init(
@@ -62,6 +63,7 @@ public struct PoolAddHooks: Sendable {
         password: @escaping @Sendable (Bool, String) async -> String? = { _, _ in nil },
         signIn: @escaping @Sendable (URL) -> Void = { _ in },
         pair: @escaping @Sendable (URL) -> Void = { _ in },
+        linkFailed: @escaping @Sendable (String) async -> Bool = { _ in false },
         pause: @escaping @Sendable (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
     ) {
         self.plan = plan
@@ -69,6 +71,7 @@ public struct PoolAddHooks: Sendable {
         self.password = password
         self.signIn = signIn
         self.pair = pair
+        self.linkFailed = linkFailed
         self.pause = pause
     }
 
@@ -159,13 +162,18 @@ extension PoolJoin {
         url.scheme == "t3code" && url.host == "pair"
     }
 
-    static func pair(_ remote: PoolRemote, t3: String, open: (URL) -> Void) throws {
-        let result = remote.run(PoolSSH.command(host: remote.host, script: "\"\(t3)\" pair --label Relaybar </dev/null", limit: 60))
-        if [255, CommandResult.timedOut].contains(result.status) {
-            throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: remote.host))
+    static func pair(_ remote: PoolRemote, t3: String, hooks: PoolAddHooks) async throws -> Bool {
+        while true {
+            let result = remote.run(PoolSSH.command(host: remote.host, script: "\"\(t3)\" pair --label Relaybar </dev/null", limit: 60))
+            if [255, CommandResult.timedOut].contains(result.status) {
+                throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: remote.host))
+            }
+            if result.succeeded, let url = pairLink(in: result.output) {
+                hooks.pair(url)
+                return true
+            }
+            guard await hooks.linkFailed(remote.host) else { return false }
         }
-        guard result.succeeded, let url = pairLink(in: result.output) else { throw PoolClientError.noPairLink(remote.host) }
-        open(url)
     }
 
     static func removeInstalls(_ client: PoolLinuxClient) -> [String] {

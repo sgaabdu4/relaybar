@@ -15,7 +15,6 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
     case needsPassword(host: String, why: String)
     case sudoFailed(host: String, reason: String)
     case t3NotReady(String)
-    case noPairLink(String)
 
     public var offersRetry: Bool {
         if case .noRoute = self { return true }
@@ -58,9 +57,6 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
         case .t3NotReady(let host):
             return
                 "T3 Code was installed on \(host), but it did not start in time. Run systemctl --user status t3code on \(host) to see why, then try again."
-        case .noPairLink(let host):
-            return
-                "T3 Code on \(host) did not give a link for this Mac, so Relaybar removed what it had set up. Try again in a few minutes."
         }
     }
 }
@@ -378,8 +374,13 @@ extension PoolJoin {
             if pairable, let t3 {
                 report(.link, .working)
                 progress("Linking T3 Code on \(host) to this Mac")
-                try pair(remote, t3: t3, open: hooks.pair)
-                report(.link, .done)
+                if try await pair(remote, t3: t3, hooks: hooks) {
+                    report(.link, .done)
+                } else {
+                    client.t3LinkMissing = true
+                    checkpoint(client)
+                    report(.link, .problem("Not linked"))
+                }
             }
         } catch {
             if let removal = try? removeLinuxClient(client, hubRoutes: [hubName], run: run), removal.hubKeyProblem == nil {
