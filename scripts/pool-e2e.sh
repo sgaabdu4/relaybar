@@ -932,7 +932,7 @@ clientConnects() {
   clientPort="$(freePort)"
   launchBox "$clientName" "$clientPort" || fail "$boxError"
   docker exec "$clientName" loginctl enable-linger homeuser || fail "cannot turn on lingering on the client"
-  hubIp="$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$containerName")"
+  hubIp="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$containerName")"
   [ -n "$hubIp" ] || fail "cannot read the address of the hub container"
   cat > "$work/ssh_config" <<EOF
 Host e2e-hub

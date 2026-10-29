@@ -32,12 +32,11 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
 struct PoolHubFacts: Equatable {
     var user: String
     var port: Int
-    var machineID: String
     var addresses: [String]
     var hostKeys: [String]
 
     static let script =
-        "echo \"user=$(id -un)\"; echo \"id=$(cat /etc/machine-id 2>/dev/null)\"; echo \"port=$(echo \"$SSH_CONNECTION\" | awk '{print $4}')\"; "
+        "echo \"user=$(id -un)\"; echo \"port=$(echo \"$SSH_CONNECTION\" | awk '{print $4}')\"; "
         + "for a in $(hostname -I 2>/dev/null || ip -o -4 addr show scope global 2>/dev/null | awk '{sub(/\\/.*/,\"\",$4); print $4}'); do echo \"addr=$a\"; done; "
         + "if command -v tailscale >/dev/null 2>&1; then tailscale ip -4 2>/dev/null | sed 's/^/ts=/'; fi; "
         + "k=/etc/ssh/ssh_host_ed25519_key.pub; if [ -r \"$k\" ]; then echo \"hostkey=$(cat \"$k\")\"; "
@@ -45,7 +44,6 @@ struct PoolHubFacts: Equatable {
 
     static func parse(_ output: String) -> PoolHubFacts? {
         var user = ""
-        var id = ""
         var port = 22
         var plain: [String] = []
         var tailscale: [String] = []
@@ -56,7 +54,6 @@ struct PoolHubFacts: Equatable {
             let value = String(line[line.index(after: split)...]).trimmingCharacters(in: .whitespaces)
             switch name {
             case "user": user = value
-            case "id": id = value
             case "port": if let number = Int(value), (1...65535).contains(number) { port = number }
             case "addr": if isAddress(value) { plain.append(value) }
             case "ts": if isAddress(value) { tailscale.append(value) }
@@ -72,7 +69,7 @@ struct PoolHubFacts: Equatable {
         for address in home.filter({ !carrier.contains($0) }) + tailscale + carrier where !addresses.contains(address) {
             addresses.append(address)
         }
-        return PoolHubFacts(user: user, port: port, machineID: id, addresses: addresses, hostKeys: keys)
+        return PoolHubFacts(user: user, port: port, addresses: addresses, hostKeys: keys)
     }
 
     private static func isAddress(_ value: String) -> Bool {
@@ -132,15 +129,15 @@ extension PoolJoin {
                 + "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; "
                 + "if [ -e \"$p\" ] && ! grep -q '\(marker)' \"$p\" 2>/dev/null; then echo foreign:$f; fi; done; "
                 + "[ \"$(loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null)\" = yes ] || echo linger:off; "
-                + "echo \"id=$(cat /etc/machine-id 2>/dev/null)\"; "
+                + "test -e \"\(PoolRemote.joinFile)\" && echo hub:yes; "
                 + "if [ -f \"\(t3Settings)\" ]; then echo t3:yes; [ -d \"$HOME/.t3/userdata/secrets\" ] || echo t3secrets:new; fi; true")
         let lines = probe.split(whereSeparator: \.isNewline).map(String.init)
         if let foreign = lines.first(where: { $0.hasPrefix("foreign:") }) {
             throw PoolFileError.notRelaybars("\(host):.local/bin/\(foreign.dropFirst(8))")
         }
+        if lines.contains("hub:yes") { throw PoolClientError.isTheHub(host) }
         let hasT3 = lines.contains("t3:yes")
         let facts = try hubFacts(hubRemote)
-        if !facts.machineID.isEmpty, lines.contains("id=" + facts.machineID) { throw PoolClientError.isTheHub(host) }
         if hasT3 { try withT3 { t3 in _ = try pullT3(remote, into: t3) } }
 
         var client = PoolLinuxClient(host: host, folders: lines.filter { $0.hasPrefix("new:") }.map { String($0.dropFirst(4)) })

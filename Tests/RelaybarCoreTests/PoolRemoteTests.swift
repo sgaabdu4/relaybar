@@ -447,7 +447,7 @@ struct PoolJoinTests {
         #expect(other?.errorDescription == "laptop is not a Linux computer. Relaybar can add Linux computers only for now.")
         #expect(recorder.commands.count == 2)
         #expect(!recorder.commands.contains { $0.stdin != nil })
-        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe.replacingOccurrences(of: "laptopid", with: "hubid")))
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + "\nhub:yes"))
         let same = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
         #expect(same == .isTheHub("laptop"))
         #expect(!recorder.commands.dropFirst(2).contains { $0.stdin != nil })
@@ -457,7 +457,7 @@ struct PoolJoinTests {
         let recorder = Recorder()
         clientHost(
             recorder,
-            FakeClientHost(probe: "new:.codex-hub\nnew:.config/relaybar\nlinger:off\nid=laptopid", hubAdds: "created:ssh\ncreated:keys\n"))
+            FakeClientHost(probe: "new:.codex-hub\nnew:.config/relaybar\nlinger:off", hubAdds: "created:ssh\ncreated:keys\n"))
         let client = try add(recorder)
         var expected = PoolLinuxClient(host: "laptop", folders: [".codex-hub", ".config/relaybar"], linger: true)
         expected.hubKey = true
@@ -479,7 +479,7 @@ struct PoolJoinTests {
         #expect(undo.contains("rmdir \"$HOME/.config/relaybar\""))
         #expect(!undo.contains("rmdir \"$HOME/.claude-hub\""))
         #expect(undo.contains("loginctl disable-linger"))
-        clientHost(recorder, FakeClientHost(probe: "new:.claude-hub\nid=laptopid"))
+        clientHost(recorder, FakeClientHost(probe: "new:.claude-hub"))
         let kept = try add(recorder)
         var plain = PoolLinuxClient(host: "laptop", folders: [".claude-hub"], linger: false)
         plain.hubKey = true
@@ -499,7 +499,7 @@ struct PoolJoinTests {
 
     @Test func linuxClientStopsWithTheHub() async throws {
         let harness = try Harness()
-        harness.answerHomeAndComputers(FakeClientHost(probe: "new:.codex-hub\nlinger:off\nid=laptopid", hubAdds: "created:keys\n"))
+        harness.answerHomeAndComputers(FakeClientHost(probe: "new:.codex-hub\nlinger:off", hubAdds: "created:keys\n"))
         let setup = PoolSetup(env: harness.env())
         _ = try await setup.combineOnHome(host: "homebox")
         let added = try setup.useOnLinux(host: "laptop")
