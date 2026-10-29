@@ -79,7 +79,24 @@ UNIT
     ;;
   "pair --label")
     t=E2E"FIXTURE"
+    echo 2 > "$HOME/.t3/fake-pending"
     printf 'App link: t3code://pair?pairingUrl=http%%3A%%2F%%2F127.0.0.1%%3A3773%%2Fpair%%23token%%3D%s\nToken: %s\n' "$t" "$t"
+    ;;
+  "auth pairing")
+    if [ -e "$HOME/.t3/fake-pending" ]; then printf '[{"id":"pairing-1","label":"Relaybar","scopes":["owner"]}]\n'; else echo '[]'; fi
+    ;;
+  "auth session")
+    case "$3" in
+      list)
+        if [ -e "$HOME/.t3/fake-pending" ]; then
+          n=$(cat "$HOME/.t3/fake-pending")
+          if [ "$n" -le 1 ]; then rm -f "$HOME/.t3/fake-pending"; echo e2e-session-1 > "$HOME/.t3/fake-session"; else echo $((n - 1)) > "$HOME/.t3/fake-pending"; fi
+        fi
+        if [ -e "$HOME/.t3/fake-session" ]; then printf '[{"sessionId":"%s","method":"one-time-token","client":{"label":"Relaybar"}}]\n' "$(cat "$HOME/.t3/fake-session")"; else echo '[]'; fi
+        ;;
+      revoke) rm -f "$HOME/.t3/fake-session" ;;
+      *) echo "fake t3: unknown call $*" >&2; exit 2 ;;
+    esac
     ;;
   "uninstall -y")
     rm -f "$HOME/.local/bin/t3"
@@ -138,6 +155,8 @@ EOF
   grep -q '^t3code://pair$' "$work/pair-marker" || fail "no pair link was handed to the app"
   clientRemote "grep -x 'service install' $homeDir/e2e-sites/t3-calls.log && grep -x 'pair --label Relaybar' $homeDir/e2e-sites/t3-calls.log" > /dev/null || fail "the fake t3 did not see service install and pair"
   [ "$(clientRemote 'systemctl --user is-active t3code.service')" = active ] || fail "the T3 Code service is not active on the client"
+  clientRemote "test -e $homeDir/.t3/fake-session && ! test -e $homeDir/.t3/fake-pending" || fail "the add did not wait for the link to be confirmed in T3 Code"
+  grep -q 'e2e-session-1' "$work/client.json" || fail "the T3 Code session was not recorded"
   clientRemote "grep -q 'exec \"\$HOME/.local/bin/claude\"' $homeDir/.local/bin/claude-all && grep -q 'exec \"\$HOME/.local/bin/codex\"' $homeDir/.local/bin/codex-all" || fail "claude-all and codex-all do not call the tools by their full path"
   clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-after.json" || fail "T3 Code settings were not written on the client"
   python3 -I -c '
@@ -159,6 +178,8 @@ for key, tool in (("claudeAgent_all_accounts", "claude"), ("codex_all_accounts",
     [ -z "$(clientRemote "ls -d $homeDir/$f 2> /dev/null; true")" ] || fail "Remove left $f on the client"
   done
   [ "$(clientRemote 'systemctl --user is-active t3code.service; true')" != active ] || fail "the T3 Code service is still active after Remove"
+  clientRemote "grep -x 'auth session revoke e2e-session-1' $homeDir/e2e-sites/t3-calls.log" > /dev/null || fail "Remove did not end the T3 Code link"
+  clientRemote "! test -e $homeDir/.t3/fake-session" || fail "the T3 Code session is still there after Remove"
   clientRemote "grep -q 'Codex installer' $homeDir/.profile" && fail "Remove left the Codex block in ~/.profile"
   for f in .claude .claude.json .codex/keep.txt .t3/userdata/threads.db .t3/userdata/settings.json; do
     clientRemote "test -e $homeDir/$f" || fail "Remove deleted $f, which must stay"
