@@ -59,11 +59,14 @@ extension PoolController {
             command + "\necho\necho 'Done. Go back to Relaybar and click Try Again.'\nprintf 'Press Return to close this window. '\nread _")
     }
 
-    private func attempt(host: String?, title: String, panel: PoolProgressPanel, _ work: () async throws -> Void) async -> Bool {
+    private func attempt(host: String?, title: String, panel: some PoolWorkPanel, _ work: () async throws -> Void) async -> Bool {
         while true {
             do {
                 try await work()
                 return true
+            } catch is CancellationError {
+                panel.close()
+                return false
             } catch {
                 panel.close()
                 let message = error.localizedDescription
@@ -335,29 +338,51 @@ extension PoolController {
         Task {
             defer { busy = false }
             let hosts = await Task.detached { PoolHubPicker.addable(hosts: names, excluding: skip, run: PoolProcess.run) }.value
-            guard let host = AddComputerDialog(hosts: hosts).run() else { return }
-            await setUpLinux(host)
+            let tailscale = tailscaleOnThisMac || state.onTailscale
+            guard let choice = AddComputerDialog(hosts: hosts, t3: T3Code.isInstalled, tailscale: tailscale).run() else { return }
+            await setUpLinux(choice)
         }
     }
 
-    private func setUpLinux(_ host: String) async {
-        let title = "Setting up \(host)"
-        let panel = PoolProgressPanel()
-        panel.showSetup(title: title, message: "Starting")
+    private func setUpLinux(_ choice: AddComputerDialog.Choice) async {
+        let host = choice.host
+        let panel = PoolAddPanel(host: host, hub: state?.ssh ?? "the home computer")
+        panel.show()
         let setup = PoolSetup(env: environment())
-        let report = progress(panel)
+        let options = PoolAddOptions(t3Channel: choice.t3 ? T3Code.channel : nil, tailscale: choice.tailscale)
+        let hooks = PoolAddHooks(
+            plan: { stages in Task { @MainActor in panel.plan(stages) } },
+            report: { stage, stageState in Task { @MainActor in panel.set(stage, stageState) } },
+            password: { wrong, why in
+                await MainActor.run {
+                    PoolDialogs.computerPassword(
+                        host: host, wrong: wrong, tailscale: options.tailscale, t3: options.t3Channel != nil, why: why)
+                }
+            },
+            signIn: { link in
+                Task { @MainActor in
+                    panel.showSignIn(link)
+                    NSWorkspace.shared.open(link)
+                }
+            },
+            pair: { link in
+                guard PoolJoin.isPairLink(link) else { return }
+                Task { @MainActor in _ = NSWorkspace.shared.open(link) }
+            })
         var added: PoolLinuxClient?
-        let worked = await attempt(host: host, title: title, panel: panel) {
-            added = try await Task.detached { try await setup.useOnLinux(host: host, progress: report) }.value
+        let worked = await attempt(host: host, title: "Setting up \(host)", panel: panel) {
+            let work = Task.detached { try await setup.useOnLinux(host: host, options: options, hooks: hooks) }
+            panel.onCancel = { work.cancel() }
+            added = try await work.value
         }
         panel.close()
         guard worked, let added else { return }
-        let t3 = added.t3Entries ? "T3 Code there now shows Claude, all accounts. " : ""
-        app.show("\(host) can use your accounts", t3 + "In a terminal, run claude-all or codex-all.")
+        PoolDialogs.addedComputer(host: host, client: added, options: options)
     }
 
     @objc func removeComputer(_ sender: NSMenuItem) {
-        guard !busy, let host = sender.representedObject as? String, PoolDialogs.removeComputerFirst(host: host),
+        guard !busy, let host = sender.representedObject as? String,
+            PoolDialogs.removeComputerFirst(host: host, client: state?.linuxClients.first { $0.host == host }),
             PoolDialogs.removeComputerSecond(host: host)
         else { return }
         Task { await performRemoveComputer(host) }
