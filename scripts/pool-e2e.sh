@@ -40,8 +40,7 @@ if [ $wantUpdate = 0 ] && [ $wantRemote = 0 ]; then
   wantLocal=1
 fi
 
-# shellcheck source=scripts/pool-e2e-lib.sh
-source "$repo/scripts/pool-e2e-lib.sh"
+cd "$repo" && source scripts/pool-e2e-lib.sh || exit 1
 
 root="$(mktemp -d "${TMPDIR:-/tmp}/relaybar-pool-e2e.XXXXXX")"
 root="$(cd "$root" && pwd -P)"
