@@ -151,6 +151,7 @@ struct FakeClientHost: Sendable {
     var pair = FakeClientHost.pairOutput
     var password: String?
     var reachable = true
+    var lingerNeedsSudo = false
 
     static let pairOutput =
         "Pairing with box (http://192.168.1.30:3773).\nApp link: t3code://pair?pairingUrl=http%3A%2F%2F192.168.1.30%3A3773%2Fpair%23token%3DFIXTURE\nToken: FIXTURE\n"
@@ -178,7 +179,7 @@ struct FakeClientHost: Sendable {
         if text.contains("ssh-keygen -q") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
         if text.contains("authorized_keys"), text.contains("cat >> ") { return CommandResult(output: hubAdds) }
         if text.contains("echo ok:$a") { return CommandResult(output: route) }
-        if text.contains("&& echo changed:linger") { return CommandResult(output: "changed:linger\n") }
+        if text.contains("&& echo changed:linger") { return CommandResult(output: lingerNeedsSudo ? "" : "changed:linger\n") }
         if text.contains("http_code") { return CommandResult(output: tunnel) }
         if text.contains("[ -f \"$f\" ] && cat") { return CommandResult(output: settings) }
         return nil

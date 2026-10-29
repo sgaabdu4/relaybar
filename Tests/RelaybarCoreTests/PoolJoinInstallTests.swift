@@ -478,6 +478,52 @@ extension PoolJoinTests {
         }
     }
 
+    @Test func asksOnceForTailscaleAndLinger() async throws {
+        let secret = "hunter2-twice"
+        let installed = Flag()
+        let recorder = Recorder()
+        let host = FakeClientHost(password: secret, lingerNeedsSudo: true)
+        recorder.respond = { command in
+            let text = remoteScript(command)
+            if command.executable == "/usr/bin/ssh" {
+                if text.hasPrefix("if ! command -v tailscale") {
+                    return CommandResult(
+                        output: installed.on ? "RB-IP\n100.64.0.9\nRB-STATUS\n" + tailscaleStatus("Running") + "\n" : "RB-MISSING\n")
+                }
+                if text.contains("sudo"), text.contains("tailscale up") {
+                    if command.stdin != nil { installed.on = true }
+                    return command.stdin == nil
+                        ? CommandResult(status: 1, error: "sudo: a password is required\n") : CommandResult(output: signInOutput)
+                }
+            }
+            return host.answer(command) ?? CommandResult()
+        }
+        let asked = Asked()
+        let hooks = PoolAddHooks(password: { wrong, why in
+            asked.add(wrong, why)
+            return secret
+        })
+        let client = try await add(recorder, options: PoolAddOptions(t3Channel: .nightly, tailscale: true), hooks: hooks)
+        #expect(asked.calls.map(\.why) == ["install Tailscale"])
+        #expect(client.linger)
+        let scripts = recorder.commands.map(plainScript)
+        let tailscale = try #require(scripts.firstIndex { $0.hasPrefix("sudo -S") && $0.contains("tailscale up") })
+        let linger = try #require(scripts.firstIndex { $0.hasPrefix("sudo") && $0.contains("loginctl enable-linger \"$SUDO_USER\"") })
+        #expect(tailscale < linger)
+        #expect(scripts[linger].hasPrefix("sudo -S -p '' sh -c "))
+        #expect(recorder.commands[linger].stdin == Data((secret + "\n").utf8))
+
+        let alone = Recorder()
+        alone.respond = { command in host.answer(command) ?? CommandResult() }
+        let lone = Asked()
+        let loneHooks = PoolAddHooks(password: { wrong, why in
+            lone.add(wrong, why)
+            return secret
+        })
+        _ = try await add(alone, options: PoolAddOptions(t3Channel: .nightly), hooks: loneHooks)
+        #expect(lone.calls.map(\.why) == ["keep T3 Code running after you log out"])
+    }
+
     @Test func removesOnlyWhatItInstalled() async throws {
         var client = PoolLinuxClient(host: "laptop", folders: [".codex-hub"], linger: true)
         client.claudeInstalled = true
