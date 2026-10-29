@@ -253,12 +253,24 @@ enum PoolDialogs {
         return field.stringValue
     }
 
+    static func linkFailed(host: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Relaybar could not link \(host) to T3 Code"
+        alert.informativeText = "T3 Code on \(host) is installed and running. Try again in a moment."
+        alert.addButton(withTitle: "Try Again")
+        alert.addButton(withTitle: "Not Now")
+        return run(alert) == .alertFirstButtonReturn
+    }
+
     static func addedComputer(host: String, client: PoolLinuxClient, options: PoolAddOptions) {
         let alert = NSAlert()
         alert.messageText = "\(host) can use your accounts"
         var paragraphs: [String] = []
         let linked = options.t3Channel != nil
-        if linked {
+        if linked, client.t3LinkMissing {
+            paragraphs.append(
+                "T3 Code there is set up, but it is not linked to this Mac yet. To link it, remove \(host) and add it again.")
+        } else if linked {
             let reach = client.t3Host != nil ? "at home and away" : "while you are at home"
             paragraphs.append("Its chats show in T3 Code under \(host), \(reach). T3 Code asks you to confirm it once.")
         } else if client.t3Entries {

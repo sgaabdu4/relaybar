@@ -229,12 +229,80 @@ extension PoolJoinTests {
 
         let wrong = Recorder()
         clientHost(wrong, FakeClientHost(pair: "App link: https://evil.example/pair#token=FIXTURE\n"))
-        let refused = await #expect(throws: PoolClientError.self) {
-            _ = try await add(wrong, options: PoolAddOptions(t3Channel: .stable), hooks: PoolAddHooks(pair: { opens.add($0) }))
-        }
-        #expect(refused == .noPairLink("laptop"))
-        #expect(refused?.errorDescription?.contains("FIXTURE") == false)
+        let refused = try await add(
+            wrong, options: PoolAddOptions(t3Channel: .stable), hooks: PoolAddHooks(pair: { opens.add($0) }))
+        #expect(refused.t3LinkMissing)
         #expect(opens.urls.count == 1)
+    }
+
+    private func failingPair(_ host: FakeClientHost, times: Int) -> (Recorder, Tally) {
+        let recorder = Recorder()
+        let calls = Tally()
+        recorder.respond = { command in
+            if command.executable == "/usr/bin/ssh", remoteScript(command).contains("pair --label"), calls.next() <= times {
+                return CommandResult(status: 1, error: "t3: the server is not ready\n")
+            }
+            return host.answer(command) ?? CommandResult()
+        }
+        return (recorder, calls)
+    }
+
+    @Test func keepsTheSetupWhenTheLinkFails() async throws {
+        let harness = try Harness()
+        harness.answerHomeAndComputers()
+        let setup = PoolSetup(env: harness.env())
+        _ = try await setup.combineOnHome(host: "homebox")
+        let base = harness.recorder.respond
+        harness.recorder.respond = { command in
+            remoteScript(command).contains("pair --label")
+                ? CommandResult(status: 1, error: "t3: the server is not ready\n") : base(command)
+        }
+        let asked = Asked()
+        let opens = Opens()
+        let hooks = PoolAddHooks(
+            pair: { opens.add($0) },
+            linkFailed: { host in
+                asked.add(false, host)
+                return false
+            })
+        let client = try await setup.useOnLinux(host: "laptop", options: PoolAddOptions(t3Channel: .stable), hooks: hooks)
+        #expect(client.t3LinkMissing)
+        #expect(client.t3Installed && client.t3Service && client.t3Entries)
+        #expect(asked.calls.map(\.why) == ["laptop"])
+        #expect(opens.urls.isEmpty)
+        let sent = harness.recorder.commands.map(plainScript)
+        #expect(!sent.contains { $0.contains("service uninstall") || $0.contains("rm -f \"$HOME/.local/bin/claude\"") })
+        let saved = try #require(PoolState.load(harness.paths)?.linuxClients.first)
+        #expect(saved == client)
+        #expect(saved.hubKey)
+        let log = AddLog()
+        let quiet = Recorder()
+        let (failing, _) = failingPair(FakeClientHost(), times: 9)
+        quiet.respond = failing.respond
+        let plain = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .stable),
+            hooks: PoolAddHooks(plan: log.hooks.plan, report: log.hooks.report), run: quiet.runner)
+        #expect(plain.t3LinkMissing)
+        #expect(log.last(.link) == .problem("Not linked"))
+    }
+
+    @Test func triesTheLinkAgain() async throws {
+        let (recorder, calls) = failingPair(FakeClientHost(), times: 1)
+        let asked = Asked()
+        let opens = Opens()
+        let hooks = PoolAddHooks(
+            pair: { opens.add($0) },
+            linkFailed: { host in
+                asked.add(false, host)
+                return true
+            })
+        let client = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .stable), hooks: hooks,
+            run: recorder.runner)
+        #expect(calls.count == 2)
+        #expect(asked.calls.count == 1)
+        #expect(opens.urls.map(\.host) == ["pair"])
+        #expect(!client.t3LinkMissing)
     }
 
     @Test func limitsT3CodeToTailscale() async throws {
@@ -428,6 +496,20 @@ extension PoolJoinTests {
         #expect(PoolInstallSite.codex.url == "https://chatgpt.com/codex/install.sh")
         #expect(PoolTailscaleComputer.installURL == "https://tailscale.com/install.sh")
     }
+}
+
+final class Tally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var total = 0
+
+    func next() -> Int {
+        lock.withLock {
+            total += 1
+            return total
+        }
+    }
+
+    var count: Int { lock.withLock { total } }
 }
 
 final class Guesses: @unchecked Sendable {
