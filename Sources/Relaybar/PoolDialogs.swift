@@ -282,11 +282,6 @@ enum PoolDialogs {
                 "T3 Code there listens on your home network, not on Tailscale, because this Mac could not reach \(host) through Tailscale. Use the same Tailscale account on both computers, then add it again."
             )
         }
-        if client.t3Installed {
-            paragraphs.append(
-                "To clear \(host) from T3 Code on this Mac later, use Settings, Connections, Remove from this device."
-            )
-        }
         alert.informativeText = paragraphs.joined(separator: "\n\n")
         alert.addButton(withTitle: "OK")
         _ = run(alert)
