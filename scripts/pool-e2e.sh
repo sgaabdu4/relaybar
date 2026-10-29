@@ -15,7 +15,7 @@ Usage: scripts/pool-e2e.sh [--local] [--update] [--remote]
   no flag   the local real-binary cases: modelsNeedTheKey picksUpANewLogin prioritySticks sandboxBlocksHomeFiles
   --local   the local real-binary cases (when combined with other flags)
   --update  updateRules: the update script against a fixture release server
-  --remote  remoteInstall and tunnelComesBack against a Linux container in Docker
+  --remote  remoteInstall, tunnelComesBack and remoteStop against a Linux container in Docker
 Set RELAYBAR_E2E_CACHE to keep the downloaded release between runs.
 EOF
 }
@@ -879,6 +879,23 @@ EOF
   remote 'systemd-analyze calendar "*-*-* 04:00:00"' > /dev/null 2>&1 || fail "systemd rejects the update schedule"
 }
 
+remoteStop() {
+  newCase
+  local rhome left
+  [ -n "${remoteError:-}" ] && fail "$remoteError"
+  rhome="$(remote pwd)" || fail "cannot read the home folder of the container user"
+  sed -n '/static let remoteRemoval =/,/; true"$/p' "$repo/Sources/RelaybarCore/PoolTeardown.swift" |
+    sed -e '1s/^.*remoteRemoval =//' -e 's/^[[:space:]]*+*[[:space:]]*"//' -e 's/"$//' -e 's/\\"/"/g' | tr -d '\n' > "$work/teardown.sh"
+  grep -q 'disable --now' "$work/teardown.sh" || fail "cannot read the removal script from PoolTeardown.swift"
+  remote sh -s < "$work/teardown.sh" > "$work/teardown.out" 2>&1 || fail "the removal script failed: $(cat "$work/teardown.out")"
+  left="$(remote 'grep -lx cli-proxy-api /proc/[0-9]*/comm 2> /dev/null; true')"
+  [ -z "$left" ] || fail "the helper is still running after the removal script ($left)"
+  [ "$(remote 'curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8317/v1/models; true')" = 000 ] || fail "port 8317 still answers after the removal script"
+  [ "$(remote 'systemctl --user is-active relaybar-helper.service; true')" != active ] || fail "the helper service is still active after the removal script"
+  remote "[ ! -e '$rhome/.local/share/relaybar-helper' ] && [ ! -e '$rhome/.config/systemd/user/relaybar-helper.service' ]" || fail "the removal script left the helper files behind"
+  echo "  removal script stopped the helper, closed port 8317 and removed its files"
+}
+
 tunnelLoop() {
   while :; do
     ssh -N -L "127.0.0.1:$1:127.0.0.1:8317" -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
@@ -929,6 +946,7 @@ if [ $wantRemote = 1 ]; then
   fi
   runCase remoteInstall
   runCase tunnelComesBack
+  runCase remoteStop
 fi
 
 if [ $failures -ne 0 ]; then
