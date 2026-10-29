@@ -129,7 +129,7 @@ struct PoolTeardownTests {
         let command = try #require(harness.recorder.commands.first)
         let text = remoteScript(command)
         #expect(command.arguments.contains("homebox"))
-        #expect(text.contains("systemctl --user disable --now relaybar-helper.service relaybar-helper-update.timer"))
+        #expect(text.contains("systemctl --user disable --now \"$u\""))
         #expect(text.contains("rm -rf \"$HOME/.local/share/relaybar-helper\""))
         try state([.remoteHelper], ssh: "homebox", harness: harness)
         harness.recorder.respond = { _ in CommandResult(status: 255, error: "Connection refused") }
@@ -142,6 +142,20 @@ struct PoolTeardownTests {
 }
 
 extension PoolTeardownTests {
+    @Test func stopsEachHomeComputerUnitOnItsOwn() {
+        let script = PoolTeardown.remoteRemoval
+        let stop = script.components(separatedBy: "; done;").first ?? ""
+        #expect(stop.hasPrefix("for u in relaybar-helper.service relaybar-helper-update.timer relaybar-tunnel.service; do "))
+        #expect(stop.contains("systemctl --user disable --now \"$u\""))
+        #expect(script.components(separatedBy: "disable --now").count == 2)
+        let stopAt = script.range(of: "done;")?.upperBound
+        let removeAt = script.range(of: "rm -f")?.lowerBound
+        let reloadAt = script.range(of: "daemon-reload")?.lowerBound
+        let foldersAt = script.range(of: "rm -rf")?.lowerBound
+        #expect(stopAt != nil && removeAt != nil && reloadAt != nil && foldersAt != nil)
+        #expect(stopAt! <= removeAt! && removeAt! < reloadAt! && reloadAt! < foldersAt!)
+    }
+
     @Test func keepsAHubFolderTheUserHad() throws {
         let harness = try Harness()
         try harness.home.folder(".claude-hub")

@@ -18,7 +18,8 @@ public struct PoolTeardownReport: Equatable, Sendable {
 
 public enum PoolTeardown {
     public static let remoteRemoval =
-        "systemctl --user disable --now relaybar-helper.service relaybar-helper-update.timer relaybar-tunnel.service >/dev/null 2>&1; "
+        "for u in relaybar-helper.service relaybar-helper-update.timer relaybar-tunnel.service; do "
+        + "systemctl --user disable --now \"$u\" >/dev/null 2>&1; done; "
         + "rm -f \"$HOME/.config/systemd/user/relaybar-helper.service\" \"$HOME/.config/systemd/user/relaybar-helper-update.service\" "
         + "\"$HOME/.config/systemd/user/relaybar-helper-update.timer\" \"$HOME/.config/systemd/user/relaybar-tunnel.service\"; "
         + "systemctl --user daemon-reload >/dev/null 2>&1; rm -rf \"$HOME/.local/share/relaybar-helper\" \"$HOME/.local/share/relaybar\"; true"
