@@ -322,10 +322,13 @@ struct PoolJoinTests {
         _ = try add(recorder)
         let unit = try #require(recorder.commands.first { remoteScript($0).contains("relaybar-tunnel.service\"") && $0.stdin != nil })
         let text = String(decoding: unit.stdin ?? Data(), as: UTF8.self)
-        #expect(text.contains("'-N' '-L' '127.0.0.1:8317:127.0.0.1:8317'"))
         #expect(
             text.contains(
-                "'-i' '/home/sam/.config/relaybar/hub_key' '-o' 'IdentitiesOnly=yes' '-o' 'UserKnownHostsFile=/home/sam/.config/relaybar/known_hosts' '-o' 'StrictHostKeyChecking=yes' '-p' '22' '--' 'sam@192.168.1.20'"
+                "for a in \"100.64.0.7\" \"192.168.1.20\" \"172.17.0.1\"; do \"/usr/bin/ssh\" \"-N\" \"-L\" \"127.0.0.1:8317:127.0.0.1:8317\""
+            ))
+        #expect(
+            text.contains(
+                "\"-i\" \"/home/sam/.config/relaybar/hub_key\" \"-o\" \"IdentitiesOnly=yes\" \"-o\" \"UserKnownHostsFile=/home/sam/.config/relaybar/known_hosts\" \"-o\" \"StrictHostKeyChecking=yes\" \"-p\" \"22\" \"-o\" \"ConnectTimeout=10\" \"--\" \"sam@$$a\""
             ))
         #expect(
             recorder.commands.contains {
@@ -401,7 +404,7 @@ struct PoolJoinTests {
         let other = try #require(onLaptop(odd).first { remoteScript($0).contains("known_hosts\"") && $0.stdin != nil })
         #expect(String(decoding: other.stdin ?? Data(), as: UTF8.self).hasPrefix("[192.168.1.20]:2222 ssh-ed25519 AAAAhubkey\n"))
         let unit = try #require(odd.commands.first { remoteScript($0).contains("relaybar-tunnel.service\"") && $0.stdin != nil })
-        #expect(String(decoding: unit.stdin ?? Data(), as: UTF8.self).contains("'-p' '2222'"))
+        #expect(String(decoding: unit.stdin ?? Data(), as: UTF8.self).contains("\"-p\" \"2222\""))
         clientHost(odd, FakeClientHost(facts: "user=sam\nport=22\naddr=192.168.1.20\n"))
         #expect(throws: PoolClientError.hubIdentity("homebox")) { _ = try add(odd) }
         #expect(PoolClientError.hubIdentity("homebox").errorDescription?.contains("SSH identity of homebox") == true)
@@ -422,7 +425,7 @@ struct PoolJoinTests {
             #expect(tries.contains(option), "missing \(option)")
         }
         let unit = try #require(recorder.commands.first { remoteScript($0).contains("relaybar-tunnel.service\"") && $0.stdin != nil })
-        #expect(String(decoding: unit.stdin ?? Data(), as: UTF8.self).contains("'sam@172.17.0.1'"))
+        #expect(String(decoding: unit.stdin ?? Data(), as: UTF8.self).contains("for a in \"100.64.0.7\" \"172.17.0.1\" \"192.168.1.20\";"))
         clientHost(recorder, FakeClientHost(route: "none\n"))
         let before = recorder.commands.count
         let failure = #expect(throws: PoolClientError.self) { _ = try add(recorder) }
@@ -572,7 +575,8 @@ struct PoolJoinTests {
         #expect(added.hubKey)
         let tunnel = try #require(
             harness.recorder.commands.first { remoteScript($0).contains("relaybar-tunnel.service\"") && $0.stdin != nil })
-        #expect(String(decoding: tunnel.stdin ?? Data(), as: UTF8.self).contains("'sam@192.168.1.20'"))
+        #expect(
+            String(decoding: tunnel.stdin ?? Data(), as: UTF8.self).contains("for a in \"100.64.0.7\" \"192.168.1.20\" \"172.17.0.1\";"))
         let access = try #require(setup.accessKey())
         let keyWrites = harness.recorder.commands.filter { $0.stdin == Data(access.utf8) }
         #expect(keyWrites.count == 1)
