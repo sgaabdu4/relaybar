@@ -169,7 +169,7 @@ extension PoolJoin {
         host: String, hub: String, hubLabel: String? = nil, accessKey: String, options: PoolAddOptions = PoolAddOptions(),
         hooks: PoolAddHooks = .none, run: @escaping CommandRunner, progress: (String) -> Void = { _ in },
         checkpoint: (PoolLinuxClient?) -> Void = { _ in }
-    ) async throws -> PoolLinuxClient {
+    ) async throws -> PoolAddResult {
         let remote = PoolRemote(host: host, run: run)
         let hubName = try PoolHubPicker.validate(hub)
         let hubRemote = PoolRemote(host: hubName, run: run)
@@ -222,6 +222,7 @@ extension PoolJoin {
         var client = PoolLinuxClient(host: host, folders: lines.filter { $0.hasPrefix("new:") }.map { String($0.dropFirst(4)) })
         client.t3SecretsFolder = lines.contains("t3secrets:new")
         checkpoint(client)
+        var result = PoolAddResult(client: client)
         do {
             report(.letIn, .working)
             progress("Making a key on \(host)")
@@ -374,18 +375,29 @@ extension PoolJoin {
                     try keepT3Retrying(remote)
                     try remote.execute("\"$HOME/.local/bin/t3\" service restart </dev/null", limit: 120)
                     try waitForT3(remote, address: tailscaleAddress)
+                    result.listening = .tailscale
+                } else {
+                    result.listening = .homeNetwork
+                    if options.tailscale { result.notes.append(.tailscaleUnreachable) }
                 }
                 report(.t3, .done)
             }
-            if options.t3Channel != nil, found.t3Running, found.t3Path == nil {
-                progress("T3 Code is already running on \(host), but Relaybar could not find it to link it")
+            if options.t3Channel != nil, !installT3 {
+                if found.t3Path == nil {
+                    result.notes.append(.t3NotFound)
+                    progress("T3 Code is already running on \(host), but Relaybar could not find it to link it")
+                } else if options.tailscale {
+                    result.notes.append(.t3Kept)
+                }
             }
             if pairable, let t3 {
                 report(.link, .working)
                 progress("Linking T3 Code on \(host) to this Mac")
                 if try await pair(remote, t3: t3, hooks: hooks) {
+                    result.link = .linked
                     report(.link, .done)
                 } else {
+                    result.link = .notLinked
                     client.t3LinkMissing = true
                     checkpoint(client)
                     report(.link, .problem("Not linked"))
@@ -397,7 +409,8 @@ extension PoolJoin {
             }
             throw error
         }
-        return client
+        result.client = client
+        return result
     }
 
     private static func setUpTailscale(

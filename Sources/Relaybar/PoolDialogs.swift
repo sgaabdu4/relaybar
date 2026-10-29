@@ -259,25 +259,32 @@ enum PoolDialogs {
         return run(alert) == .alertFirstButtonReturn
     }
 
-    static func addedComputer(host: String, client: PoolLinuxClient, options: PoolAddOptions) {
+    static func addedComputer(host: String, result: PoolAddResult) {
         let alert = NSAlert()
         alert.messageText = "\(host) can use your accounts"
         var paragraphs: [String] = []
-        let linked = options.t3Channel != nil
-        if linked, client.t3LinkMissing {
+        switch result.link {
+        case .linked:
+            let reach = result.listening == .tailscale ? "at home and away" : "while you are at home"
+            paragraphs.append("Its chats show in T3 Code under \(host), \(reach). T3 Code asks you to confirm it once.")
+        case .notLinked:
             paragraphs.append(
                 "T3 Code there is set up, but it is not linked to this Mac yet. To link it, remove \(host) and add it again.")
-        } else if linked {
-            let reach = client.t3Host != nil ? "at home and away" : "while you are at home"
-            paragraphs.append("Its chats show in T3 Code under \(host), \(reach). T3 Code asks you to confirm it once.")
-        } else if client.t3Entries {
-            paragraphs.append("T3 Code there now shows Claude, all accounts.")
+        case .notTried:
+            if result.notes.contains(.t3NotFound) {
+                paragraphs.append("T3 Code was already running there. Relaybar could not find it to link it, so it left it as it was.")
+            } else if result.client.t3Entries {
+                paragraphs.append("T3 Code there now shows Claude, all accounts.")
+            }
         }
         paragraphs.append("In a terminal there, run claude-all or codex-all.")
-        if options.tailscale, linked, client.t3Host == nil {
+        if result.notes.contains(.tailscaleUnreachable) {
             paragraphs.append(
                 "T3 Code there listens on your home network, not on Tailscale, because this Mac could not reach \(host) through Tailscale. Use the same Tailscale account on both computers, then add it again."
             )
+        }
+        if result.notes.contains(.t3Kept) {
+            paragraphs.append("T3 Code was already there, so Relaybar did not change where it listens.")
         }
         alert.informativeText = paragraphs.joined(separator: "\n\n")
         alert.addButton(withTitle: "OK")
