@@ -354,20 +354,22 @@ extension PoolController {
         let setup = PoolSetup(env: environment())
         let options = PoolAddOptions(t3Channel: choice.t3 ? T3Code.channel : nil, tailscale: choice.tailscale)
         let hooks = PoolAddHooks(
-            plan: { stages in Task { @MainActor in panel.plan(stages) } },
-            report: { stage, stageState in Task { @MainActor in panel.set(stage, stageState) } },
+            plan: { stages in DispatchQueue.main.async { MainActor.assumeIsolated { panel.plan(stages) } } },
+            report: { stage, stageState in DispatchQueue.main.async { MainActor.assumeIsolated { panel.set(stage, stageState) } } },
             password: { wrong, why in
                 await MainActor.run { PoolDialogs.computerPassword(host: host, wrong: wrong, why: why) }
             },
             signIn: { link in
-                Task { @MainActor in
-                    panel.showSignIn(link)
-                    NSWorkspace.shared.open(link)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        panel.showSignIn(link)
+                        NSWorkspace.shared.open(link)
+                    }
                 }
             },
             pair: { link in
                 guard PoolJoin.isPairLink(link) else { return }
-                Task { @MainActor in _ = NSWorkspace.shared.open(link) }
+                DispatchQueue.main.async { MainActor.assumeIsolated { _ = NSWorkspace.shared.open(link) } }
             },
             linkFailed: { name in await MainActor.run { PoolDialogs.linkFailed(host: name) } })
         var added: PoolLinuxClient?
