@@ -139,12 +139,16 @@ extension PoolJoin {
                 + "if [ -e \"$p\" ] && ! grep -q '\(marker)' \"$p\" 2>/dev/null; then echo foreign:$f; fi; done; "
                 + "[ \"$(loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null)\" = yes ] || echo linger:off; "
                 + "test -e \"\(PoolRemote.joinFile)\" && echo hub:yes; "
+                + "c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:\(Pool.port)/v1/models 2>/dev/null); "
+                + "if [ -n \"$c\" ] && [ \"$c\" != 000 ]; then if ! { systemctl --user is-active --quiet relaybar-tunnel.service 2>/dev/null "
+                + "&& grep -q relaybar/hub_key \"$HOME/.config/systemd/user/relaybar-tunnel.service\" 2>/dev/null; }; then echo port:busy; fi; fi; "
                 + "if [ -f \"\(t3Settings)\" ]; then echo t3:yes; [ -d \"$HOME/.t3/userdata/secrets\" ] || echo t3secrets:new; fi; true")
         let lines = probe.split(whereSeparator: \.isNewline).map(String.init)
         if let foreign = lines.first(where: { $0.hasPrefix("foreign:") }) {
             throw PoolFileError.notRelaybars("\(host):.local/bin/\(foreign.dropFirst(8))")
         }
         if lines.contains("hub:yes") { throw PoolClientError.isTheHub(host) }
+        if lines.contains("port:busy") { throw PoolSetupError.conflict(.portInUse(Pool.port)) }
         let hasT3 = lines.contains("t3:yes")
         let facts = try hubFacts(hubRemote)
         if hasT3 { try withT3 { t3 in _ = try pullT3(remote, into: t3) } }
@@ -207,10 +211,14 @@ extension PoolJoin {
                 client.linger = enabled.contains("changed:linger")
                 checkpoint(client)
             }
-            try remote.execute("systemctl --user daemon-reload && systemctl --user enable --now relaybar-tunnel.service")
+            try remote.execute(
+                "systemctl --user daemon-reload && systemctl --user enable relaybar-tunnel.service && systemctl --user restart relaybar-tunnel.service"
+            )
             let answer = try remote.execute(
-                "i=0; while [ $i -lt 15 ]; do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:\(Pool.port)/v1/models); "
-                    + "[ \"$c\" = 401 ] && { echo up; exit 0; }; sleep 1; i=$((i+1)); done; echo down")
+                "i=0; while [ $i -lt 15 ]; do c=$(printf 'header = \"Authorization: Bearer %s\"\\n' \"$(cat \"\(keyFile)\")\" "
+                    + "| curl -s -o /dev/null -w '%{http_code}' --max-time 2 -K - http://127.0.0.1:\(Pool.port)/v1/models); "
+                    + "if [ \"$c\" = 200 ] && systemctl --user is-active --quiet relaybar-tunnel.service; then echo up; exit 0; fi; "
+                    + "sleep 1; i=$((i+1)); done; echo down")
             guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "up" else {
                 throw PoolSSHError.failed(
                     "\(host) reached \(hubName), but the helper did not answer there. Check that the helper is running, then try again.")

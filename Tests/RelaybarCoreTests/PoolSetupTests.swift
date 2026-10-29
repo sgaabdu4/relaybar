@@ -218,10 +218,7 @@ struct PoolSetupTests {
             if command.executable == "/bin/launchctl", command.arguments.first == "bootstrap" { up.on = true }
             return CommandResult()
         }
-        harness.http.handler = { request in
-            guard request.url.path == "/v1/models", up.on else { return nil }
-            return HTTPResponse(status: request.headers["Authorization"] == nil ? 401 : 200)
-        }
+        harness.http.handler = joinedHelper(up: up, secrets: secrets)
         let setup = PoolSetup(env: harness.env())
         #expect(try setup.homeStatus(host: "homebox") == .relaybarHub)
         await #expect(throws: PoolSetupError.hubExists("homebox")) { _ = try await setup.combineOnHome(host: "homebox") }
