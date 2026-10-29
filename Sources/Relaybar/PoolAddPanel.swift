@@ -136,6 +136,10 @@ final class PoolAddPanel: NSObject, PoolWorkPanel {
             list.addArrangedSubview(view)
             view.widthAnchor.constraint(equalToConstant: Self.inner - 2).isActive = true
         }
+        let checking = AddStepRow(title: "Checking \(host)")
+        checking.set(.working)
+        steps.addArrangedSubview(checking)
+        checking.widthAnchor.constraint(equalToConstant: Self.inner - 2).isActive = true
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 12
