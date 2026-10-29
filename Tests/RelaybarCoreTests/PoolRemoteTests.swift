@@ -173,7 +173,7 @@ struct PoolRemoteTests {
 }
 
 struct PoolJoinTests {
-    private let secrets = PoolSecrets(accessKey: String(repeating: "c3", count: 32), managementSecret: String(repeating: "d4", count: 32))
+    let secrets = PoolSecrets(accessKey: String(repeating: "c3", count: 32), managementSecret: String(repeating: "d4", count: 32))
     private var joinJSON: String { #"{"accessKey":"\#(secrets.accessKey)","managementSecret":"\#(secrets.managementSecret)"}"# }
 
     @Test func findsThePoolAndItsSSHName() async throws {
@@ -280,20 +280,23 @@ struct PoolJoinTests {
         #expect(PoolState.load(harness.paths) == nil)
     }
 
-    private func clientHost(_ recorder: Recorder, _ host: FakeClientHost = FakeClientHost()) {
+    func clientHost(_ recorder: Recorder, _ host: FakeClientHost = FakeClientHost()) {
         recorder.respond = { host.answer($0) ?? CommandResult() }
     }
 
-    private func onHub(_ recorder: Recorder) -> [Command] {
+    func onHub(_ recorder: Recorder) -> [Command] {
         recorder.commands.filter { $0.arguments.contains("homebox") }
     }
 
-    private func onLaptop(_ recorder: Recorder) -> [Command] {
+    func onLaptop(_ recorder: Recorder) -> [Command] {
         recorder.commands.filter { $0.arguments.contains("laptop") }
     }
 
-    private func add(_ recorder: Recorder, hub: String = "homebox") async throws -> PoolLinuxClient {
-        try await PoolJoin.linuxClient(host: "laptop", hub: hub, accessKey: secrets.accessKey, run: recorder.runner)
+    func add(_ recorder: Recorder, hub: String = "homebox", options: PoolAddOptions = PoolAddOptions(), hooks: PoolAddHooks = .none)
+        async throws -> PoolLinuxClient
+    {
+        try await PoolJoin.linuxClient(
+            host: "laptop", hub: hub, accessKey: secrets.accessKey, options: options, hooks: hooks, run: recorder.runner)
     }
 
     @Test func linuxClientKeyFileIsPrivate() async throws {
@@ -543,7 +546,7 @@ struct PoolJoinTests {
         #expect(!recorder.commands.contains { $0.stdin != nil })
     }
 
-    private let t3File = #"{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}"#
+    let t3File = #"{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}"#
 
     @Test func clientGetsT3Entries() async throws {
         let recorder = Recorder()

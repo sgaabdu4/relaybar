@@ -44,6 +44,14 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
     public var previousSelection: String?
     public var t3Secrets: [String] = []
     public var t3SecretsFolder = false
+    public var claudeInstalled = false
+    public var codexInstalled = false
+    public var codexProfile = false
+    public var codexFolder = false
+    public var t3Installed = false
+    public var t3Service = false
+    public var t3Host: String?
+    public var tailscaleInstalled = false
 
     public init(host: String, folders: [String] = [], linger: Bool = false) {
         self.host = host
@@ -63,6 +71,14 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
         previousSelection = try values.decodeIfPresent(String.self, forKey: .previousSelection)
         t3Secrets = try values.decodeIfPresent([String].self, forKey: .t3Secrets) ?? []
         t3SecretsFolder = try values.decodeIfPresent(Bool.self, forKey: .t3SecretsFolder) ?? false
+        claudeInstalled = try values.decodeIfPresent(Bool.self, forKey: .claudeInstalled) ?? false
+        codexInstalled = try values.decodeIfPresent(Bool.self, forKey: .codexInstalled) ?? false
+        codexProfile = try values.decodeIfPresent(Bool.self, forKey: .codexProfile) ?? false
+        codexFolder = try values.decodeIfPresent(Bool.self, forKey: .codexFolder) ?? false
+        t3Installed = try values.decodeIfPresent(Bool.self, forKey: .t3Installed) ?? false
+        t3Service = try values.decodeIfPresent(Bool.self, forKey: .t3Service) ?? false
+        t3Host = try values.decodeIfPresent(String.self, forKey: .t3Host)
+        tailscaleInstalled = try values.decodeIfPresent(Bool.self, forKey: .tailscaleInstalled) ?? false
     }
 }
 
