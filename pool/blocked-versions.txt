@@ -1,0 +1,1 @@
+# One blocked CLIProxyAPI version per line, for example 8.0.45. Lines that start with # are comments.

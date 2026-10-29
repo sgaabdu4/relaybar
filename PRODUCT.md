@@ -22,6 +22,7 @@ Each account's session and weekly limits are only visible inside that account's 
 - Add account: creates the account folder, signs in through the browser in the background, can make a separate Claude or Codex desktop app with a colour-badged icon, and adds the account to T3 Code when T3 Code is installed.
 - Remove account: hide it, or delete its folder, desktop app, Keychain login and T3 Code entry after three confirmations. Main `~/.claude` and `~/.codex` folders can only be hidden.
 - Planned: automatic updates through Sparkle and signed releases on GitHub.
+- Combine accounts (optional): runs CLIProxyAPI on this Mac or a Linux computer at home so T3 Code, `claude-all` and `codex-all` use whichever account has room, in the user's order. Relaybar installs, locks in, updates and removes the helper, signs each account in to it, and adds "Claude, all accounts" and "Codex, all accounts" to T3 Code.
 
 ## Brand Personality / Tone
 
@@ -30,8 +31,10 @@ Calm, small and exact. Plain words, short labels ("5h", "7d", "Login expired"), 
 ## Boundaries
 
 - macOS 14 or later only; no Windows, Linux or iPhone.
-- Reads usage; never changes plans, buys credits or renews logins (renewing would sign the account out of Claude Code).
-- No analytics, no server of its own; tokens stay in the Keychain and the tools' own files.
+- Reads usage; never changes plans, buys credits or renews logins (renewing would sign the account out of Claude Code). With combined accounts, the helper keeps and renews its own separate logins; Relaybar still never copies or renews one.
+- The helper runs only on the user's own computers at home: never on a cloud server or behind a VPN, never listening on the network, and only with the user's acceptance of the ban risk.
+- macOS app only; a home helper may run on Linux, which Relaybar sets up over SSH.
+- No analytics, no server of its own; tokens stay in the Keychain and the tools' own files. Combined accounts add ipinfo.io (at setup) and GitHub (nightly helper updates) lookups.
 - Not affiliated with Anthropic or OpenAI.
 
 ## Stack

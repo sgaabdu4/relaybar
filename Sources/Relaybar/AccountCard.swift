@@ -6,18 +6,23 @@ final class AccountCard: NSView {
     private let logo: NSImage
     private let opens: String?
     private let open: (String) -> Void
-    private static let width: CGFloat = 250
-    private static let inset: CGFloat = 14
-    private static let rowHeight: CGFloat = 18
-    private static let nameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
-    private static let smallFont = NSFont.systemFont(ofSize: 11)
-    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+    private let status: () -> PoolStatus?
+    static let width: CGFloat = 250
+    static let inset: CGFloat = 14
+    static let rowHeight: CGFloat = 18
+    static let nameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    static let smallFont = NSFont.systemFont(ofSize: 11)
+    static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
 
-    init(account: Account, logo: NSImage, opens: String?, open: @escaping (String) -> Void) {
+    init(
+        account: Account, logo: NSImage, opens: String?, status: @escaping () -> PoolStatus? = { nil },
+        open: @escaping (String) -> Void
+    ) {
         self.account = account
         self.logo = logo
         self.opens = opens
         self.open = open
+        self.status = status
         let rows = CGFloat(max(1, [account.session, account.weekly].compactMap { $0 }.count + (account.stale ? 1 : 0)))
         super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: 32 + rows * Self.rowHeight))
         toolTip = opens.map { "Open " + URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }
@@ -43,28 +48,49 @@ final class AccountCard: NSView {
             in: NSRect(x: inset, y: 7, width: 14, height: 14), from: .zero,
             operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         let name = account.tag.isEmpty ? (account.isClaude ? "Claude" : "Codex") : account.tag
-        draw(name, font: Self.nameFont, color: .labelColor, at: NSPoint(x: inset + 21, y: 5), maxWidth: 160)
+        Self.draw(name, font: Self.nameFont, color: .labelColor, at: NSPoint(x: inset + 21, y: 5), maxWidth: 160)
+        drawStatus()
 
         var y: CGFloat = 28
         for (label, window) in [("5h", account.session), ("7d", account.weekly)] {
             guard let window else { continue }
-            drawRow(label, window, y: y)
+            Self.drawRow(
+                label, window, y: y, width: bounds.width, value: account.tint.color,
+                bar: account.tint == .plain ? NSColor.secondaryLabelColor : account.tint.color)
             y += Self.rowHeight
         }
         if account.stale {
-            draw("Login expired", font: Self.smallFont, color: .systemOrange, at: NSPoint(x: inset, y: y), maxWidth: 200)
+            Self.draw("Login expired", font: Self.smallFont, color: .systemOrange, at: NSPoint(x: inset, y: y), maxWidth: 200)
         } else if account.session == nil && account.weekly == nil {
-            draw(
+            Self.draw(
                 "Waiting for \(account.isClaude ? "Claude" : "Codex")", font: Self.smallFont, color: .tertiaryLabelColor,
                 at: NSPoint(x: inset, y: y), maxWidth: 200)
         }
     }
 
-    private func drawRow(_ label: String, _ window: Window, y: CGFloat) {
+    private func drawStatus() {
+        guard let status = status() else { return }
+        let text: String
+        let color: NSColor
+        switch status {
+        case .inUse: (text, color) = ("in use", PoolStatus.color)
+        case .paused: (text, color) = ("paused", .tertiaryLabelColor)
+        case .signedOut: (text, color) = ("signed out", .systemRed)
+        }
+        let attributes: [NSAttributedString.Key: Any] = [.font: Self.smallFont, .foregroundColor: color]
+        let width = ceil((text as NSString).size(withAttributes: attributes).width)
+        let right = bounds.width - Self.inset
+        (text as NSString).draw(at: NSPoint(x: right - width, y: 7), withAttributes: attributes)
+        guard status == .inUse else { return }
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: right - width - 11, y: 11, width: 6, height: 6)).fill()
+    }
+
+    static func drawRow(_ label: String, _ window: Window, y: CGFloat, width: CGFloat, value color: NSColor, bar: NSColor) {
         let inset = Self.inset
-        let right = bounds.width - inset
+        let right = width - inset
         let low = window.left <= 10
-        draw(label, font: Self.smallFont, color: .secondaryLabelColor, at: NSPoint(x: inset, y: y), maxWidth: 24)
+        Self.draw(label, font: Self.smallFont, color: .secondaryLabelColor, at: NSPoint(x: inset, y: y), maxWidth: 24)
 
         let reset = Self.resets(window)
         let resetAttributes: [NSAttributedString.Key: Any] = [.font: Self.smallFont, .foregroundColor: NSColor.tertiaryLabelColor]
@@ -73,7 +99,7 @@ final class AccountCard: NSView {
 
         let valueRight = right - 52
         let value = "\(window.left)%"
-        let valueAttributes: [NSAttributedString.Key: Any] = [.font: Self.valueFont, .foregroundColor: account.tint.color(for: window)]
+        let valueAttributes: [NSAttributedString.Key: Any] = [.font: Self.valueFont, .foregroundColor: low ? Tint.low : color]
         let valueWidth = (value as NSString).size(withAttributes: valueAttributes).width
         (value as NSString).draw(at: NSPoint(x: valueRight - valueWidth, y: y - 1), withAttributes: valueAttributes)
 
@@ -82,11 +108,11 @@ final class AccountCard: NSView {
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard window.left > 0 else { return }
         let fill = NSRect(x: track.minX, y: track.minY, width: max(4, track.width * CGFloat(window.left) / 100), height: track.height)
-        (low ? Tint.low : account.tint == .plain ? NSColor.secondaryLabelColor : account.tint.color).setFill()
+        (low ? Tint.low : bar).setFill()
         NSBezierPath(roundedRect: fill, xRadius: 2, yRadius: 2).fill()
     }
 
-    private func draw(_ text: String, font: NSFont, color: NSColor, at point: NSPoint, maxWidth: CGFloat) {
+    static func draw(_ text: String, font: NSFont, color: NSColor, at point: NSPoint, maxWidth: CGFloat) {
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: style]
