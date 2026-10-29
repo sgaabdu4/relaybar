@@ -6,6 +6,7 @@ public enum PoolSetupError: Error, Equatable, LocalizedError {
     case keychain
     case notAnswering
     case hubExists(String)
+    case helperNotConfirmed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +17,9 @@ public enum PoolSetupError: Error, Equatable, LocalizedError {
             return "The helper did not start. Nothing was kept. Check the internet connection and try again."
         case .hubExists(let host):
             return "\(host) already combines accounts. Relaybar left it alone. Use it from this Mac instead."
+        case .helperNotConfirmed(let host):
+            return
+                "Something other than the helper from \(host) answered. Nothing was kept. Check that the helper runs on \(host), then try again."
         }
     }
 }
@@ -198,6 +202,7 @@ public struct PoolSetup: Sendable {
             try state.save(env.paths)
             load(Pool.tunnelLabel)
             try await waitForHelper(secrets)
+            try await confirmHelper(secrets, host: host)
             try await finishLocal(secrets: secrets, state: &state, progress: progress)
         }
     }
@@ -266,6 +271,12 @@ public struct PoolSetup: Sendable {
             await env.pause(1)
         }
         throw PoolSetupError.notAnswering
+    }
+
+    private func confirmHelper(_ secrets: PoolSecrets, host: String) async throws {
+        do { _ = try await PoolManagement(secret: secrets.managementSecret, http: env.http).credentials() } catch {
+            throw PoolSetupError.helperNotConfirmed(host)
+        }
     }
 
     private func finishLocal(secrets: PoolSecrets, state: inout PoolState, progress: @Sendable (String) -> Void) async throws {

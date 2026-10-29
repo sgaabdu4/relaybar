@@ -170,16 +170,14 @@ extension PoolTeardownTests {
     @Test func neverRemovesAHubItDidNotCreate() async throws {
         let harness = try Harness()
         let up = Flag()
-        let join = #"{"accessKey":"\#(String(repeating: "a1", count: 32))","managementSecret":"\#(String(repeating: "b2", count: 32))"}"#
+        let secrets = PoolSecrets(accessKey: String(repeating: "a1", count: 32), managementSecret: String(repeating: "b2", count: 32))
+        let join = #"{"accessKey":"\#(secrets.accessKey)","managementSecret":"\#(secrets.managementSecret)"}"#
         harness.recorder.respond = { command in
             if command.executable == "/usr/bin/ssh" { return CommandResult(output: join) }
             if command.arguments.first == "bootstrap" { up.on = true }
             return CommandResult()
         }
-        harness.http.handler = { request in
-            guard request.url.path == "/v1/models", up.on else { return nil }
-            return HTTPResponse(status: request.headers["Authorization"] == nil ? 401 : 200)
-        }
+        harness.http.handler = joinedHelper(up: up, secrets: secrets)
         let setup = PoolSetup(env: harness.env(t3: false))
         try await setup.join(host: "homebox")
         let before = harness.recorder.commands.count

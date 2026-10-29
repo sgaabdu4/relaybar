@@ -213,11 +213,7 @@ struct PoolJoinTests {
             if command.arguments.first == "bootstrap" { up.on = true }
             return CommandResult()
         }
-        harness.http.handler = { request in
-            guard request.url.path == "/v1/models" else { return nil }
-            guard up.on else { return nil }
-            return HTTPResponse(status: request.headers["Authorization"] == "Bearer \(secrets.accessKey)" ? 200 : 401)
-        }
+        harness.http.handler = joinedHelper(up: up, secrets: secrets)
         try await PoolSetup(env: harness.env()).join(host: "192.168.1.20")
         let state = try #require(PoolState.load(harness.paths))
         #expect(state.ssh == "192.168.1.20")
@@ -234,6 +230,43 @@ struct PoolJoinTests {
         await #expect(throws: PoolSetupError.conflict(.portInUse(8317))) {
             try await PoolSetup(env: harness.env()).join(host: "192.168.1.20")
         }
+    }
+
+    @Test func aJoinedMacChecksTheHelperWithTheManagementSecret() async throws {
+        let harness = try Harness()
+        let secrets = secrets
+        let joinJSON = joinJSON
+        let up = Flag()
+        harness.recorder.respond = { command in
+            if command.executable == "/usr/bin/ssh" { return CommandResult(output: joinJSON) }
+            if command.arguments.first == "bootstrap" { up.on = true }
+            return CommandResult()
+        }
+        let honest = joinedHelper(up: up, secrets: secrets)
+        harness.http.handler = { request in
+            request.url.path == "/v8/management/credentials" ? HTTPResponse(status: 404) : honest(request)
+        }
+        await #expect(throws: PoolSetupError.helperNotConfirmed("homebox")) {
+            try await PoolSetup(env: harness.env()).join(host: "homebox")
+        }
+        #expect(
+            PoolSetupError.helperNotConfirmed("homebox").errorDescription?.contains("Something other than the helper from homebox answered")
+                == true)
+        #expect(PoolState.load(harness.paths) == nil)
+        let call = try #require(harness.http.requests.first { $0.url.path == "/v8/management/credentials" })
+        #expect(call.headers["Authorization"] == "Bearer \(secrets.managementSecret)")
+    }
+
+    @Test func refusesAPortSomethingElseHolds() throws {
+        let recorder = Recorder()
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + "\nport:busy"))
+        let busy = #expect(throws: PoolSetupError.self) { _ = try add(recorder) }
+        #expect(busy == .conflict(.portInUse(8317)))
+        #expect(!recorder.commands.contains { $0.stdin != nil })
+        let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
+        #expect(probe.contains("curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8317/v1/models"))
+        #expect(probe.contains("systemctl --user is-active --quiet relaybar-tunnel.service"))
+        #expect(probe.contains("grep -q relaybar/hub_key \"$HOME/.config/systemd/user/relaybar-tunnel.service\""))
     }
 
     @Test func refusesAHostThatIsNotAPool() async throws {
@@ -294,7 +327,15 @@ struct PoolJoinTests {
             text.contains(
                 "'-i' '/home/sam/.config/relaybar/hub_key' '-o' 'IdentitiesOnly=yes' '-o' 'UserKnownHostsFile=/home/sam/.config/relaybar/known_hosts' '-o' 'StrictHostKeyChecking=yes' '-p' '22' '--' 'sam@192.168.1.20'"
             ))
-        #expect(recorder.commands.contains { remoteScript($0).contains("enable --now relaybar-tunnel.service") })
+        #expect(
+            recorder.commands.contains {
+                remoteScript($0).contains("enable relaybar-tunnel.service && systemctl --user restart relaybar-tunnel.service")
+            })
+        let wait = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("sleep 1; i=") })
+        #expect(wait.contains("cat \"$HOME/.config/relaybar/access-key\""))
+        #expect(wait.contains("-K - http://127.0.0.1:8317/v1/models"))
+        #expect(wait.contains("[ \"$c\" = 200 ] && systemctl --user is-active --quiet relaybar-tunnel.service"))
+        #expect(!wait.contains(secrets.accessKey))
         #expect(throws: PoolInputError.startsWithDash) { _ = try add(recorder, hub: "-bad") }
     }
 

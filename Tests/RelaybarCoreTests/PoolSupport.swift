@@ -97,6 +97,19 @@ struct Harness {
     var paths: PoolPaths { PoolPaths(home: home.root) }
 }
 
+func joinedHelper(up: Flag, secrets: PoolSecrets) -> @Sendable (HTTPRequest) -> HTTPResponse? {
+    { request in
+        guard up.on else { return nil }
+        switch request.url.path {
+        case "/v1/models":
+            return HTTPResponse(status: request.headers["Authorization"] == "Bearer \(secrets.accessKey)" ? 200 : 401)
+        case "/v8/management/credentials":
+            return request.headers["Authorization"] == "Bearer \(secrets.managementSecret)" ? ok(["files": []]) : HTTPResponse(status: 401)
+        default: return nil
+        }
+    }
+}
+
 let sampleCredentials: [String: Any] = [
     "files": [
         [
