@@ -14,7 +14,8 @@ public enum PoolInstallError: Error, Equatable, LocalizedError {
 public enum PoolInstall {
     public static func command(paths: PoolPaths) -> Command {
         Command(
-            "/bin/sh", [paths.updateScript.path, "install", paths.helper.path], environment: Pool.scriptEnvironment,
+            "/bin/sh", [paths.updateScript.path, "install", paths.helper.path],
+            environment: Pool.scriptEnvironment.merging(["HOME": paths.home.path]) { _, new in new },
             limit: 900)
     }
 
