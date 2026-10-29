@@ -427,7 +427,10 @@ extension PoolJoin {
         checkpoint(client)
         let report = hooks.report
         let opened = try await computer.bringUp(
-            found: found, privileged: { try await session.run($0, why: "install Tailscale", limit: $1) },
+            found: found,
+            privileged: { [why = found.installed ? "start Tailscale" : "install Tailscale"] in
+                try await session.run($0, why: why, limit: $1)
+            },
             onLink: { link in
                 hooks.signIn(link)
                 report(.tailscale, .yourTurn)
