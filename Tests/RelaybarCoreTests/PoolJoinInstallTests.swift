@@ -262,6 +262,136 @@ extension PoolJoinTests {
             ))
     }
 
+    private func watching(_ attempts: [Watch.Attempt], host: FakeClientHost = FakeClientHost()) -> (Recorder, Watch) {
+        let watch = Watch(attempts)
+        let recorder = Recorder()
+        recorder.respond = { command in
+            guard command.executable == "/usr/bin/ssh" else { return host.answer(command) ?? CommandResult() }
+            let text = remoteScript(command)
+            if text.contains("auth session list --json") { return CommandResult(output: watch.sessions()) }
+            if text.contains("auth pairing list --json") { return CommandResult(output: watch.pairings()) }
+            if text.contains("pair --label") { watch.pairStarted() }
+            return host.answer(command) ?? CommandResult()
+        }
+        return (recorder, watch)
+    }
+
+    private func eventHooks(_ events: Events, tryAgain: Bool = false) -> PoolAddHooks {
+        PoolAddHooks(
+            report: { stage, state in if stage == .link { events.add("link:\(state)") } },
+            pair: { _ in events.add("open") },
+            linkFailed: { _ in
+                events.add("ask")
+                return tryAgain && events.count("ask") == 1
+            },
+            pause: { seconds in events.add("pause:\(Int(seconds))") })
+    }
+
+    @Test func waitsForTheUserToConfirmInT3Code() async throws {
+        let (recorder, _) = watching([.confirms(3)])
+        let events = Events()
+        let result = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .nightly),
+            hooks: eventHooks(events), run: recorder.runner)
+        #expect(
+            events.items == ["link:working", "open", "link:yourTurn", "pause:2", "pause:2", "pause:2", "link:done"])
+        #expect(result.link == .linked && result.client.t3Session == "s-1")
+        let scripts = onLaptop(recorder).map(plainScript)
+        let before = try #require(scripts.firstIndex { $0.contains("auth session list --json") })
+        let pair = try #require(scripts.firstIndex { $0.contains("pair --label Relaybar") })
+        #expect(before < pair)
+        #expect(scripts.contains { $0.contains("\"$HOME/.local/bin/t3\" auth session list --json </dev/null") })
+
+        let old = Recorder()
+        clientHost(old)
+        let plain = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .nightly),
+            hooks: eventHooks(Events()), run: old.runner)
+        #expect(plain.link == .linked && plain.client.t3Session == nil)
+    }
+
+    @Test func offersTryAgainWhenTheLinkIsNotConfirmed() async throws {
+        let (recorder, _) = watching([.gone(2), .confirms(1)])
+        let events = Events()
+        let result = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .nightly),
+            hooks: eventHooks(events, tryAgain: true), run: recorder.runner)
+        #expect(
+            events.items == [
+                "link:working", "open", "link:yourTurn", "pause:2", "pause:2", "ask", "link:working", "open", "link:yourTurn", "pause:2",
+                "link:done",
+            ])
+        #expect(result.link == .linked && result.client.t3Session == "s-2")
+
+        let (silent, _) = watching([.never])
+        let waited = Events()
+        let late = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .nightly),
+            hooks: eventHooks(waited), run: silent.runner)
+        #expect(late.link == .notLinked && late.client.t3Session == nil)
+        #expect(waited.items.filter { $0 == "pause:2" }.count == 150)
+        #expect(waited.items.last == "link:problem(\"Not linked\")")
+    }
+
+    @Test func stopsWaitingWhenCancelled() async throws {
+        let (recorder, _) = watching([.never])
+        let box = TaskBox()
+        let events = Events()
+        let hooks = PoolAddHooks(
+            pause: { _ in
+                events.add("pause")
+                if events.count("pause") == 2 {
+                    while !box.isSet { await Task.yield() }
+                    box.cancel()
+                }
+            })
+        let secrets = secrets
+        let task = Task {
+            try await PoolJoin.linuxClient(
+                host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .nightly), hooks: hooks,
+                run: recorder.runner)
+        }
+        box.set { task.cancel() }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(events.count("pause") == 2)
+    }
+
+    @Test func removeEndsTheT3CodeLink() async throws {
+        var installed = PoolLinuxClient(host: "laptop")
+        installed.t3Installed = true
+        installed.t3Service = true
+        installed.t3Session = "s-1"
+        let recorder = Recorder()
+        let removal = try PoolJoin.removeLinuxClient(installed, hubRoutes: [], run: recorder.runner)
+        #expect(!removal.t3LinkStays)
+        let scripts = onLaptop(recorder).map(plainScript)
+        let revoke = try #require(scripts.firstIndex { $0.contains("auth session revoke 's-1'") })
+        let uninstall = try #require(scripts.firstIndex { $0.contains("service uninstall") })
+        #expect(revoke < uninstall)
+        #expect(scripts[revoke].contains("\"$HOME/.local/bin/t3\""))
+
+        var kept = PoolLinuxClient(host: "laptop")
+        kept.t3Session = "s-2"
+        kept.t3Binary = "/usr/local/bin/t3"
+        let existing = Recorder()
+        try PoolJoin.removeLinuxClient(kept, hubRoutes: [], run: existing.runner)
+        let revokeKept = try #require(onLaptop(existing).map(plainScript).first { $0.contains("auth session revoke 's-2'") })
+        #expect(revokeKept.contains("/usr/local/bin/t3") && revokeKept.contains("\"$t3\" auth session revoke 's-2'"))
+        #expect(!existing.commands.map(plainScript).contains { $0.contains("service uninstall") || $0.contains("uninstall -y") })
+
+        let failing = Recorder()
+        failing.respond = { command in
+            remoteScript(command).contains("session revoke") ? CommandResult(status: 1, error: "t3: not running\n") : CommandResult()
+        }
+        let stuck = try PoolJoin.removeLinuxClient(installed, hubRoutes: [], run: failing.runner)
+        #expect(stuck.t3LinkStays)
+        #expect(failing.commands.map(plainScript).contains { $0.contains("service uninstall") })
+
+        let none = Recorder()
+        try PoolJoin.removeLinuxClient(PoolLinuxClient(host: "laptop"), hubRoutes: [], run: none.runner)
+        #expect(!none.commands.map(plainScript).contains { $0.contains("session revoke") })
+    }
+
     @Test func saysWhyItDidNotLink() async throws {
         let installed = FakeClientHost(probe: FakeClientHost.probe + "\nt3path:/usr/local/bin/t3")
         let log = AddLog()
@@ -764,4 +894,67 @@ final class Guesses: @unchecked Sendable {
     init(_ values: [String]) { rest = values }
 
     func next() -> String? { lock.withLock { rest.isEmpty ? nil : rest.removeFirst() } }
+}
+
+final class Events: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: [String] = []
+
+    func add(_ item: String) { lock.withLock { kept.append(item) } }
+
+    func count(_ item: String) -> Int { lock.withLock { kept.filter { $0 == item }.count } }
+
+    var items: [String] { lock.withLock { kept } }
+}
+
+final class TaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var action: (@Sendable () -> Void)?
+
+    func set(_ action: @escaping @Sendable () -> Void) { lock.withLock { self.action = action } }
+
+    var isSet: Bool { lock.withLock { action != nil } }
+
+    func cancel() { lock.withLock { action }?() }
+}
+
+final class Watch: @unchecked Sendable {
+    enum Attempt {
+        case confirms(Int)
+        case gone(Int)
+        case never
+    }
+
+    private let lock = NSLock()
+    private let attempts: [Attempt]
+    private var pairs = 0
+    private var polls = 0
+
+    init(_ attempts: [Attempt]) { self.attempts = attempts }
+
+    func pairStarted() {
+        lock.withLock {
+            pairs += 1
+            polls = 0
+        }
+    }
+
+    func sessions() -> String {
+        lock.withLock {
+            guard pairs > 0 else { return "[]" }
+            polls += 1
+            if case .confirms(let after) = attempts[pairs - 1], polls >= after {
+                return #"[{"sessionId":"s-\#(pairs)","method":"one-time-token","client":{"label":"Relaybar"}}]"#
+            }
+            return "[]"
+        }
+    }
+
+    func pairings() -> String {
+        lock.withLock {
+            guard pairs > 0 else { return "[]" }
+            if case .gone(let after) = attempts[pairs - 1], polls >= after { return "[]" }
+            return #"[{"id":"p\#(pairs)","label":"Relaybar"}]"#
+        }
+    }
 }
