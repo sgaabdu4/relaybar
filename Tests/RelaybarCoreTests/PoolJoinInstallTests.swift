@@ -173,6 +173,29 @@ extension PoolJoinTests {
         #expect(!off.commands.contains { remoteScript($0).contains("t3.codes") })
     }
 
+    @Test func leavesAnExistingT3CodeAlone() async throws {
+        let running = "\nt3svc:yes\nt3exec:/home/laptop/.t3/runtime/versions/0.1.6/t3"
+        let recorder = Recorder()
+        let log = AddLog()
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + running))
+        let client = try await add(recorder, options: PoolAddOptions(t3Channel: .nightly), hooks: log.hooks)
+        #expect(installs(recorder).isEmpty)
+        #expect(!client.t3Installed && !client.t3Service)
+        #expect(!recorder.commands.contains { remoteScript($0).contains("service install") })
+        #expect(log.plan == [.letIn, .route, .commands, .link])
+        let pair = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("pair --label Relaybar") })
+        #expect(pair.contains("\"/home/laptop/.t3/runtime/versions/0.1.6/t3\" pair"))
+
+        let lost = Recorder()
+        let lostLog = AddLog()
+        clientHost(lost, FakeClientHost(probe: FakeClientHost.probe + "\nt3svc:yes"))
+        let kept = try await add(lost, options: PoolAddOptions(t3Channel: .nightly), hooks: lostLog.hooks)
+        #expect(installs(lost).isEmpty)
+        #expect(!kept.t3Installed && !kept.t3Service)
+        #expect(lostLog.plan == [.letIn, .route, .commands])
+        #expect(!lost.commands.contains { remoteScript($0).contains("pair --label") })
+    }
+
     @Test func addsEntriesAfterT3CodeStarts() async throws {
         let recorder = Recorder()
         clientHost(recorder)
