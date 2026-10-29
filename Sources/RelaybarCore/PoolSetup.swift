@@ -318,6 +318,7 @@ public enum PoolJoin {
         return await withTaskGroup(of: (Int, PoolJoinOffer?).self) { group in
             for (index, host) in hosts.enumerated() where (try? PoolHubPicker.validate(host)) != nil {
                 group.addTask {
+                    guard PoolHubPicker.isHomeAddress(PoolHubPicker.address(of: host, run: run)) else { return (index, nil) }
                     let result = run(PoolSSH.command(host: host, script: "test -f \"\(PoolRemote.joinFile)\" && echo pool"))
                     return (index, result.output.contains("pool") ? PoolJoinOffer(host: host) : nil)
                 }
