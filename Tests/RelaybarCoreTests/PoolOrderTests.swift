@@ -6,14 +6,14 @@ import Testing
 struct PoolOrderTests {
     private func member(
         _ email: String, kind: PoolKind = .claude, priority: Int = 0, session: Double = 20, weekly: Double = 20, resets: Date? = nil,
-        disabled: Bool = false, status: String = "active"
+        disabled: Bool = false, status: String = "active", weeklyResets: Date? = nil
     ) -> PoolMember {
         let credential = PoolCredential(
             name: "\(kind.rawValue)-\(email).json", authIndex: email, email: email, kind: kind, disabled: disabled, status: status,
             priority: priority)
         return PoolUsage.member(
             credential,
-            result: .ok(session: Window(used: session, resetsAt: resets), weekly: Window(used: weekly, resetsAt: nil)))
+            result: .ok(session: Window(used: session, resetsAt: resets), weekly: Window(used: weekly, resetsAt: weeklyResets)))
     }
 
     private func emails(_ plan: PoolPlan) -> [String] { plan.effective.map(\.credential.email) }
@@ -98,6 +98,93 @@ struct PoolOrderTests {
         let body = try #require(try JSONSerialization.jsonObject(with: request.body ?? Data()) as? [String: Any])
         #expect(body["name"] as? String == "claude-c@example.com.json")
         #expect(body["priority"] as? Int == 1)
+    }
+
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func days(_ count: Double, hours: Double = 0) -> Date { now.addingTimeInterval(count * 86400 + hours * 3600) }
+
+    @Test func usesTheAccountThatResetsSoonest() {
+        let members = [
+            member("a@example.com", weeklyResets: days(5)), member("b@example.com", weeklyResets: days(2)),
+            member("c@example.com", weeklyResets: days(3)), member("p@example.com", disabled: true, weeklyResets: days(1)),
+        ]
+        let saved = ["a@example.com", "b@example.com", "c@example.com", "p@example.com"]
+        let plan = PoolOrder.plan(kind: .claude, members: members, saved: saved, now: now)
+        #expect(emails(plan) == ["b@example.com", "c@example.com", "a@example.com", "p@example.com"])
+        #expect(plan.savedOrder == saved)
+        #expect(plan.inUse?.credential.email == "b@example.com")
+        #expect(
+            plan.changes == [
+                PoolPriority(name: "claude-b@example.com.json", priority: 4), PoolPriority(name: "claude-c@example.com.json", priority: 3),
+                PoolPriority(name: "claude-a@example.com.json", priority: 2), PoolPriority(name: "claude-p@example.com.json", priority: 1),
+            ])
+    }
+
+    @Test func breaksATieByMoreWeeklyLeft() {
+        let members = [
+            member("a@example.com", weekly: 70, weeklyResets: days(2, hours: 0.2)),
+            member("b@example.com", weekly: 40, weeklyResets: days(2, hours: 0.7)),
+            member("c@example.com", weekly: 40, weeklyResets: days(2, hours: 0.5)),
+            member("d@example.com", weekly: 10, weeklyResets: days(2, hours: 1.2)),
+        ]
+        let saved = ["a@example.com", "b@example.com", "c@example.com", "d@example.com"]
+        let plan = PoolOrder.plan(kind: .claude, members: members, saved: saved, now: now)
+        #expect(emails(plan) == ["b@example.com", "c@example.com", "a@example.com", "d@example.com"])
+    }
+
+    @Test func skipsAnAccountWithLittleLeft() {
+        let saved = ["a@example.com", "b@example.com", "c@example.com", "d@example.com"]
+        let members = [
+            member("a@example.com", weekly: 95, weeklyResets: days(1)), member("b@example.com", session: 92, weeklyResets: days(2)),
+            member("c@example.com", weeklyResets: days(4)), member("d@example.com", weeklyResets: days(3)),
+        ]
+        let plan = PoolOrder.plan(kind: .claude, members: members, saved: saved, now: now)
+        #expect(emails(plan) == ["d@example.com", "c@example.com", "a@example.com", "b@example.com"])
+        let exactlyTen = PoolOrder.plan(
+            kind: .claude,
+            members: [member("a@example.com", weekly: 90, weeklyResets: days(1)), member("b@example.com", weeklyResets: days(2))],
+            saved: saved, now: now)
+        #expect(emails(exactlyTen) == ["a@example.com", "b@example.com"])
+    }
+
+    @Test func putsAccountsWithoutAWeeklyResetLast() {
+        let saved = ["a@example.com", "b@example.com", "c@example.com", "d@example.com", "e@example.com"]
+        let members = [
+            member("a@example.com", weekly: 10), member("b@example.com", weekly: 60), member("c@example.com", weeklyResets: days(6)),
+            member("d@example.com", weekly: 60, weeklyResets: days(-1)), member("e@example.com", status: "error"),
+        ]
+        let plan = PoolOrder.plan(kind: .claude, members: members, saved: saved, now: now)
+        #expect(emails(plan) == ["c@example.com", "a@example.com", "b@example.com", "d@example.com", "e@example.com"])
+    }
+
+    @Test func keepsMyOrderWhenAsked() async throws {
+        let saved = ["a@example.com", "b@example.com", "c@example.com"]
+        let members = [
+            member("a@example.com", weeklyResets: days(5)), member("b@example.com", weeklyResets: days(2)),
+            member("c@example.com", weekly: 95, weeklyResets: days(1)),
+        ]
+        let mine = PoolOrder.plan(kind: .claude, members: members, saved: saved, mode: .manual, now: now)
+        #expect(emails(mine) == ["a@example.com", "b@example.com", "c@example.com"])
+        #expect(
+            emails(PoolOrder.plan(kind: .claude, members: members, saved: saved, now: now)) == [
+                "b@example.com", "a@example.com", "c@example.com",
+            ])
+
+        let harness = try Harness()
+        try PoolState().save(harness.paths)
+        harness.recorder.respond = { _ in CommandResult(output: "msecret\n") }
+        harness.http.handler = { _ in ok(["status": "ok"]) }
+        let setup = PoolSetup(env: harness.env())
+        try setup.setOrder(kind: .claude, emails: saved)
+        try setup.setOrderMode(.manual)
+        #expect(PoolState.load(harness.paths)?.orderMode == .manual)
+        let plans = try await setup.updateOrder(members: members)
+        #expect(plans.first?.effective.map(\.credential.email) == ["a@example.com", "b@example.com", "c@example.com"])
+        try setup.setOrderMode(.automatic)
+        let automatic = try await setup.updateOrder(members: members)
+        #expect(automatic.first?.effective.map(\.credential.email) == ["b@example.com", "a@example.com", "c@example.com"])
+        #expect(PoolState.load(harness.paths)?.order["claude"] == saved)
     }
 
     @Test func namesTheAccountInUse() {

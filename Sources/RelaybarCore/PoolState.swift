@@ -86,6 +86,11 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
     }
 }
 
+public enum PoolOrderMode: String, Codable, Equatable, Sendable {
+    case automatic
+    case manual
+}
+
 public struct PoolState: Codable, Equatable, Sendable {
     public var ssh: String?
     public var tailscale: String?
@@ -98,10 +103,27 @@ public struct PoolState: Codable, Equatable, Sendable {
     public var linuxClients: [PoolLinuxClient] = []
     public var usageSourceAdded = false
     public var order: [String: [String]] = [:]
+    public var orderMode = PoolOrderMode.automatic
 
     public init(ssh: String? = nil, joined: Bool = false) {
         self.ssh = ssh
         self.joined = joined
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        ssh = try values.decodeIfPresent(String.self, forKey: .ssh)
+        tailscale = try values.decodeIfPresent(String.self, forKey: .tailscale)
+        joined = try values.decodeIfPresent(Bool.self, forKey: .joined) ?? false
+        steps = try values.decodeIfPresent([PoolStep].self, forKey: .steps) ?? []
+        previousSelection = try values.decodeIfPresent(String.self, forKey: .previousSelection)
+        defaultKept = try values.decodeIfPresent(Bool.self, forKey: .defaultKept) ?? false
+        hubFolders = try values.decodeIfPresent([String].self, forKey: .hubFolders) ?? []
+        keepOn = try values.decodeIfPresent(PoolKeepOn.self, forKey: .keepOn) ?? PoolKeepOn()
+        linuxClients = try values.decodeIfPresent([PoolLinuxClient].self, forKey: .linuxClients) ?? []
+        usageSourceAdded = try values.decodeIfPresent(Bool.self, forKey: .usageSourceAdded) ?? false
+        order = try values.decodeIfPresent([String: [String]].self, forKey: .order) ?? [:]
+        orderMode = (try? values.decodeIfPresent(PoolOrderMode.self, forKey: .orderMode)) ?? .automatic
     }
 
     public var runsOnThisMac: Bool { ssh == nil }
