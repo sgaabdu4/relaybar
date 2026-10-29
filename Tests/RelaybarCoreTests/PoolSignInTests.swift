@@ -200,6 +200,62 @@ struct PoolSignInTests {
         #expect(outcome == .failed(PoolError.unreachable.localizedDescription))
     }
 
+    private func rows() -> [PoolAccountInput] {
+        [
+            PoolAccountInput(id: "a", kind: .claude, name: "AN", email: "Ann@Example.com"),
+            PoolAccountInput(id: "b", kind: .claude, name: "BO", email: "bob@example.com"),
+            PoolAccountInput(id: "c", kind: .codex, name: "Codex", email: "cat@example.com"),
+        ]
+    }
+
+    @Test func creditsTheMatchingAccount() async {
+        let list = rows()
+        #expect(PoolSignIn.verdict(.signedIn(email: "ann@example.com"), for: list[0], in: list, done: []) == .credited("a"))
+        #expect(PoolSignIn.verdict(.sameAccount(email: "ANN@EXAMPLE.COM"), for: list[0], in: list, done: ["b"]) == .credited("a"))
+        #expect(PoolSignIn.verdict(.signedIn(email: "bob@example.com"), for: list[0], in: list, done: []) == .credited("b"))
+        let (signIn, http, _, _) = flow(source: nil, before: [credential("bob@example.com", modified: "t")])
+        #expect(await signIn.settle(.signedIn(email: "bob@example.com"), for: list[0], in: list, done: []) == .credited("b"))
+        #expect(!http.requests.contains { $0.method == "DELETE" })
+        #expect(PoolSignIn.verdict(.timedOut, for: list[0], in: list, done: []) == .unfinished(.timedOut))
+        #expect(PoolSignIn.verdict(.sameAccount(email: ""), for: list[0], in: list, done: []) == .unfinished(.sameAccount(email: "")))
+    }
+
+    @Test func rejectsTheWrongAccount() async {
+        let list = rows()
+        #expect(
+            PoolSignIn.verdict(.signedIn(email: "dee@example.com"), for: list[0], in: list, done: []) == .wrong(email: "dee@example.com"))
+        #expect(
+            PoolSignIn.verdict(.signedIn(email: "cat@example.com"), for: list[0], in: list, done: []) == .wrong(email: "cat@example.com"))
+        #expect(
+            PoolSignIn.verdict(.signedIn(email: "bob@example.com"), for: list[0], in: list, done: ["b"]) == .wrong(email: "bob@example.com")
+        )
+        let (signIn, http, _, _) = flow(source: nil, before: [credential("dee@example.com", modified: "t")])
+        let result = await signIn.settle(.signedIn(email: "Dee@example.com"), for: list[0], in: list, done: [])
+        #expect(result == .wrong(email: "Dee@example.com"))
+        let removed = http.requests.filter { $0.method == "DELETE" }
+        #expect(removed.count == 1)
+        #expect(removed.first?.url.path == "/v8/management/credentials")
+        #expect(removed.first?.url.query?.contains("claude-dee@example.com.json") == true)
+        let (kept, keptHTTP, _, _) = flow(source: nil, before: [credential("bob@example.com", modified: "t")])
+        #expect(
+            await kept.settle(.signedIn(email: "bob@example.com"), for: list[0], in: list, done: ["b"]) == .wrong(email: "bob@example.com"))
+        #expect(!keptHTTP.requests.contains { $0.method == "DELETE" })
+        let (old, oldHTTP, _, _) = flow(source: nil, before: [credential("dee@example.com", modified: "t")])
+        #expect(
+            await old.settle(.sameAccount(email: "dee@example.com"), for: list[0], in: list, done: []) == .wrong(email: "dee@example.com"))
+        #expect(!oldHTTP.requests.contains { $0.method == "DELETE" })
+    }
+
+    @Test func reopensTheLinkOnlyWhileTheHelperKnowsIt() async {
+        let url = URL(string: claudeAuthURL)!
+        let (live, http, _, _) = flow(source: nil, statuses: ["wait"])
+        #expect(await live.isLive(url))
+        #expect(http.requests.contains { $0.url.query?.contains("state=st123") == true })
+        let (gone, _, _, _) = flow(source: nil, statuses: ["error"])
+        #expect(await gone.isLive(url) == false)
+        #expect(await gone.isLive(URL(string: "https://claude.ai/oauth/authorize")!) == false)
+    }
+
     @Test func theRealListenerAnswersTheBrowser() async throws {
         let listener = try await LoopbackListener.start(port: 0, path: "/callback")
         let port = listener.port

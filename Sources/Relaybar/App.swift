@@ -340,6 +340,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addAccount(.codex)
     }
 
+    func chooseAndAddAccount() {
+        let alert = NSAlert()
+        alert.messageText = "Add an account"
+        alert.informativeText = "Which tool is the account for?"
+        alert.addButton(withTitle: "Claude")
+        alert.addButton(withTitle: "Codex")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate()
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: addAccount(.claude)
+        case .alertSecondButtonReturn: addAccount(.codex)
+        default: break
+        }
+    }
+
     private func addAccount(_ kind: DesktopApp.Kind) {
         let name = NSTextField(string: "")
         name.placeholderString = "Account name, for example Work"
@@ -476,7 +491,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if !Set(self.visibleAccounts().map(\.id)).subtracting(known).isEmpty {
                     timer.invalidate()
                     self.reload()
-                    self.pool.accountsAdded()
+                    self.pool.accountAppeared()
                 } else if Date().timeIntervalSince(started) > 900 {
                     timer.invalidate()
                 }

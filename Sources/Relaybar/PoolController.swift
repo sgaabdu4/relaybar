@@ -17,9 +17,7 @@ final class PoolController: NSObject {
     var busy = false
     var generation = 0
     var signing = false
-    var stopRequested = false
-    var skipRequested = false
-    var signInTask: Task<SignInOutcome, Never>?
+    var session: SignInSession?
 
     init(app: App) {
         self.app = app
@@ -209,10 +207,9 @@ final class PoolController: NSObject {
                 menu.addItem(.sectionHeader(title: kind == .claude ? "Claude" : "Codex"))
                 for row in mine { menu.addItem(accountItem(row, of: mine.count)) }
             }
-            if !orderLists().isEmpty {
-                menu.addItem(.separator())
-                menu.addItem(action("Change order…", #selector(changeOrder)))
-            }
+            menu.addItem(.separator())
+            menu.addItem(action("Add an account…", #selector(addAnAccount)))
+            if !orderLists().isEmpty { menu.addItem(action("Change order…", #selector(changeOrder))) }
         } else {
             let item = NSMenuItem(title: reachable ? "Reading the helper…" : "Cannot reach \(hostName).", action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -251,7 +248,7 @@ final class PoolController: NSObject {
             item.state = .on
             subtitle(item, "Signed out. Click to sign in again.", red: true)
         case .notInHelper:
-            subtitle(item, "Not added yet. Click to sign in.")
+            subtitle(item, "Not signed in. Click to sign in.")
         }
         return item
     }

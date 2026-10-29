@@ -78,7 +78,7 @@ Optional. T3 Code uses whichever of your accounts has room. When one runs out, t
 1. Click Relaybar, then **Combine accounts…**.
 2. Check **Runs on**. Relaybar fills in the best computer: a Linux computer at home that is always on, or this Mac.
 3. Tick the box to accept the risk, then click **Combine**.
-4. Sign in once to each account. The browser opens for each one in turn.
+4. Click **Sign In** on each account and sign in to that account in the browser. Relaybar checks it is the right account. **Done** works once one account is signed in. Accounts left out show in **All accounts** with "Not signed in".
 
 New chats in T3 Code now use **Claude, all accounts**. **Codex, all accounts** is there too. Your single-account entries stay. In a terminal, use `claude-all` and `codex-all`.
 

@@ -172,6 +172,12 @@ public enum SignInOutcome: Equatable, Sendable {
     }
 }
 
+public enum SignInResult: Equatable, Sendable {
+    case credited(String)
+    case wrong(email: String)
+    case unfinished(SignInOutcome)
+}
+
 public struct PoolSignIn: Sendable {
     public let management: PoolManagement
     public let run: CommandRunner
@@ -264,6 +270,43 @@ public struct PoolSignIn: Sendable {
             request.reply("Sign-in failed. Go back to Relaybar.")
             return .failed(error.localizedDescription)
         }
+    }
+
+    public func isLive(_ link: URL) async -> Bool {
+        let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems
+        guard let state = items?.first(where: { $0.name == "state" })?.value else { return false }
+        if case .wait? = try? await management.signInStatus(state: state) { return true }
+        return false
+    }
+
+    public static func verdict(
+        _ outcome: SignInOutcome, for row: PoolAccountInput, in accounts: [PoolAccountInput], done: Set<String>
+    ) -> SignInResult {
+        let email: String
+        switch outcome {
+        case .signedIn(let found), .sameAccount(let found): email = found
+        default: return .unfinished(outcome)
+        }
+        let key = email.lowercased()
+        guard !key.isEmpty else { return .unfinished(outcome) }
+        if row.email?.lowercased() == key { return .credited(row.id) }
+        let other = accounts.first { $0.kind == row.kind && !done.contains($0.id) && $0.email?.lowercased() == key }
+        return other.map { .credited($0.id) } ?? .wrong(email: email)
+    }
+
+    public func settle(
+        _ outcome: SignInOutcome, for row: PoolAccountInput, in accounts: [PoolAccountInput], done: Set<String>
+    ) async -> SignInResult {
+        let result = Self.verdict(outcome, for: row, in: accounts, done: done)
+        guard case .wrong(let email) = result, case .signedIn = outcome else { return result }
+        let key = email.lowercased()
+        guard !accounts.contains(where: { $0.kind == row.kind && $0.email?.lowercased() == key }),
+            let logins = try? await management.credentials()
+        else { return result }
+        for login in logins where login.kind == row.kind && login.email.lowercased() == key {
+            try? await management.signOut(name: login.name)
+        }
+        return result
     }
 
     public static func outcome(before: [PoolCredential], after: [PoolCredential], kind: PoolKind) -> SignInOutcome {
