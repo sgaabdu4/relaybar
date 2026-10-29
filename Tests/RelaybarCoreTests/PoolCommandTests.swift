@@ -73,6 +73,36 @@ struct PoolCommandTests {
             #expect(command.stdin.map { String(decoding: $0, as: UTF8.self).contains(management) } != true)
         }
         #expect(sent.contains { $0.stdin == Data(access.utf8) })
+
+        let password = "correct-horse-battery"
+        let joined = Flag()
+        let computer = FakeClientHost(probe: FakeClientHost.probe + "\nneed:codex", password: password)
+        let mac = harness.recorder.commands.count
+        harness.recorder.respond = { command in
+            let text = command.executable == "/usr/bin/ssh" ? remoteScript(command) : ""
+            if text.hasPrefix("if ! command -v tailscale") {
+                let running = "RB-IP\n100.64.0.9\nRB-STATUS\n" + tailscaleStatus("Running") + "\n"
+                return CommandResult(output: joined.on ? running : "RB-MISSING\n")
+            }
+            if text.contains("sudo"), text.contains("tailscale up"), command.stdin != nil {
+                joined.on = true
+                return CommandResult(output: signInOutput)
+            }
+            return computer.answer(command) ?? CommandResult()
+        }
+        let hooks = PoolAddHooks(password: { _, _ in password })
+        _ = try await setup.useOnLinux(host: "desktop", options: PoolAddOptions(t3Channel: .stable, tailscale: true), hooks: hooks)
+        let added = Array(harness.recorder.commands.dropFirst(mac))
+        for command in added {
+            let line = ([command.executable] + command.arguments + command.environment.map { $0.key + "=" + $0.value }).joined(
+                separator: " ")
+            #expect(!line.contains(password), "password in arguments of \(command.executable)")
+            #expect(!line.contains("token%3D"), "pair link in arguments")
+        }
+        let typed = added.filter { $0.stdin == Data((password + "\n").utf8) }
+        #expect(typed.count >= 2)
+        #expect(typed.allSatisfy { plainScript($0).hasPrefix("sudo -S -p '' sh -c ") })
+        #expect(!added.contains { $0.stdin.map { String(decoding: $0, as: UTF8.self).contains(password) } == true && !typed.contains($0) })
     }
 
     @Test func theRealRunnerRunsAProgram() {

@@ -11,6 +11,11 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
     case unsafeTunnel
     case missingTool(host: String, tool: String)
     case alreadyUsed(String)
+    case installFailed(host: String, tool: String, reason: String)
+    case needsPassword(host: String, why: String)
+    case sudoFailed(host: String, reason: String)
+    case t3NotReady(String)
+    case noPairLink(String)
 
     public var offersRetry: Bool {
         if case .noRoute = self { return true }
@@ -41,6 +46,21 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
             return "\(host) already uses your accounts, set up from another Mac or under another name. Remove it there first."
         case .unsafeTunnel:
             return "A name or folder for the tunnel holds characters Relaybar cannot use safely, so it did not set up the tunnel."
+        case .installFailed(let host, let tool, let reason):
+            return
+                "\(tool) could not be installed on \(host): \(reason) Check that \(host) can reach the internet, then try again."
+        case .needsPassword(let host, let why):
+            return
+                "Relaybar needs the password for \(host) to \(why). It did not get it, so it removed what it had set up. Try again when you have it."
+        case .sudoFailed(let host, let reason):
+            return
+                "\(host) did not allow that: \(reason) The user on \(host) needs administrator rights (sudo) for this step. Give it sudo, or untick the box, then try again."
+        case .t3NotReady(let host):
+            return
+                "T3 Code was installed on \(host), but it did not start in time. Run systemctl --user status t3code on \(host) to see why, then try again."
+        case .noPairLink(let host):
+            return
+                "T3 Code on \(host) did not give a link for this Mac, so Relaybar removed what it had set up. Try again in a few minutes."
         }
     }
 }
@@ -145,8 +165,9 @@ extension PoolJoin {
     }
 
     public static func linuxClient(
-        host: String, hub: String, hubLabel: String? = nil, accessKey: String, run: @escaping CommandRunner,
-        progress: (String) -> Void = { _ in }, checkpoint: (PoolLinuxClient?) -> Void = { _ in }
+        host: String, hub: String, hubLabel: String? = nil, accessKey: String, options: PoolAddOptions = PoolAddOptions(),
+        hooks: PoolAddHooks = .none, run: @escaping CommandRunner, progress: (String) -> Void = { _ in },
+        checkpoint: (PoolLinuxClient?) -> Void = { _ in }
     ) async throws -> PoolLinuxClient {
         let remote = PoolRemote(host: host, run: run)
         let hubName = try PoolHubPicker.validate(hub)
@@ -167,7 +188,8 @@ extension PoolJoin {
                 + "c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:\(Pool.port)/v1/models 2>/dev/null); "
                 + "if [ -n \"$c\" ] && [ \"$c\" != 000 ]; then if ! { systemctl --user is-active --quiet relaybar-tunnel.service 2>/dev/null "
                 + "&& grep -q relaybar/hub_key \"$HOME/.config/systemd/user/relaybar-tunnel.service\" 2>/dev/null; }; then echo port:busy; fi; fi; "
-                + "if [ -f \"\(t3Settings)\" ]; then echo t3:yes; [ -d \"$HOME/.t3/userdata/secrets\" ] || echo t3secrets:new; fi; true")
+                + "if [ -f \"\(t3Settings)\" ]; then echo t3:yes; [ -d \"$HOME/.t3/userdata/secrets\" ] || echo t3secrets:new; fi; "
+                + probeTools + "true")
         let lines = probe.split(whereSeparator: \.isNewline).map(String.init)
         if let foreign = lines.first(where: { $0.hasPrefix("foreign:") }) {
             throw PoolFileError.notRelaybars("\(host):.local/bin/\(foreign.dropFirst(8))")
@@ -178,14 +200,29 @@ extension PoolJoin {
         }
         if lines.contains("key:yes") { throw PoolClientError.alreadyUsed(host) }
         if lines.contains("port:busy") { throw PoolSetupError.conflict(.portInUse(Pool.port)) }
-        let hasT3 = lines.contains("t3:yes")
+        var hasT3 = lines.contains("t3:yes")
         let facts = try hubFacts(hubRemote)
         if hasT3 { try withT3 { t3 in _ = try pullT3(remote, into: t3) } }
+
+        let found = PoolClientProbe(lines: lines)
+        let installT3 = options.t3Channel != nil && found.t3Path == nil
+        let pairable = options.t3Channel != nil && (installT3 || found.has("t3svc:yes")) && (installT3 || found.t3Path != nil)
+        var stages: [PoolAddStage] = [.letIn]
+        if !found.missing.isEmpty { stages.append(.tools) }
+        if options.tailscale { stages.append(.tailscale) }
+        stages += [.route, .commands]
+        if installT3 { stages.append(.t3) }
+        if pairable { stages.append(.link) }
+        hooks.plan(stages)
+        let report = hooks.report
+        let session = PoolPasswordSession(host: host, run: run, ask: hooks.password)
+        defer { session.forget() }
 
         var client = PoolLinuxClient(host: host, folders: lines.filter { $0.hasPrefix("new:") }.map { String($0.dropFirst(4)) })
         client.t3SecretsFolder = lines.contains("t3secrets:new")
         checkpoint(client)
         do {
+            report(.letIn, .working)
             progress("Making a key on \(host)")
             let key = home + "/.config/relaybar/hub_key"
             let knownHosts = home + "/.config/relaybar/known_hosts"
@@ -215,12 +252,48 @@ extension PoolJoin {
                 String($0.dropFirst(8))
             }
             checkpoint(client)
+            report(.letIn, .done)
 
+            var local = Set(["claude", "codex"].filter(found.inLocalBin))
+            if !found.missing.isEmpty {
+                report(.tools, .working)
+                for tool in found.missing {
+                    if tool == "claude" {
+                        progress("Installing Claude Code on \(host)")
+                        client.claudeInstalled = true
+                        checkpoint(client)
+                        try install(remote, site: .claude, interpreter: "bash", tool: "claude", name: "Claude Code")
+                    } else {
+                        progress("Installing Codex on \(host)")
+                        client.codexInstalled = true
+                        client.codexProfile = !found.has("profile:codex")
+                        client.codexFolder = found.has("codexdir:new")
+                        checkpoint(client)
+                        try install(
+                            remote, site: .codex, interpreter: "sh", variable: "CODEX_NON_INTERACTIVE=1", tool: "codex", name: "Codex")
+                    }
+                    local.insert(tool)
+                }
+                report(.tools, .done)
+            }
+
+            var tailscaleAddress: String?
+            if options.tailscale {
+                report(.tailscale, .working)
+                progress("Setting up Tailscale on \(host)")
+                tailscaleAddress = try await setUpTailscale(
+                    remote, client: &client, session: session, hooks: hooks, checkpoint: checkpoint)
+                report(.tailscale, .done)
+            }
+
+            report(.route, .working)
             try remote.execute(
                 "umask 077; cat > \"\(clientConfig)/known_hosts\"", stdin: Data(facts.knownHosts().utf8))
             progress("Finding the way from \(host) to \(label)")
             let address = try chooseAddress(remote, hub: label, facts: facts, key: key, knownHosts: knownHosts)
+            report(.route, .done)
 
+            report(.commands, .working)
             progress("Setting up claude-all and codex-all on \(host)")
             let keyFile = "\(clientConfig)/access-key"
             try remote.execute("umask 077; cat > \"\(keyFile)\"", stdin: Data(accessKey.utf8))
@@ -229,9 +302,13 @@ extension PoolJoin {
             try remote.execute("cat > \"$HOME/.codex-hub/config.toml\"", stdin: Data(config.utf8))
             let read = "cat \"\(keyFile)\""
             for (name, claude) in [("claude-all", true), ("codex-all", false)] {
+                let tool = claude ? "claude" : "codex"
                 try remote.execute(
                     "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"",
-                    stdin: Data(PoolConfig.terminalCommand(claude: claude, keyCommand: read).utf8))
+                    stdin: Data(
+                        PoolConfig.terminalCommand(
+                            claude: claude, keyCommand: read, binary: local.contains(tool) ? "$HOME/.local/bin/\(tool)" : nil
+                        ).utf8))
             }
             let unit = try PoolTunnel.linuxUnit(
                 user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port,
@@ -256,9 +333,53 @@ extension PoolJoin {
                 throw PoolSSHError.failed(
                     "\(host) reached \(label), but the helper did not answer there. Check that the helper is running, then try again.")
             }
+            report(.commands, .done)
+
+            var t3 = found.t3Path
+            if installT3, let channel = options.t3Channel {
+                report(.t3, .working)
+                progress("Installing T3 Code on \(host)")
+                client.t3Installed = true
+                checkpoint(client)
+                try install(
+                    remote, site: .t3, interpreter: "sh", variable: "T3CODE_CHANNEL=\(channel.rawValue)", tool: "t3", name: "T3 Code")
+                t3 = "$HOME/.local/bin/t3"
+                if lines.contains("linger:off"), !client.linger {
+                    _ = try await session.run(
+                        "loginctl enable-linger \"$SUDO_USER\"", why: "keep T3 Code running after you log out")
+                    client.linger = true
+                    checkpoint(client)
+                }
+                client.t3Service = true
+                checkpoint(client)
+                try remote.execute("\"$HOME/.local/bin/t3\" service install </dev/null", limit: 300)
+                try waitForT3(remote)
+                hasT3 = true
+            }
             if hasT3 {
                 progress("Adding the entries to T3 Code on \(host)")
-                try addT3Entries(remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint)
+                try addT3Entries(
+                    remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint,
+                    claudeBinary: local.contains("claude") ? home + "/.local/bin/claude" : nil,
+                    codexBinary: local.contains("codex") ? home + "/.local/bin/codex" : nil, orEmpty: installT3)
+            }
+            if installT3 {
+                let computer = PoolTailscaleComputer(host: host, run: run, pause: hooks.pause)
+                if let tailscaleAddress, let user = computer.user(), computer.reaches("\(user)@\(tailscaleAddress)") {
+                    progress("Limiting T3 Code on \(host) to Tailscale")
+                    client.t3Host = tailscaleAddress
+                    checkpoint(client)
+                    try setT3Host(remote, address: tailscaleAddress)
+                    try remote.execute("\"$HOME/.local/bin/t3\" service restart </dev/null", limit: 120)
+                    try waitForT3(remote, address: tailscaleAddress)
+                }
+                report(.t3, .done)
+            }
+            if pairable, let t3 {
+                report(.link, .working)
+                progress("Linking T3 Code on \(host) to this Mac")
+                try pair(remote, t3: t3, open: hooks.pair)
+                report(.link, .done)
             }
         } catch {
             if let removal = try? removeLinuxClient(client, hubRoutes: [hubName], run: run), removal.hubKeyProblem == nil {
@@ -267,6 +388,25 @@ extension PoolJoin {
             throw error
         }
         return client
+    }
+
+    private static func setUpTailscale(
+        _ remote: PoolRemote, client: inout PoolLinuxClient, session: PoolPasswordSession, hooks: PoolAddHooks,
+        checkpoint: (PoolLinuxClient?) -> Void
+    ) async throws -> String? {
+        let computer = PoolTailscaleComputer(host: remote.host, run: remote.run, pause: hooks.pause)
+        let found = try computer.facts()
+        if found.running { return found.address }
+        client.tailscaleInstalled = !found.installed
+        checkpoint(client)
+        let report = hooks.report
+        let opened = try await computer.bringUp(
+            found: found, privileged: { try await session.run($0, why: "install Tailscale", limit: $1) },
+            onLink: { link in
+                hooks.signIn(link)
+                report(.tailscale, .yourTurn)
+            })
+        return opened.address
     }
 
     static func hubFacts(_ hub: PoolRemote) throws -> PoolHubFacts {
@@ -320,9 +460,9 @@ extension PoolJoin {
         return try body(T3Settings(home: folder))
     }
 
-    private static func pullT3(_ remote: PoolRemote, into t3: T3Settings) throws -> Bool {
+    private static func pullT3(_ remote: PoolRemote, into t3: T3Settings, orEmpty: Bool = false) throws -> Bool {
         let text = try remote.execute("f=\"\(t3Settings)\"; [ -f \"$f\" ] && cat \"$f\"; true")
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return orEmpty }
         try PoolFile.write(Data(text.utf8), to: t3.settings, secret: true, backup: false)
         do { try t3.validate() } catch { throw PoolClientError.t3Unreadable(remote.host) }
         return true
@@ -330,20 +470,23 @@ extension PoolJoin {
 
     private static func pushT3(_ remote: PoolRemote, settings: Data) throws {
         try remote.execute(
-            "f=\"\(t3Settings)\"; t=\"$f.relaybar-new\"; [ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; "
-                + "cp -p \"$f\" \"$t\" && cat > \"$t\" && mv \"$t\" \"$f\" || { rm -f \"$t\"; exit 1; }",
+            "f=\"\(t3Settings)\"; t=\"$f.relaybar-new\"; if [ -e \"$f\" ]; then "
+                + "[ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; cp -p \"$f\" \"$t\" || exit 1; fi; "
+                + "cat > \"$t\" && mv \"$t\" \"$f\" || { rm -f \"$t\"; exit 1; }",
             stdin: settings)
     }
 
     private static func addT3Entries(
-        _ remote: PoolRemote, home: String, accessKey: String, client: inout PoolLinuxClient, checkpoint: (PoolLinuxClient?) -> Void
+        _ remote: PoolRemote, home: String, accessKey: String, client: inout PoolLinuxClient, checkpoint: (PoolLinuxClient?) -> Void,
+        claudeBinary: String?, codexBinary: String?, orEmpty: Bool
     ) throws {
         try withT3 { t3 in
-            guard try pullT3(remote, into: t3) else { return }
+            guard try pullT3(remote, into: t3, orEmpty: orEmpty) else { return }
             client.t3Entries = true
             checkpoint(client)
             try t3.addPoolEntries(
-                accessKey: accessKey, claudeHome: home + "/.claude-hub", codexHome: home + "/.codex-hub", hex: PoolSetup.combinedColor)
+                accessKey: accessKey, claudeHome: home + "/.claude-hub", codexHome: home + "/.codex-hub", hex: PoolSetup.combinedColor,
+                claudeBinary: claudeBinary, codexBinary: codexBinary)
             if case .set(let previous) = try t3.setPoolDefault() {
                 client.t3DefaultSet = true
                 client.previousSelection = previous
@@ -412,6 +555,7 @@ extension PoolJoin {
         if client.t3Entries {
             do { try removeT3Entries(remote, client: client) } catch { problem = error }
         }
+        do { try removeT3(remote, client: client) } catch { problem = problem ?? error }
         let config = clientConfig
         var steps = [
             "systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1",
@@ -419,6 +563,7 @@ extension PoolJoin {
             "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; grep -q '\(PoolFile.marker)' \"$p\" 2>/dev/null && rm -f \"$p\"; done",
             "systemctl --user daemon-reload >/dev/null 2>&1",
         ]
+        steps += removeInstalls(client)
         for folder in client.folders where clientFolders.contains(folder) {
             steps.append("rmdir \"$HOME/\(folder)\" 2>/dev/null")
         }

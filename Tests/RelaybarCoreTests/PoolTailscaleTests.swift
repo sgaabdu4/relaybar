@@ -188,6 +188,60 @@ struct PoolTailscaleTests {
         }
     }
 
+    @Test func setsUpAnAddedComputer() async throws {
+        let installed = Flag()
+        let recorder = Recorder()
+        let running = "RB-IP\n100.64.0.9\nRB-STATUS\n" + tailscaleStatus("Running") + "\n"
+        recorder.respond = { command in
+            guard remoteScript(command).hasPrefix("if ! command -v tailscale") else { return CommandResult() }
+            return CommandResult(output: installed.on ? running : PoolTailscale.missing + "\n")
+        }
+        let computer = PoolTailscaleComputer(host: "linuxpc", run: recorder.runner, pause: { _ in })
+        let opened = Opens()
+        var ran: [String] = []
+        let fresh = try await computer.bringUp(
+            found: try computer.facts(),
+            privileged: { command, _ in
+                ran.append(command)
+                if command.contains("tailscale up") {
+                    installed.on = true
+                    return signInOutput
+                }
+                return ""
+            }, onLink: { opened.add($0) })
+        #expect(fresh.address == "100.64.0.9" && fresh.installed)
+        #expect(ran.first == "curl -fsSL https://tailscale.com/install.sh | sh")
+        #expect(ran.count == 2 && ran[1].contains("nohup tailscale up"))
+        for flag in ["--ssh", "--reset", "--exit-node", "--advertise", "--authkey", "--accept-routes", "--force"] {
+            #expect(!ran.joined().contains(flag))
+        }
+        #expect(opened.urls.map(\.absoluteString) == ["https://login.tailscale.com/a/1a2b3c4d5e6f"])
+
+        var again: [String] = []
+        let signedOut = try await computer.bringUp(
+            found: PoolTailscaleHome(installed: true, running: false, address: nil),
+            privileged: { command, _ in
+                again.append(command)
+                return signInOutput
+            }, onLink: { _ in })
+        #expect(again.count == 1 && again[0].contains("tailscale up") && !signedOut.installed)
+
+        let there = Recorder()
+        let host = FakeClientHost()
+        there.respond = { command in
+            remoteScript(command).hasPrefix("if ! command -v tailscale")
+                ? CommandResult(output: running) : host.answer(command) ?? CommandResult()
+        }
+        let log = AddLog()
+        _ = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: String(repeating: "c3", count: 32), options: PoolAddOptions(tailscale: true),
+            hooks: log.hooks, run: there.runner)
+        #expect(log.last(.tailscale) == .done)
+        #expect(!there.commands.contains { plainScript($0).hasPrefix("sudo") || plainScript($0).contains("tailscale up") })
+        #expect(
+            PoolTailscaleComputer(host: "x", run: there.runner, pause: { _ in }).user() == "sam")
+    }
+
     @Test func readsTheSignInLink() async throws {
         #expect(PoolTailscale.signInLink(in: signInOutput)?.absoluteString == "https://login.tailscale.com/a/1a2b3c4d5e6f")
         #expect(PoolTailscale.signInLink(in: "visit https://login.tailscale.com.evil.example/a/x now") == nil)

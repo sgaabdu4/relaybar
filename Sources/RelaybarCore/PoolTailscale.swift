@@ -171,36 +171,15 @@ public struct PoolTailscale: Sendable {
         return PoolTailscaleMac(installed: true, status: PoolTailscaleStatus.parse(result.output))
     }
 
-    public func home(_ host: String) throws -> PoolTailscaleHome {
-        let script =
-            "if ! command -v tailscale >/dev/null 2>&1; then echo \(Self.missing); exit 0; fi; echo \(Self.addressMark); "
-            + "tailscale ip -4 2>/dev/null; echo \(Self.statusMark); tailscale status --json 2>/dev/null; true"
-        let result = env.run(PoolSSH.command(host: host, script: script))
-        guard result.succeeded else { throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: host)) }
-        if result.output.contains(Self.missing) { return PoolTailscaleHome(installed: false, running: false, address: nil) }
-        let parts = result.output.components(separatedBy: Self.statusMark + "\n")
-        let address = parts[0].split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first(where: Self.isIPv4)
-        let status = parts.count > 1 ? PoolTailscaleStatus.parse(parts[1]) : nil
-        return PoolTailscaleHome(installed: true, running: status?.running == true && address != nil, address: address)
+    private func computer(_ host: String) -> PoolTailscaleComputer {
+        PoolTailscaleComputer(host: host, run: env.run, pause: env.pause)
     }
 
-    func reaches(_ destination: String) -> Bool {
-        env.run(
-            Command(
-                "/usr/bin/ssh",
-                [
-                    "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new", "--", destination,
-                    "true",
-                ], limit: 20)
-        ).succeeded
-    }
+    public func home(_ host: String) throws -> PoolTailscaleHome { try computer(host).facts() }
 
-    func user(of destination: String) -> String? {
-        if destination.contains("@") { return destination.split(separator: "@").first.map(String.init) }
-        let result = env.run(PoolSSH.command(host: destination, script: "id -un"))
-        let name = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return result.succeeded && !name.isEmpty && !name.contains(where: \.isWhitespace) ? name : nil
-    }
+    func reaches(_ destination: String) -> Bool { computer(destination).reaches(destination) }
+
+    func user(of destination: String) -> String? { computer(destination).user() }
 
     func load() {
         let plist = env.paths.agent(Pool.tunnelLabel).path
@@ -264,37 +243,12 @@ public struct PoolTailscale: Sendable {
         return file
     }
 
-    private enum Privileged {
-        case done(String)
-        case needsPassword
-        case failed(String)
-    }
-
-    private func privileged(_ host: String, _ command: String, password: String?, limit: TimeInterval) -> Privileged {
-        let inner = Shell.quote(command)
-        let script = password == nil ? "sudo -n sh -c \(inner)" : "sudo -S -p '' sh -c \(inner)"
-        let result = env.run(
-            PoolSSH.command(host: host, script: script, stdin: password.map { Data(($0 + "\n").utf8) }, limit: limit))
-        if result.succeeded { return .done(result.output) }
-        let text = result.error.lowercased()
-        if text.contains("password is required") || text.contains("try again") || text.contains("incorrect password") {
-            return .needsPassword
-        }
-        return .failed(result.error.split(whereSeparator: \.isNewline).last.map(String.init) ?? "no reason given")
-    }
-
-    private func signInCommand() -> String {
-        "tailscale status --json 2>/dev/null | grep -q '\"BackendState\": *\"Running\"' && { echo \(Self.running); exit 0; }; "
-            + "f=$(mktemp); nohup tailscale up >\"$f\" 2>&1 </dev/null & pid=$!; "
-            + "while kill -0 $pid 2>/dev/null && ! grep -q 'https://\(Self.loginHost)/' \"$f\"; do sleep 1; done; cat \"$f\""
-    }
-
     private func asPrivileged(
         _ host: String, _ command: String, limit: TimeInterval, hooks: PoolTailscaleHooks, password: inout String?
     ) async throws -> String {
         var wrong = false
         while true {
-            switch privileged(host, command, password: password, limit: limit) {
+            switch PoolSudo.attempt(host: host, command: command, password: password, limit: limit, run: env.run) {
             case .done(let output): return output
             case .failed(let reason): throw PoolTailscaleError.homeFailed(reason)
             case .needsPassword:
@@ -303,15 +257,6 @@ public struct PoolTailscale: Sendable {
                 wrong = true
             }
         }
-    }
-
-    private func waitForHome(_ host: String) async throws -> String {
-        for _ in 0..<300 {
-            try Task.checkCancellation()
-            if let found = try? home(host), found.running, let address = found.address { return address }
-            await env.pause(3)
-        }
-        throw PoolTailscaleError.timedOut(host)
     }
 
     private func waitForMac(hooks: PoolTailscaleHooks) async throws -> PoolTailscaleStatus {
@@ -383,17 +328,92 @@ public struct PoolTailscale: Sendable {
     private func signInHome(_ host: String, found: PoolTailscaleHome, hooks: PoolTailscaleHooks) async throws -> String {
         try Task.checkCancellation()
         var password: String?
-        if !found.installed {
-            _ = try await asPrivileged(host, "curl -fsSL \(Self.installScriptURL) | sh", limit: 600, hooks: hooks, password: &password)
+        let opened = try await computer(host).bringUp(
+            found: found,
+            privileged: { command, limit in try await self.asPrivileged(host, command, limit: limit, hooks: hooks, password: &password) },
+            onLink: { link in
+                self.env.openURL(link)
+                hooks.report(.home, .yourTurn)
+            })
+        return opened.address
+    }
+}
+
+public struct PoolTailscaleComputer: Sendable {
+    public let host: String
+    public let run: CommandRunner
+    public let pause: @Sendable (TimeInterval) async -> Void
+
+    public init(host: String, run: @escaping CommandRunner, pause: @escaping @Sendable (TimeInterval) async -> Void) {
+        self.host = host
+        self.run = run
+        self.pause = pause
+    }
+
+    public static var installURL: String { Pool.overriddenURL("RELAYBAR_TAILSCALE_INSTALL_URL") ?? PoolTailscale.installScriptURL }
+
+    public func facts() throws -> PoolTailscaleHome {
+        let script =
+            "if ! command -v tailscale >/dev/null 2>&1; then echo \(PoolTailscale.missing); exit 0; fi; echo \(PoolTailscale.addressMark); "
+            + "tailscale ip -4 2>/dev/null; echo \(PoolTailscale.statusMark); tailscale status --json 2>/dev/null; true"
+        let result = run(PoolSSH.command(host: host, script: script))
+        guard result.succeeded else { throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: host)) }
+        if result.output.contains(PoolTailscale.missing) { return PoolTailscaleHome(installed: false, running: false, address: nil) }
+        let parts = result.output.components(separatedBy: PoolTailscale.statusMark + "\n")
+        let address = parts[0].split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first(
+            where: PoolTailscale.isIPv4)
+        let status = parts.count > 1 ? PoolTailscaleStatus.parse(parts[1]) : nil
+        return PoolTailscaleHome(installed: true, running: status?.running == true && address != nil, address: address)
+    }
+
+    public func reaches(_ destination: String) -> Bool {
+        run(
+            Command(
+                "/usr/bin/ssh",
+                [
+                    "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new", "--", destination,
+                    "true",
+                ], limit: 20)
+        ).succeeded
+    }
+
+    public func user() -> String? {
+        if host.contains("@") { return host.split(separator: "@").first.map(String.init) }
+        let result = run(PoolSSH.command(host: host, script: "id -un"))
+        let name = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.succeeded && !name.isEmpty && !name.contains(where: \.isWhitespace) ? name : nil
+    }
+
+    private var signInCommand: String {
+        "tailscale status --json 2>/dev/null | grep -q '\"BackendState\": *\"Running\"' && { echo \(PoolTailscale.running); exit 0; }; "
+            + "f=$(mktemp); nohup tailscale up >\"$f\" 2>&1 </dev/null & pid=$!; "
+            + "while kill -0 $pid 2>/dev/null && ! grep -q 'https://\(PoolTailscale.loginHost)/' \"$f\"; do sleep 1; done; cat \"$f\""
+    }
+
+    private func waitForAddress() async throws -> String {
+        for _ in 0..<300 {
+            try Task.checkCancellation()
+            if let found = try? facts(), found.running, let address = found.address { return address }
+            await pause(3)
         }
-        let output = try await asPrivileged(host, signInCommand(), limit: 180, hooks: hooks, password: &password)
-        if let link = Self.signInLink(in: output) {
-            env.openURL(link)
-            hooks.report(.home, .yourTurn)
-        } else if !output.contains(Self.running) {
-            if let ready = try? home(host), ready.running, let address = ready.address { return address }
+        throw PoolTailscaleError.timedOut(host)
+    }
+
+    public func bringUp(
+        found: PoolTailscaleHome, privileged: (String, TimeInterval) async throws -> String, onLink: (URL) -> Void
+    ) async throws -> (address: String, installed: Bool) {
+        var installed = false
+        if !found.installed {
+            _ = try await privileged("curl -fsSL \(Self.installURL) | sh", 600)
+            installed = true
+        }
+        let output = try await privileged(signInCommand, 180)
+        if let link = PoolTailscale.signInLink(in: output) {
+            onLink(link)
+        } else if !output.contains(PoolTailscale.running) {
+            if let ready = try? facts(), ready.running, let address = ready.address { return (address, installed) }
             throw PoolTailscaleError.homeFailed(output.split(whereSeparator: \.isNewline).last.map(String.init) ?? "no answer.")
         }
-        return try await waitForHome(host)
+        return (try await waitForAddress(), installed)
     }
 }

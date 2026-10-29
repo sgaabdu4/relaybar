@@ -104,12 +104,13 @@ public enum PoolConfig {
             """
     }
 
-    public static func terminalCommand(claude: Bool, keyCommand: String? = nil) -> String {
+    public static func terminalCommand(claude: Bool, keyCommand: String? = nil, binary: String? = nil) -> String {
         let read = keyCommand ?? "/usr/bin/security find-generic-password -s \"\(Pool.accessService)\" -w"
+        let program = binary.map { "\"\($0)\"" } ?? (claude ? "claude" : "codex")
         let launch =
             claude
-            ? "CLAUDE_CONFIG_DIR=\"$HOME/.claude-hub\" ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(Pool.port)\" ANTHROPIC_AUTH_TOKEN=\"$key\" exec claude \"$@\""
-            : "CODEX_HOME=\"$HOME/.codex-hub\" exec codex \"$@\""
+            ? "CLAUDE_CONFIG_DIR=\"$HOME/.claude-hub\" ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(Pool.port)\" ANTHROPIC_AUTH_TOKEN=\"$key\" exec \(program) \"$@\""
+            : "CODEX_HOME=\"$HOME/.codex-hub\" exec \(program) \"$@\""
         let key =
             claude
             ? "key=$(\(read)) || { echo \"Relaybar could not read its access key.\" >&2; exit 1; }\n"

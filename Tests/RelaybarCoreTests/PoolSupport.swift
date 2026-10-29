@@ -146,10 +146,31 @@ struct FakeClientHost: Sendable {
     var tunnel = "up\n"
     var settings = ""
     var hubAdds = ""
+    var installFailure: [String: String] = [:]
+    var ready = "ready\n"
+    var pair = FakeClientHost.pairOutput
+    var password: String?
+    var reachable = true
+
+    static let pairOutput =
+        "Pairing with box (http://192.168.1.30:3773).\nApp link: t3code://pair?pairingUrl=http%3A%2F%2F192.168.1.30%3A3773%2Fpair%23token%3DFIXTURE\nToken: FIXTURE\n"
 
     func answer(_ command: Command) -> CommandResult? {
         guard command.executable == "/usr/bin/ssh" else { return nil }
         let text = remoteScript(command)
+        if text == "true" { return reachable ? CommandResult() : CommandResult(status: 255, error: "Connection timed out") }
+        if text == "id -un" { return CommandResult(output: "sam\n") }
+        if text.hasPrefix("sudo -n ") {
+            return password == nil ? nil : CommandResult(status: 1, error: "sudo: a password is required\n")
+        }
+        if text.hasPrefix("sudo -S ") {
+            return command.stdin == Data(((password ?? "") + "\n").utf8) ? nil : CommandResult(status: 1, error: "Sorry, try again.\n")
+        }
+        if text.contains("curl -fsSL '"), let failure = installFailure.first(where: { text.contains($0.key) }) {
+            return CommandResult(status: 1, error: failure.value)
+        }
+        if text.contains("server-runtime.json"), text.contains("echo ready") { return CommandResult(output: ready) }
+        if text.contains("pair --label") { return CommandResult(output: pair) }
         if text.contains("uname -s") { return CommandResult(status: systemStatus, output: system, error: systemError) }
         if text.contains("printf %s \"$HOME\"") { return CommandResult(output: "/home/sam") }
         if text.contains("for d in") { return CommandResult(output: probe) }

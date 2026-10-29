@@ -13,14 +13,16 @@ public enum Pool {
     public static let claudeName = "Claude, all accounts"
     public static let codexName = "Codex, all accounts"
     public static let usageSourceLabel = "All accounts"
+    public static func overriddenURL(_ variable: String) -> String? {
+        guard let value = ProcessInfo.processInfo.environment[variable], value.hasPrefix("https://") || value.hasPrefix("file:///"),
+            !value.contains(where: { $0.isWhitespace || "'\"$`\\".contains($0) })
+        else { return nil }
+        return value
+    }
+
     public static var scriptEnvironment: [String: String] {
         var environment = ["RELAYBAR_MAJOR": major]
-        if let list = ProcessInfo.processInfo.environment["RELAYBAR_BLOCKLIST_URL"],
-            list.hasPrefix("https://") || list.hasPrefix("file:///"),
-            !list.contains(where: { $0.isWhitespace || "'\"$`\\".contains($0) })
-        {
-            environment["RELAYBAR_BLOCKLIST_URL"] = list
-        }
+        if let list = overriddenURL("RELAYBAR_BLOCKLIST_URL") { environment["RELAYBAR_BLOCKLIST_URL"] = list }
         return environment
     }
 }
