@@ -102,6 +102,7 @@ struct PoolClientProbe {
 extension PoolJoin {
     static let probeTools =
         "for t in claude codex; do p=$(PATH=\"$HOME/.local/bin:$PATH\" command -v $t 2>/dev/null); "
+        + "[ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v $t\" </dev/null 2>/dev/null | grep '^/' | tail -n 1); "
         + "if [ -z \"$p\" ]; then echo need:$t; elif [ \"$p\" = \"$HOME/.local/bin/$t\" ]; then echo bin:$t; fi; done; "
         + "p=$(PATH=\"$HOME/.local/bin:$PATH\" command -v t3 2>/dev/null); [ -n \"$p\" ] && echo t3path:$p; "
         + "systemctl --user is-active --quiet t3code.service 2>/dev/null && echo t3svc:yes; "
