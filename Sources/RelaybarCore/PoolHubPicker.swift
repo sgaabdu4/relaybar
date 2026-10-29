@@ -163,6 +163,10 @@ public enum PoolHubPicker {
         return line.map { String($0.dropFirst("hostname ".count)) } ?? host
     }
 
+    public static func addable(hosts: [String], excluding: [String], run: CommandRunner) -> [String] {
+        hosts.filter { (try? validate($0)) != nil && !excluding.contains($0) && isHomeAddress(address(of: $0, run: run)) }
+    }
+
     public static func discover(hosts: [String], env: PoolEnvironment) async -> PoolChoices {
         guard let mac = await lookUpThisMac(env), !isCloud(mac.org) else {
             return PoolChoices(macLooksLikeCloud: true, computers: [])

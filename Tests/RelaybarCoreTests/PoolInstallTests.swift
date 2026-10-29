@@ -108,9 +108,12 @@ struct PoolTunnelTests {
     }
 
     @Test func writesALinuxTunnelUnit() {
-        let unit = PoolTunnel.linuxUnit(destination: "192.168.1.20")
+        let unit = PoolTunnel.linuxUnit(
+            destination: "sam@192.168.1.20", key: "/home/sam/.config/relaybar/hub_key",
+            knownHosts: "/home/sam/.config/relaybar/known_hosts", port: 22)
         #expect(unit.contains("ExecStart='/usr/bin/ssh' '-N' '-L' '127.0.0.1:8317:127.0.0.1:8317'"))
-        #expect(unit.contains("'192.168.1.20'"))
+        #expect(unit.contains("'-i' '/home/sam/.config/relaybar/hub_key' '-o' 'IdentitiesOnly=yes'"))
+        #expect(unit.contains("'StrictHostKeyChecking=yes' '-p' '22' '--' 'sam@192.168.1.20'"))
         #expect(unit.contains("Restart=always"))
     }
 }

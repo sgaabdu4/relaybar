@@ -71,6 +71,18 @@ struct PoolHubPickerTests {
         #expect(!PoolHubPicker.isHomeAddress("github.com") && !PoolHubPicker.isHomeAddress("157.230.1.2"))
     }
 
+    @Test func listsOnlyHomeComputersToAdd() {
+        let recorder = Recorder()
+        recorder.respond = { command in
+            let host = command.arguments.last ?? ""
+            return CommandResult(output: "hostname \(["work": "203.0.113.50", "nas": "192.168.1.30"][host] ?? "192.168.1.20")\n")
+        }
+        let found = PoolHubPicker.addable(
+            hosts: ["homebox", "laptop", "work", "nas", "-bad", "desktop"], excluding: ["homebox", "desktop"], run: recorder.runner)
+        #expect(found == ["laptop", "nas"])
+        #expect(!recorder.commands.contains { $0.arguments.contains("homebox") || $0.arguments.contains("-bad") })
+    }
+
     @Test func listsEachComputerOnce() async throws {
         let same = CommandResult(output: probe().output + "id=0123abcd\n")
         let (env, _, _) = try setup(answers: ["homebox": same, "homebox-lan": same, "192.168.1.20": same, "other": probe()])

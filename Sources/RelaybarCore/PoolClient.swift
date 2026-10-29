@@ -1,0 +1,356 @@
+import Foundation
+
+public enum PoolClientError: Error, Equatable, LocalizedError {
+    case mac(String)
+    case notLinux(String)
+    case isTheHub(String)
+    case hubIdentity(String)
+    case noRoute(host: String, tried: [String])
+    case t3Unreadable(String)
+    case noKeyTool(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .mac(let host): return "\(host) is a Mac. Open Relaybar on that Mac. It finds your accounts and connects in one click."
+        case .notLinux(let host): return "\(host) is not a Linux computer. Relaybar can add Linux computers only for now."
+        case .isTheHub(let host): return "\(host) is the computer that runs the helper. It already has your accounts."
+        case .hubIdentity(let hub):
+            return "Relaybar could not read the SSH identity of \(hub), so it cannot let another computer connect to it safely."
+        case .noRoute(let host, let tried):
+            let list =
+                tried.isEmpty ? "The helper computer gave no home address to try." : "Relaybar tried " + tried.joined(separator: ", ") + "."
+            return
+                "\(host) could not reach the helper computer. \(list) Put both computers on the same network or on Tailscale, then try again."
+        case .t3Unreadable(let host):
+            return
+                "T3 Code's settings file on \(host) could not be read, so Relaybar did not change anything there. Fix or move ~/.t3/userdata/settings.json on \(host), then try again."
+        case .noKeyTool(let host): return "\(host) cannot make an SSH key. Install the OpenSSH client there, then try again."
+        }
+    }
+}
+
+struct PoolHubFacts: Equatable {
+    var user: String
+    var port: Int
+    var machineID: String
+    var addresses: [String]
+    var hostKeys: [String]
+
+    static let script =
+        "echo \"user=$(id -un)\"; echo \"id=$(cat /etc/machine-id 2>/dev/null)\"; echo \"port=$(echo \"$SSH_CONNECTION\" | awk '{print $4}')\"; "
+        + "for a in $(hostname -I 2>/dev/null || ip -o -4 addr show scope global 2>/dev/null | awk '{sub(/\\/.*/,\"\",$4); print $4}'); do echo \"addr=$a\"; done; "
+        + "if command -v tailscale >/dev/null 2>&1; then tailscale ip -4 2>/dev/null | sed 's/^/ts=/'; fi; "
+        + "k=/etc/ssh/ssh_host_ed25519_key.pub; if [ -r \"$k\" ]; then echo \"hostkey=$(cat \"$k\")\"; "
+        + "else for k in /etc/ssh/ssh_host_*_key.pub; do [ -r \"$k\" ] && echo \"hostkey=$(cat \"$k\")\"; done; fi; true"
+
+    static func parse(_ output: String) -> PoolHubFacts? {
+        var user = ""
+        var id = ""
+        var port = 22
+        var plain: [String] = []
+        var tailscale: [String] = []
+        var keys: [String] = []
+        for line in output.split(whereSeparator: \.isNewline) {
+            guard let split = line.firstIndex(of: "=") else { continue }
+            let name = String(line[..<split])
+            let value = String(line[line.index(after: split)...]).trimmingCharacters(in: .whitespaces)
+            switch name {
+            case "user": user = value
+            case "id": id = value
+            case "port": if let number = Int(value), (1...65535).contains(number) { port = number }
+            case "addr": if isAddress(value) { plain.append(value) }
+            case "ts": if isAddress(value) { tailscale.append(value) }
+            case "hostkey": if let key = hostKey(value) { keys.append(key) }
+            default: break
+            }
+        }
+        let name = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        guard !user.isEmpty, !user.hasPrefix("-"), user.unicodeScalars.allSatisfy(name.contains), !keys.isEmpty else { return nil }
+        let home = plain.filter { PoolHubPicker.isHomeAddress($0) }
+        let carrier = home.filter { isCarrierGrade($0) }
+        var addresses: [String] = []
+        for address in home.filter({ !carrier.contains($0) }) + tailscale + carrier where !addresses.contains(address) {
+            addresses.append(address)
+        }
+        return PoolHubFacts(user: user, port: port, machineID: id, addresses: addresses, hostKeys: keys)
+    }
+
+    private static func isAddress(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts.allSatisfy { $0.count <= 3 && Int($0).map { (0...255).contains($0) } == true }
+    }
+
+    private static func isCarrierGrade(_ value: String) -> Bool {
+        let parts = value.split(separator: ".").compactMap { Int($0) }
+        return parts.count == 4 && parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    private static func hostKey(_ line: String) -> String? {
+        let words = line.split(separator: " ")
+        guard words.count >= 2, words[0].hasPrefix("ssh-") || words[0].hasPrefix("ecdsa-sha2-"),
+            words[1].allSatisfy({ $0.isLetter || $0.isNumber || "+/=".contains($0) })
+        else { return nil }
+        return "\(words[0]) \(words[1])"
+    }
+
+    func knownHosts() -> String {
+        addresses.flatMap { address in
+            hostKeys.map { (port == 22 ? address : "[\(address)]:\(port)") + " " + $0 + "\n" }
+        }.joined()
+    }
+}
+
+extension PoolJoin {
+    static let hubKeyOptions = "restrict,port-forwarding,permitopen=\"127.0.0.1:\(Pool.port)\",command=\"/bin/false\""
+    static let clientConfig = "$HOME/.config/relaybar"
+    static let t3Settings = "$HOME/.t3/userdata/settings.json"
+
+    public static func hubKeyTag(_ host: String) -> String { "relaybar-client:\(host)" }
+
+    public static func hubKeyLine(publicKey: String, host: String) -> String {
+        "\(hubKeyOptions) \(publicKey) \(hubKeyTag(host))"
+    }
+
+    static func dropTagged(_ host: String) -> String {
+        "awk -v t=\(Shell.quote(" " + hubKeyTag(host))) '{ n = length($0); m = length(t); if (n >= m && substr($0, n - m + 1) == t) next; print }'"
+    }
+
+    public static func linuxClient(
+        host: String, hub: String, accessKey: String, run: @escaping CommandRunner, progress: (String) -> Void = { _ in },
+        checkpoint: (PoolLinuxClient?) -> Void = { _ in }
+    ) throws -> PoolLinuxClient {
+        let remote = PoolRemote(host: host, run: run)
+        let hubName = try PoolHubPicker.validate(hub)
+        let hubRemote = PoolRemote(host: hubName, run: run)
+        let system = try remote.execute("uname -s").trimmingCharacters(in: .whitespacesAndNewlines)
+        if system == "Darwin" { throw PoolClientError.mac(host) }
+        guard system == "Linux" else { throw PoolClientError.notLinux(host) }
+        let home = try remote.remoteHome()
+        let marker = PoolFile.marker
+        let probe = try remote.execute(
+            "for d in \(clientFolders.joined(separator: " ")); do [ -e \"$HOME/$d\" ] || echo new:$d; done; "
+                + "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; "
+                + "if [ -e \"$p\" ] && ! grep -q '\(marker)' \"$p\" 2>/dev/null; then echo foreign:$f; fi; done; "
+                + "[ \"$(loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null)\" = yes ] || echo linger:off; "
+                + "echo \"id=$(cat /etc/machine-id 2>/dev/null)\"; "
+                + "if [ -f \"\(t3Settings)\" ]; then echo t3:yes; [ -d \"$HOME/.t3/userdata/secrets\" ] || echo t3secrets:new; fi; true")
+        let lines = probe.split(whereSeparator: \.isNewline).map(String.init)
+        if let foreign = lines.first(where: { $0.hasPrefix("foreign:") }) {
+            throw PoolFileError.notRelaybars("\(host):.local/bin/\(foreign.dropFirst(8))")
+        }
+        let hasT3 = lines.contains("t3:yes")
+        let facts = try hubFacts(hubRemote)
+        if !facts.machineID.isEmpty, lines.contains("id=" + facts.machineID) { throw PoolClientError.isTheHub(host) }
+        if hasT3 { try withT3 { t3 in _ = try pullT3(remote, into: t3) } }
+
+        var client = PoolLinuxClient(host: host, folders: lines.filter { $0.hasPrefix("new:") }.map { String($0.dropFirst(4)) })
+        client.t3SecretsFolder = lines.contains("t3secrets:new")
+        checkpoint(client)
+        do {
+            progress("Making a key on \(host)")
+            let key = home + "/.config/relaybar/hub_key"
+            let knownHosts = home + "/.config/relaybar/known_hosts"
+            let made = try remote.execute(
+                "command -v ssh-keygen >/dev/null 2>&1 || { echo nokeygen; exit 0; }; "
+                    + "umask 077; mkdir -p \"\(clientConfig)\" \"$HOME/.config/systemd/user\" && rm -f \"\(clientConfig)/hub_key\" \"\(clientConfig)/hub_key.pub\" "
+                    + "&& ssh-keygen -q -t ed25519 -N '' -C relaybar -f \"\(clientConfig)/hub_key\" && cut -d' ' -f1,2 \"\(clientConfig)/hub_key.pub\""
+            )
+            guard let publicKey = made.split(whereSeparator: \.isNewline).map(String.init).first(where: { $0.hasPrefix("ssh-ed25519 ") }),
+                publicKey.dropFirst(12).allSatisfy({ $0.isLetter || $0.isNumber || "+/=".contains($0) })
+            else { throw PoolClientError.noKeyTool(host) }
+
+            progress("Letting \(host) in on \(hubName)")
+            client.hubKey = true
+            checkpoint(client)
+            let created = try hubRemote.execute(
+                "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; umask 077; "
+                    + "[ -d \"$d\" ] || { mkdir -m 700 \"$d\" || exit 1; echo created:ssh; }; "
+                    + "if [ -e \"$f\" ]; then [ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; "
+                    + "tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; \(dropTagged(host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; "
+                    + "r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
+                    + "else : > \"$f\" && chmod 600 \"$f\" && echo created:keys || exit 1; fi; cat >> \"$f\"",
+                stdin: Data((hubKeyLine(publicKey: publicKey, host: host) + "\n").utf8))
+            client.hubCreated = created.split(whereSeparator: \.isNewline).map(String.init).filter { $0.hasPrefix("created:") }.map {
+                String($0.dropFirst(8))
+            }
+            checkpoint(client)
+
+            try remote.execute(
+                "umask 077; cat > \"\(clientConfig)/known_hosts\"", stdin: Data(facts.knownHosts().utf8))
+            progress("Finding the way from \(host) to \(hubName)")
+            let address = try chooseAddress(remote, facts: facts, key: key, knownHosts: knownHosts)
+
+            progress("Setting up claude-all and codex-all on \(host)")
+            let keyFile = "\(clientConfig)/access-key"
+            try remote.execute("umask 077; cat > \"\(keyFile)\"", stdin: Data(accessKey.utf8))
+            try remote.execute("mkdir -p \"$HOME/.claude-hub\" \"$HOME/.codex-hub\" \"$HOME/.local/bin\"")
+            let config = PoolConfig.codexHubConfig(keyCommand: ["/bin/cat", home + "/.config/relaybar/access-key"])
+            try remote.execute("cat > \"$HOME/.codex-hub/config.toml\"", stdin: Data(config.utf8))
+            let read = "cat \"\(keyFile)\""
+            for (name, claude) in [("claude-all", true), ("codex-all", false)] {
+                try remote.execute(
+                    "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"",
+                    stdin: Data(PoolConfig.terminalCommand(claude: claude, keyCommand: read).utf8))
+            }
+            let unit = PoolTunnel.linuxUnit(destination: "\(facts.user)@\(address)", key: key, knownHosts: knownHosts, port: facts.port)
+            try remote.execute("cat > \"$HOME/.config/systemd/user/relaybar-tunnel.service\"", stdin: Data(unit.utf8))
+            if lines.contains("linger:off") {
+                let enabled = try remote.execute(
+                    "u=$(id -un); { loginctl enable-linger \"$u\" 2>/dev/null || sudo -n loginctl enable-linger \"$u\" 2>/dev/null; } "
+                        + "&& echo changed:linger; true")
+                client.linger = enabled.contains("changed:linger")
+                checkpoint(client)
+            }
+            try remote.execute("systemctl --user daemon-reload && systemctl --user enable --now relaybar-tunnel.service")
+            let answer = try remote.execute(
+                "i=0; while [ $i -lt 15 ]; do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:\(Pool.port)/v1/models); "
+                    + "[ \"$c\" = 401 ] && { echo up; exit 0; }; sleep 1; i=$((i+1)); done; echo down")
+            guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "up" else {
+                throw PoolSSHError.failed(
+                    "\(host) reached \(hubName), but the helper did not answer there. Check that the helper is running, then try again.")
+            }
+            if hasT3 {
+                progress("Adding the entries to T3 Code on \(host)")
+                try addT3Entries(remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint)
+            }
+        } catch {
+            if (try? removeLinuxClient(client, hubRoutes: [hubName], run: run)) != nil { checkpoint(nil) }
+            throw error
+        }
+        return client
+    }
+
+    static func hubFacts(_ hub: PoolRemote) throws -> PoolHubFacts {
+        guard let facts = PoolHubFacts.parse(try hub.execute(PoolHubFacts.script)) else { throw PoolClientError.hubIdentity(hub.host) }
+        return facts
+    }
+
+    private static func chooseAddress(_ remote: PoolRemote, facts: PoolHubFacts, key: String, knownHosts: String) throws -> String {
+        let options = PoolTunnel.pinnedOptions(key: key, knownHosts: knownHosts, port: facts.port).map(Shell.quote).joined(separator: " ")
+        let answer = try remote.execute(
+            "for a in \(facts.addresses.joined(separator: " ")); do "
+                + "ssh \(options) -o BatchMode=yes -o ConnectTimeout=5 \"\(facts.user)@$a\" true </dev/null >/dev/null 2>&1; "
+                + "[ $? -ne 255 ] && { echo ok:$a; exit 0; }; done; echo none",
+            limit: TimeInterval(facts.addresses.count * 8 + 20))
+        guard let line = answer.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix("ok:") }),
+            facts.addresses.contains(String(line.dropFirst(3)))
+        else { throw PoolClientError.noRoute(host: remote.host, tried: facts.addresses) }
+        return String(line.dropFirst(3))
+    }
+
+    private static func withT3<T>(_ body: (T3Settings) throws -> T) throws -> T {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("relaybar-t3-" + UUID().uuidString)
+        try PoolFile.makeFolder(folder, secret: true)
+        defer { PoolFile.remove(folder) }
+        return try body(T3Settings(home: folder))
+    }
+
+    private static func pullT3(_ remote: PoolRemote, into t3: T3Settings) throws -> Bool {
+        let text = try remote.execute("f=\"\(t3Settings)\"; [ -f \"$f\" ] && cat \"$f\"; true")
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        try PoolFile.write(Data(text.utf8), to: t3.settings, secret: true, backup: false)
+        do { try t3.validate() } catch { throw PoolClientError.t3Unreadable(remote.host) }
+        return true
+    }
+
+    private static func pushT3(_ remote: PoolRemote, settings: Data) throws {
+        try remote.execute(
+            "f=\"\(t3Settings)\"; t=\"$f.relaybar-new\"; [ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; "
+                + "cp -p \"$f\" \"$t\" && cat > \"$t\" && mv \"$t\" \"$f\" || { rm -f \"$t\"; exit 1; }",
+            stdin: settings)
+    }
+
+    private static func addT3Entries(
+        _ remote: PoolRemote, home: String, accessKey: String, client: inout PoolLinuxClient, checkpoint: (PoolLinuxClient?) -> Void
+    ) throws {
+        try withT3 { t3 in
+            guard try pullT3(remote, into: t3) else { return }
+            client.t3Entries = true
+            checkpoint(client)
+            try t3.addPoolEntries(
+                accessKey: accessKey, claudeHome: home + "/.claude-hub", codexHome: home + "/.codex-hub", hex: PoolSetup.combinedColor)
+            if case .set(let previous) = try t3.setPoolDefault() {
+                client.t3DefaultSet = true
+                client.previousSelection = previous
+            }
+            let folder = t3.secretFile("x").deletingLastPathComponent()
+            let files = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".bin") }.sorted()
+            client.t3Secrets = files.map { String($0.dropLast(4)) }
+            checkpoint(client)
+            for file in files {
+                let name = String(file.dropLast(4))
+                guard isSafeName(name) else { throw PoolClientError.t3Unreadable(remote.host) }
+                try remote.execute(
+                    "umask 077; mkdir -p \"$HOME/.t3/userdata/secrets\" && cat > \"$HOME/.t3/userdata/secrets/\(name).bin\"",
+                    stdin: try Data(contentsOf: folder.appendingPathComponent(file)))
+            }
+            try pushT3(remote, settings: try Data(contentsOf: t3.settings))
+        }
+    }
+
+    private static func removeT3Entries(_ remote: PoolRemote, client: PoolLinuxClient) throws {
+        try withT3 { t3 in
+            if try pullT3(remote, into: t3) {
+                let before = try Data(contentsOf: t3.settings)
+                if client.t3DefaultSet { try t3.restoreDefault(to: client.previousSelection) }
+                try t3.removePoolEntries()
+                let after = try Data(contentsOf: t3.settings)
+                if after != before { try pushT3(remote, settings: after) }
+            }
+        }
+        let names = client.t3Secrets.filter(isSafeName)
+        guard !names.isEmpty else { return }
+        let files = names.map { "\"$HOME/.t3/userdata/secrets/\($0).bin\"" }.joined(separator: " ")
+        try remote.execute(
+            "rm -f \(files); " + (client.t3SecretsFolder ? "rmdir \"$HOME/.t3/userdata/secrets\" 2>/dev/null; " : "") + "true")
+    }
+
+    private static func isSafeName(_ name: String) -> Bool {
+        !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+    }
+
+    private static func removeHubKey(_ client: PoolLinuxClient, routes: [String], run: @escaping CommandRunner) throws {
+        let script =
+            "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -e \"$f\" ]; then umask 077; tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; "
+            + "\(dropTagged(client.host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
+            + (client.hubCreated.contains("keys") ? "[ -s \"$f\" ] || rm -f \"$f\"; " : "") + "fi; "
+            + (client.hubCreated.contains("ssh") ? "rmdir \"$d\" 2>/dev/null; " : "") + "true"
+        guard !routes.isEmpty else {
+            throw PoolSSHError.failed("Relaybar does not know how to reach the home computer, so it cannot remove the key there.")
+        }
+        var first: CommandResult?
+        for route in routes {
+            let result = run(PoolSSH.command(host: route, script: script))
+            if result.succeeded { return }
+            first = first ?? result
+        }
+        throw PoolSSHError.failed(PoolHubPicker.explain(first?.error ?? "", host: routes.first ?? ""))
+    }
+
+    public static func removeLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String] = [], run: @escaping CommandRunner) throws {
+        var problem: Error?
+        if client.hubKey {
+            do { try removeHubKey(client, routes: hubRoutes, run: run) } catch { problem = error }
+        }
+        let remote = PoolRemote(host: client.host, run: run)
+        if client.t3Entries {
+            do { try removeT3Entries(remote, client: client) } catch { problem = problem ?? error }
+        }
+        let config = clientConfig
+        var steps = [
+            "systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1",
+            "rm -f \"$HOME/.config/systemd/user/relaybar-tunnel.service\" \"\(config)/access-key\" \"\(config)/hub_key\" \"\(config)/hub_key.pub\" \"\(config)/known_hosts\" \"$HOME/.codex-hub/config.toml\"",
+            "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; grep -q '\(PoolFile.marker)' \"$p\" 2>/dev/null && rm -f \"$p\"; done",
+            "systemctl --user daemon-reload >/dev/null 2>&1",
+        ]
+        for folder in client.folders where clientFolders.contains(folder) {
+            steps.append("rmdir \"$HOME/\(folder)\" 2>/dev/null")
+        }
+        if client.linger {
+            steps.append("u=$(id -un); loginctl disable-linger \"$u\" 2>/dev/null || sudo -n loginctl disable-linger \"$u\" 2>/dev/null")
+        }
+        let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; true"))
+        if !result.succeeded { problem = problem ?? PoolSSHError.failed(PoolHubPicker.explain(result.error, host: client.host)) }
+        if let problem { throw problem }
+    }
+}

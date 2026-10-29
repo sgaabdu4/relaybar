@@ -34,8 +34,8 @@ public struct PoolRemote: Sendable {
     }
 
     @discardableResult
-    func execute(_ script: String, stdin: Data? = nil) throws -> String {
-        let result = run(PoolSSH.command(host: host, script: script, stdin: stdin))
+    func execute(_ script: String, stdin: Data? = nil, limit: TimeInterval = 120) throws -> String {
+        let result = run(PoolSSH.command(host: host, script: script, stdin: stdin, limit: limit))
         guard result.succeeded else { throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: host)) }
         return result.output
     }

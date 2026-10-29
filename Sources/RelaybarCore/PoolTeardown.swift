@@ -29,7 +29,8 @@ public enum PoolTeardown {
     ) -> PoolTeardownReport {
         var report = PoolTeardownReport()
         guard var state = PoolState.load(env.paths) else { return report }
-        for step in state.steps.reversed() {
+        let reversed = Array(state.steps.reversed())
+        for step in reversed.filter({ $0 == .linuxClient }) + reversed.filter({ $0 != .linuxClient }) {
             progress(step)
             do {
                 try undo(step, state: state, env, sudoPassword: sudoPassword)
@@ -95,7 +96,8 @@ public enum PoolTeardown {
                 throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: host))
             }
         case .linuxClient:
-            for client in state.linuxClients { try PoolJoin.removeLinuxClient(client, run: env.run) }
+            let routes = [state.tailscale, state.ssh].compactMap { $0 }
+            for client in state.linuxClients { try PoolJoin.removeLinuxClient(client, hubRoutes: routes, run: env.run) }
         case .hubFolders:
             for name in state.hubFolders {
                 let folder = paths.home.appendingPathComponent(name)

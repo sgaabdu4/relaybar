@@ -37,11 +37,32 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
     public var host: String
     public var folders: [String]
     public var linger: Bool
+    public var hubKey = false
+    public var hubCreated: [String] = []
+    public var t3Entries = false
+    public var t3DefaultSet = false
+    public var previousSelection: String?
+    public var t3Secrets: [String] = []
+    public var t3SecretsFolder = false
 
     public init(host: String, folders: [String] = [], linger: Bool = false) {
         self.host = host
         self.folders = folders
         self.linger = linger
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decode(String.self, forKey: .host)
+        folders = try values.decodeIfPresent([String].self, forKey: .folders) ?? []
+        linger = try values.decodeIfPresent(Bool.self, forKey: .linger) ?? false
+        hubKey = try values.decodeIfPresent(Bool.self, forKey: .hubKey) ?? false
+        hubCreated = try values.decodeIfPresent([String].self, forKey: .hubCreated) ?? []
+        t3Entries = try values.decodeIfPresent(Bool.self, forKey: .t3Entries) ?? false
+        t3DefaultSet = try values.decodeIfPresent(Bool.self, forKey: .t3DefaultSet) ?? false
+        previousSelection = try values.decodeIfPresent(String.self, forKey: .previousSelection)
+        t3Secrets = try values.decodeIfPresent([String].self, forKey: .t3Secrets) ?? []
+        t3SecretsFolder = try values.decodeIfPresent(Bool.self, forKey: .t3SecretsFolder) ?? false
     }
 }
 

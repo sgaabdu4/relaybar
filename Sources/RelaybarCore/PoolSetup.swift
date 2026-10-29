@@ -127,19 +127,42 @@ public struct PoolSetup: Sendable {
         try state.save(env.paths)
     }
 
-    public func useOnLinux(host typed: String, progress: @Sendable (String) -> Void = { _ in }) throws {
-        guard var state = PoolState.load(env.paths), let hub = state.tunnelDestination, let access = accessKey(),
-            let secret = env.keychain.read(service: Pool.managementService)
-        else { throw PoolSetupError.notAnswering }
+    @discardableResult
+    public func useOnLinux(host typed: String, progress: @Sendable (String) -> Void = { _ in }) throws -> PoolLinuxClient {
+        guard var state = PoolState.load(env.paths), let hub = state.tunnelDestination, let access = accessKey() else {
+            throw PoolSetupError.notAnswering
+        }
         let host = try PoolHubPicker.validate(typed)
-        progress("Setting up \(host)")
+        if let old = state.linuxClients.first(where: { $0.host == host }) {
+            progress("Clearing the earlier setup on \(host)")
+            try PoolJoin.removeLinuxClient(old, hubRoutes: hubRoutes(state), run: env.run)
+            state.linuxClients.removeAll { $0.host == host }
+            try state.save(env.paths)
+        }
+        let paths = env.paths
         let client = try PoolJoin.linuxClient(
-            host: host, hub: hub, secrets: PoolSecrets(accessKey: access, managementSecret: secret), run: env.run)
+            host: host, hub: hub, accessKey: access, run: env.run, progress: progress,
+            checkpoint: { partial in
+                state.linuxClients.removeAll { $0.host == host }
+                if let partial {
+                    state.linuxClients.append(partial)
+                    state.record(.linuxClient)
+                }
+                try? state.save(paths)
+            })
+        try state.save(paths)
+        return client
+    }
+
+    public func removeComputer(host: String) throws {
+        guard var state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else { return }
+        try PoolJoin.removeLinuxClient(client, hubRoutes: hubRoutes(state), run: env.run)
         state.linuxClients.removeAll { $0.host == host }
-        state.linuxClients.append(client)
-        state.record(.linuxClient)
+        if state.linuxClients.isEmpty { state.steps.removeAll { $0 == .linuxClient } }
         try state.save(env.paths)
     }
+
+    func hubRoutes(_ state: PoolState) -> [String] { [state.tailscale, state.ssh].compactMap { $0 } }
 
     public func join(host typed: String, progress: @Sendable (String) -> Void = { _ in }) async throws {
         let host = try PoolHubPicker.validate(typed)
@@ -299,76 +322,4 @@ public enum PoolJoin {
 
     static let clientFolders = [".claude-hub", ".codex-hub", ".config/relaybar"]
     static let clientCommands = ["claude-all", "codex-all"]
-
-    public static func linuxClient(host: String, hub: String, secrets: PoolSecrets, run: @escaping CommandRunner) throws -> PoolLinuxClient
-    {
-        let remote = PoolRemote(host: host, run: run)
-        let hubName = try PoolHubPicker.validate(hub)
-        let home = try remote.remoteHome()
-        let marker = PoolFile.marker
-        let probe = try remote.execute(
-            "for d in \(clientFolders.joined(separator: " ")); do [ -e \"$HOME/$d\" ] || echo new:$d; done; "
-                + "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; "
-                + "if [ -e \"$p\" ] && ! grep -q '\(marker)' \"$p\" 2>/dev/null; then echo foreign:$f; fi; done; "
-                + "[ \"$(loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null)\" = yes ] || echo linger:off")
-        let lines = probe.split(whereSeparator: \.isNewline).map(String.init)
-        if let foreign = lines.first(where: { $0.hasPrefix("foreign:") }) {
-            throw PoolFileError.notRelaybars("\(host):.local/bin/\(foreign.dropFirst(8))")
-        }
-        var client = PoolLinuxClient(
-            host: host, folders: lines.filter { $0.hasPrefix("new:") }.map { String($0.dropFirst(4)) })
-        let keyFile = "$HOME/.config/relaybar/access-key"
-        do {
-            try remote.execute(
-                "umask 077; mkdir -p \"$HOME/.config/relaybar\" \"$HOME/.config/systemd/user\"; cat > \"\(keyFile)\"",
-                stdin: Data(secrets.accessKey.utf8))
-            try remote.execute("mkdir -p \"$HOME/.claude-hub\" \"$HOME/.codex-hub\" \"$HOME/.local/bin\"")
-            let config = PoolConfig.codexHubConfig(keyCommand: ["/bin/cat", home + "/.config/relaybar/access-key"])
-            try remote.execute("cat > \"$HOME/.codex-hub/config.toml\"", stdin: Data(config.utf8))
-            let read = "cat \"\(keyFile)\""
-            for (name, claude) in [("claude-all", true), ("codex-all", false)] {
-                try remote.execute(
-                    "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"",
-                    stdin: Data(PoolConfig.terminalCommand(claude: claude, keyCommand: read).utf8))
-            }
-            try remote.execute(
-                "cat > \"$HOME/.config/systemd/user/relaybar-tunnel.service\"",
-                stdin: Data(PoolTunnel.linuxUnit(destination: hubName).utf8))
-            if lines.contains("linger:off") {
-                let enabled = try remote.execute(
-                    "u=$(id -un); { loginctl enable-linger \"$u\" 2>/dev/null || sudo -n loginctl enable-linger \"$u\" 2>/dev/null; } "
-                        + "&& echo changed:linger; true")
-                client.linger = enabled.contains("changed:linger")
-            }
-            try remote.execute("systemctl --user daemon-reload && systemctl --user enable --now relaybar-tunnel.service")
-            let answer = try remote.execute(
-                "i=0; while [ $i -lt 15 ]; do c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:\(Pool.port)/v1/models); "
-                    + "[ \"$c\" = 401 ] && { echo up; exit 0; }; sleep 1; i=$((i+1)); done; echo down")
-            guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "up" else {
-                throw PoolSSHError.failed(
-                    "\(host) could not reach \(hubName). Add the SSH key of \(host) to \(hubName), then try again.")
-            }
-        } catch {
-            try? removeLinuxClient(client, run: run)
-            throw error
-        }
-        return client
-    }
-
-    public static func removeLinuxClient(_ client: PoolLinuxClient, run: @escaping CommandRunner) throws {
-        var steps = [
-            "systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1",
-            "rm -f \"$HOME/.config/systemd/user/relaybar-tunnel.service\" \"$HOME/.config/relaybar/access-key\" \"$HOME/.codex-hub/config.toml\"",
-            "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; grep -q '\(PoolFile.marker)' \"$p\" 2>/dev/null && rm -f \"$p\"; done",
-            "systemctl --user daemon-reload >/dev/null 2>&1",
-        ]
-        for folder in client.folders where clientFolders.contains(folder) {
-            steps.append("rmdir \"$HOME/\(folder)\" 2>/dev/null")
-        }
-        if client.linger {
-            steps.append("u=$(id -un); loginctl disable-linger \"$u\" 2>/dev/null || sudo -n loginctl disable-linger \"$u\" 2>/dev/null")
-        }
-        let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; true"))
-        guard result.succeeded else { throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: client.host)) }
-    }
 }
