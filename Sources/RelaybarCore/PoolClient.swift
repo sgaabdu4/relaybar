@@ -201,8 +201,8 @@ extension PoolJoin {
         if hasT3 { try withT3 { t3 in _ = try pullT3(remote, into: t3) } }
 
         let found = PoolClientProbe(lines: lines)
-        let installT3 = options.t3Channel != nil && found.t3Path == nil
-        let pairable = options.t3Channel != nil && (installT3 || found.has("t3svc:yes"))
+        let installT3 = options.t3Channel != nil && found.t3Path == nil && !found.t3Running
+        let pairable = options.t3Channel != nil && (installT3 || (found.t3Running && found.t3Path != nil))
         var stages: [PoolAddStage] = [.letIn]
         if !found.missing.isEmpty { stages.append(.tools) }
         if options.tailscale { stages.append(.tailscale) }
@@ -370,6 +370,9 @@ extension PoolJoin {
                     try waitForT3(remote, address: tailscaleAddress)
                 }
                 report(.t3, .done)
+            }
+            if options.t3Channel != nil, found.t3Running, found.t3Path == nil {
+                progress("T3 Code is already running on \(host), but Relaybar could not find it to link it")
             }
             if pairable, let t3 {
                 report(.link, .working)
