@@ -40,28 +40,12 @@ if [ $wantUpdate = 0 ] && [ $wantRemote = 0 ]; then
   wantLocal=1
 fi
 
+# shellcheck source=scripts/pool-e2e-lib.sh
+source "$repo/scripts/pool-e2e-lib.sh"
+
 root="$(mktemp -d "${TMPDIR:-/tmp}/relaybar-pool-e2e.XXXXXX")"
 root="$(cd "$root" && pwd -P)"
 failures=0
-
-stopTracked() {
-  local dir=$1 pid file tries
-  for file in "$dir/pids" "$dir/fake.pid"; do
-    [ -f "$file" ] || continue
-    while read -r pid; do
-      kill "$pid" 2> /dev/null
-    done < "$file"
-    while read -r pid; do
-      tries=0
-      while kill -0 "$pid" 2> /dev/null && [ $tries -lt 50 ]; do
-        sleep 0.1
-        tries=$((tries + 1))
-      done
-      kill -9 "$pid" 2> /dev/null
-    done < "$file"
-  done
-  return 0
-}
 
 cleanupAll() {
   local dir
@@ -102,44 +86,6 @@ trackPid() {
   disown "$1" 2> /dev/null
 }
 
-randomHex() { head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-
-freePort() {
-  python3 -I -c '
-import socket, sys
-for port in range(int(sys.argv[1]), 65000):
-    s = socket.socket()
-    try:
-        s.bind(("127.0.0.1", port))
-    except OSError:
-        s.close()
-        continue
-    s.close()
-    print(port)
-    break
-' "$((18500 + RANDOM % 3000))"
-}
-
-httpCode() { curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@"; }
-
-waitFor401() {
-  local url=$1 seconds=$2 i
-  for ((i = 0; i < seconds; i++)); do
-    [ "$(httpCode "$url")" = 401 ] && return 0
-    sleep 1
-  done
-  return 1
-}
-
-chipName() {
-  case "$(uname -m)" in
-    arm64 | aarch64) echo aarch64 ;;
-    *) echo amd64 ;;
-  esac
-}
-
-checksumOf() { shasum -a 256 "$1" | awk '{ print $1 }'; }
-
 fetchRelease() {
   local chip asset expected
   chip="$(chipName)"
@@ -158,8 +104,6 @@ fetchRelease() {
   fi
   releaseAsset="$cache/$asset"
 }
-
-secretHeader() { printf 'Authorization: Bearer %s\n' "$2" > "$1"; }
 
 writeConfig() {
   cat > "$helper/config.yaml" <<EOF
@@ -236,23 +180,6 @@ startHelper() {
   (cd "$helper" && exec /usr/bin/sandbox-exec -f "$work/helper.sb" "$helper/current/cli-proxy-api" -config "$helper/config.yaml") > /dev/null 2>&1 < /dev/null &
   trackPid $!
   waitFor401 "http://127.0.0.1:$port/v1/models" 40 || fail "the helper did not answer on port $port within 40 s"
-}
-
-emails() {
-  python3 -I -c '
-import json, sys
-def walk(x):
-    if isinstance(x, dict):
-        if "email" in x:
-            yield x
-        for v in x.values():
-            yield from walk(v)
-    elif isinstance(x, list):
-        for v in x:
-            yield from walk(v)
-for e in walk(json.load(open(sys.argv[1]))):
-    print(e["email"])
-' "$1"
 }
 
 modelsNeedTheKey() {
@@ -929,12 +856,10 @@ clientConnects() {
   umask 077
   local hubIp keysBefore out
   [ -n "${remoteError:-}" ] && fail "$remoteError"
-  clientPort="$(freePort)"
-  launchBox "$clientName" "$clientPort" || fail "$boxError"
+  clientPort="$(freePort)"; launchBox "$clientName" "$clientPort" || fail "$boxError"
   docker exec "$clientName" loginctl enable-linger homeuser || fail "cannot turn on lingering on the client"
   hubIp="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$containerName")"
-  [ -n "$hubIp" ] || fail "cannot read the address of the hub container"
-  cat > "$work/ssh_config" <<EOF
+  [ -n "$hubIp" ] || fail "cannot read the address of the hub container"; cat > "$work/ssh_config" <<EOF
 Host e2e-hub
   HostName 127.0.0.1
   Port $sshPort
@@ -949,16 +874,10 @@ Host *
   UserKnownHostsFile /dev/null
   LogLevel ERROR
 EOF
-  cat > "$work/read-keys.sh" <<'EOF'
-sed -n '/api-keys:/{n;s/^ *- *"\(.*\)"$/\1/p;}' "$HOME/.local/share/relaybar-helper/config.yaml"
-EOF
-  remote sh -s < "$work/read-keys.sh" > "$work/access-key" || fail "cannot read the access key from the hub"
-  [ -s "$work/access-key" ] || fail "the hub has no access key"
-  cat > "$work/read-secret.sh" <<'EOF'
-sed -n 's/^ *secret-key: *"\(.*\)"$/\1/p' "$HOME/.local/share/relaybar-helper/config.yaml"
-EOF
-  remote sh -s < "$work/read-secret.sh" > "$work/mgmt-secret" || fail "cannot read the management secret from the hub"
-  [ -s "$work/mgmt-secret" ] || fail "the hub has no management secret"
+  remote "cat $homeDir/.local/share/relaybar-helper/config.yaml" > "$work/hub-config.yaml" || fail "cannot read the hub settings"
+  sed -n '/api-keys:/{n;s/^ *- *"\(.*\)"$/\1/p;}' "$work/hub-config.yaml" > "$work/access-key"
+  sed -n 's/^ *secret-key: *"\(.*\)"$/\1/p' "$work/hub-config.yaml" > "$work/mgmt-secret"
+  [ -s "$work/access-key" ] && [ -s "$work/mgmt-secret" ] || fail "the hub settings have no access key or management secret"
   keysBefore="$(remote "cat $homeDir/.ssh/authorized_keys")"
   printf '%s' '{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}' > "$work/settings-before.json"
   clientRemote "umask 077; mkdir -p $homeDir/.t3/userdata && cat > $homeDir/.t3/userdata/settings.json" < "$work/settings-before.json" || fail "cannot write the T3 Code fixture on the client"
