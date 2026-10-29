@@ -268,7 +268,7 @@ extension PoolTeardownTests {
         harness.answerHomeAndComputers()
         let setup = PoolSetup(env: harness.env())
         _ = try await setup.combineOnHome(host: "homebox")
-        for computer in computers { try setup.useOnLinux(host: computer) }
+        for computer in computers { try await setup.useOnLinux(host: computer) }
         return setup
     }
 

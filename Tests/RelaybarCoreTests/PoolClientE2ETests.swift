@@ -21,10 +21,10 @@ enum ClientE2E {
 
 struct PoolClientE2ETests {
     @Test(.enabled(if: ClientE2E.step == "add"))
-    func e2eAddsTheClient() throws {
+    func e2eAddsTheClient() async throws {
         let key = try String(contentsOfFile: ClientE2E.environment["RELAYBAR_E2E_ACCESS_KEY_FILE"] ?? "", encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let client = try PoolJoin.linuxClient(host: "e2e-client", hub: "e2e-hub", accessKey: key, run: ClientE2E.run)
+        let client = try await PoolJoin.linuxClient(host: "e2e-client", hub: "e2e-hub", accessKey: key, run: ClientE2E.run)
         try JSONEncoder().encode(client).write(to: ClientE2E.clientFile)
     }
 

@@ -348,7 +348,7 @@ extension PoolController {
         let report = progress(panel)
         var added: PoolLinuxClient?
         let worked = await attempt(host: host, title: title, panel: panel) {
-            added = try await Task.detached { try setup.useOnLinux(host: host, progress: report) }.value
+            added = try await Task.detached { try await setup.useOnLinux(host: host, progress: report) }.value
         }
         panel.close()
         guard worked, let added else { return }

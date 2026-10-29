@@ -62,7 +62,7 @@ struct PoolCommandTests {
         let mark = harness.recorder.commands.count
         let access = try #require(setup.accessKey())
         let management = try #require(harness.env().keychain.read(service: Pool.managementService))
-        try setup.useOnLinux(host: "laptop")
+        try await setup.useOnLinux(host: "laptop")
         try setup.removeComputer(host: "laptop")
         let sent = Array(harness.recorder.commands.dropFirst(mark))
         #expect(sent.contains { remoteScript($0).contains("userdata/secrets/provider-env-") })
