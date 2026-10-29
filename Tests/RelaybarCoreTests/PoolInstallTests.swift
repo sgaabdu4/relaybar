@@ -14,7 +14,7 @@ struct PoolInstallTests {
                 "/Users/sam/Library/Application Support/Relaybar/relaybar-helper.sh", "install",
                 "/Users/sam/Library/Application Support/Relaybar/Helper",
             ])
-        #expect(command.environment == ["RELAYBAR_MAJOR": "8"])
+        #expect(command.environment == ["RELAYBAR_MAJOR": "8", "HOME": "/Users/sam"])
         #expect(command.limit == 900)
         #expect(command.stdin == nil)
         let recorder = Recorder()
