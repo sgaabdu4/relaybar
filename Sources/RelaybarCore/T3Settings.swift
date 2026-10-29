@@ -143,7 +143,19 @@ public struct T3Settings {
             at: secretFile("provider-env-\(Self.encode(Self.claudePoolID))-\(Self.encode(Self.tokenVariable))"))
     }
 
-    public func setPoolDefault() throws -> PoolDefaultChange {
+    public func claudeModel() -> String? {
+        guard let root = try? read() else { return nil }
+        let instances = instances(in: root)
+        let selection = root["defaultModelSelection"] as? [String: Any]
+        if let current = selection?["instanceId"] as? String, isClaude(current, instances), let model = selection?["model"] as? String,
+            !model.isEmpty
+        {
+            return model
+        }
+        return firstClaudeModel(root, instances)
+    }
+
+    public func setPoolDefault(fallbackModel: String? = nil) throws -> PoolDefaultChange {
         var root = try read()
         let instances = instances(in: root)
         let selection = root["defaultModelSelection"] as? [String: Any]
@@ -152,7 +164,7 @@ public struct T3Settings {
         var next: [String: Any]
         if let selection, let current, isClaude(current, instances), selection["model"] is String {
             next = selection
-        } else if let model = firstClaudeModel(root, instances) {
+        } else if let model = firstClaudeModel(root, instances) ?? fallbackModel {
             next = ["model": model]
         } else {
             return .kept

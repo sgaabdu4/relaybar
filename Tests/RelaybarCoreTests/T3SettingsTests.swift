@@ -205,6 +205,29 @@ extension T3SettingsTests {
         #expect(!FileManager.default.fileExists(atPath: home.root.appendingPathComponent(settingsPath).path))
     }
 
+    @Test func usesThisMacsClaudeModelOnAFreshT3Code() throws {
+        let mac = try Fixture()
+        let macSettings = T3Settings(home: mac.root)
+        #expect(macSettings.claudeModel() == nil)
+        try mac.write(
+            settingsPath,
+            #"{"defaultModelSelection": {"instanceId": "codex", "model": "g1"}, "favorites": [{"provider": "claudeAgent", "model": "claude-fav"}]}"#
+        )
+        #expect(macSettings.claudeModel() == "claude-fav")
+        try mac.write(
+            settingsPath,
+            #"{"defaultModelSelection": {"instanceId": "claudeAgent_all_accounts", "model": "claude-x"}, "providerInstances": {"claudeAgent_all_accounts": {"driver": "claudeAgent"}}}"#
+        )
+        #expect(macSettings.claudeModel() == "claude-x")
+
+        let fresh = try Fixture()
+        let settings = T3Settings(home: fresh.root)
+        #expect(try settings.setPoolDefault(fallbackModel: "claude-x") == .set(previous: nil))
+        #expect(
+            try fresh.json(settingsPath)["defaultModelSelection"] as? [String: String]
+                == ["instanceId": "claudeAgent_all_accounts", "model": "claude-x"])
+    }
+
     @Test func refusesToRewriteAnUnreadableFile() throws {
         let home = try Fixture()
         let text = "{ // my notes\n \"theme\": \"dark\", }"
