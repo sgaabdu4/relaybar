@@ -206,7 +206,7 @@ extension PoolJoin {
 
         let found = PoolClientProbe(lines: lines)
         let installT3 = options.t3Channel != nil && found.t3Path == nil
-        let pairable = options.t3Channel != nil && (installT3 || found.has("t3svc:yes")) && (installT3 || found.t3Path != nil)
+        let pairable = options.t3Channel != nil && (installT3 || found.has("t3svc:yes"))
         var stages: [PoolAddStage] = [.letIn]
         if !found.missing.isEmpty { stages.append(.tools) }
         if options.tailscale { stages.append(.tailscale) }
