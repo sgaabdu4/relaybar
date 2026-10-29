@@ -233,11 +233,8 @@ enum PoolDialogs {
             text: "Relaybar needs your password on \(host) once to install Tailscale there. Relaybar does not save it.")
     }
 
-    static func computerPassword(host: String, wrong: Bool, tailscale: Bool, t3: Bool, why: String) -> String? {
-        var reasons: [String] = []
-        if tailscale { reasons.append("Tailscale needs it to install") }
-        if t3 { reasons.append("T3 Code needs it to stay on after you log out") }
-        let text = reasons.isEmpty ? "Relaybar needs it to \(why)." : reasons.joined(separator: ", and ") + "."
+    static func computerPassword(host: String, wrong: Bool, why: String) -> String? {
+        let text = "Relaybar needs it to \(why)."
         let field = NSSecureTextField(string: "")
         field.placeholderString = "Password for \(host)"
         let stack = column([field])
