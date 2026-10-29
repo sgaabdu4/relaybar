@@ -389,6 +389,8 @@ extension PoolJoin {
                 if found.t3Path == nil {
                     result.notes.append(.t3NotFound)
                     progress("T3 Code is already running on \(host), but Relaybar could not find it to link it")
+                } else if !found.t3Running {
+                    result.notes.append(.t3NotRunning)
                 } else if options.tailscale {
                     result.notes.append(.t3Kept)
                 }

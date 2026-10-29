@@ -271,7 +271,11 @@ enum PoolDialogs {
             paragraphs.append(
                 "T3 Code there is set up, but it is not linked to this Mac yet. To link it, remove \(host) and add it again.")
         case .notTried:
-            if result.notes.contains(.t3NotFound) {
+            if result.notes.contains(.t3NotRunning) {
+                paragraphs.append(
+                    "T3 Code is on \(host), but it is not running as a service, so Relaybar did not link it. Start it there with t3 service install, then remove \(host) and add it again."
+                )
+            } else if result.notes.contains(.t3NotFound) {
                 paragraphs.append("T3 Code was already running there. Relaybar could not find it to link it, so it left it as it was.")
             } else if result.client.t3Entries {
                 paragraphs.append("T3 Code there now shows Claude, all accounts.")

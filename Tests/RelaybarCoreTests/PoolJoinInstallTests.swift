@@ -262,6 +262,19 @@ extension PoolJoinTests {
             ))
     }
 
+    @Test func saysWhyItDidNotLink() async throws {
+        let installed = FakeClientHost(probe: FakeClientHost.probe + "\nt3path:/usr/local/bin/t3")
+        let log = AddLog()
+        let stopped = try await outcome(installed, options: PoolAddOptions(t3Channel: .nightly), hooks: log.hooks)
+        #expect(stopped.link == .notTried && stopped.notes == [.t3NotRunning])
+        #expect(!stopped.client.t3Installed && !stopped.client.t3Service)
+        #expect(log.plan == [.letIn, .route, .commands])
+        let both = try await outcome(installed, options: PoolAddOptions(t3Channel: .nightly, tailscale: true), tailscaleUp: true)
+        #expect(both.notes == [.t3NotRunning])
+        let off = try await outcome(installed, options: PoolAddOptions())
+        #expect(off.notes.isEmpty)
+    }
+
     @Test func leavesAnExistingT3CodeAlone() async throws {
         let running = "\nt3svc:yes\nt3exec:/home/laptop/.t3/runtime/versions/0.1.6/t3"
         let recorder = Recorder()
