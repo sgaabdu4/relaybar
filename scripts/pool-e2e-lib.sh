@@ -74,3 +74,22 @@ for e in walk(json.load(open(sys.argv[1]))):
     print(e["email"])
 ' "$1"
 }
+
+writeKeyProbes() {
+  cat > "$1" <<EOF
+o="-i \$HOME/.config/relaybar/hub_key -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=\$HOME/.config/relaybar/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=5 -o ExitOnForwardFailure=yes"
+hub=homeuser@$2
+ssh \$o \$hub id 2> /dev/null < /dev/null
+echo "rc=\$?"
+ssh \$o -W 127.0.0.1:22 \$hub 2> /dev/null < /dev/null | head -c 20
+ssh \$o -N -R 127.0.0.1:18317:127.0.0.1:22 \$hub 2> /dev/null < /dev/null
+echo "remote=\$?"
+timeout 8 ssh \$o -N -L 127.0.0.1:18318:127.0.0.1:8317 \$hub 2> /dev/null < /dev/null &
+sleep 3
+echo "local=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18318/v1/models)"
+wait
+timeout 4 ssh \$o -N -R /tmp/rb-probe.sock:127.0.0.1:22 \$hub 2> /dev/null < /dev/null
+echo "unix=\$?"
+true
+EOF
+}

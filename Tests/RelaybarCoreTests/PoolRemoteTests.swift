@@ -290,7 +290,7 @@ struct PoolJoinTests {
         let line = String(decoding: adding.stdin ?? Data(), as: UTF8.self)
         #expect(
             line
-                == "restrict,port-forwarding,permitopen=\"127.0.0.1:8317\",command=\"/bin/false\" ssh-ed25519 AAAAclientkey relaybar-client:laptop\n"
+                == "restrict,port-forwarding,permitopen=\"127.0.0.1:8317\",permitlisten=\"127.0.0.1:1\",command=\"/bin/false\" ssh-ed25519 AAAAclientkey relaybar-client:laptop\n"
         )
         let script = plainScript(adding)
         #expect(script.contains("mkdir -m 700"))
