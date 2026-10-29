@@ -3,14 +3,26 @@ import RelaybarCore
 
 @MainActor
 final class AddComputerDialog: NSObject {
+    struct Choice {
+        let host: String
+        let t3: Bool
+        let tailscale: Bool
+    }
+
     private static let another = 1
 
     private let alert = NSAlert()
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let t3Box = NSButton(checkboxWithTitle: "Show its chats in T3 Code on this Mac", target: nil, action: nil)
+    private let tailscaleBox = NSButton(checkboxWithTitle: "Use it away from home", target: nil, action: nil)
+    private let offerT3: Bool
+    private let offerTailscale: Bool
     private var add: NSButton?
     private var previous = 0
 
-    init(hosts: [String]) {
+    init(hosts: [String], t3: Bool, tailscale: Bool) {
+        offerT3 = t3
+        offerTailscale = tailscale
         super.init()
         popup.autoenablesItems = false
         if hosts.isEmpty {
@@ -28,10 +40,10 @@ final class AddComputerDialog: NSObject {
         popup.action = #selector(picked)
     }
 
-    func run() -> String? {
+    func run() -> Choice? {
         alert.messageText = "Add a computer"
         alert.informativeText =
-            "Relaybar sets it up to use all your accounts in its terminal and in T3 Code. It must be a Linux computer that this Mac can reach with SSH."
+            "Relaybar sets it up to use all your accounts. It must be a Linux computer that this Mac can reach with SSH."
         add = alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Cancel")
         let label = NSTextField(labelWithString: "Computer")
@@ -41,13 +53,37 @@ final class AddComputerDialog: NSObject {
         row.distribution = .fill
         label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         popup.setContentHuggingPriority(.init(1), for: .horizontal)
-        let stack = PoolDialogs.column([row])
+        var views: [NSView] = [row]
+        if offerT3 {
+            views.append(option(t3Box, "Installs T3 Code there and links it to this Mac."))
+        }
+        if offerTailscale {
+            views.append(option(tailscaleBox, "Installs Tailscale there. You sign in once."))
+        }
+        views.append(
+            PoolDialogs.label(
+                "Relaybar also installs Claude Code and Codex there if they are missing. No sign-in is needed.", size: 11,
+                color: .secondaryLabelColor, width: 300))
+        let stack = PoolDialogs.column(views, spacing: 14)
         PoolDialogs.fit(stack)
         alert.accessoryView = stack
         refresh()
         NSApp.activate()
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return popup.selectedItem?.representedObject as? String
+        guard alert.runModal() == .alertFirstButtonReturn, let host = popup.selectedItem?.representedObject as? String else { return nil }
+        return Choice(host: host, t3: offerT3 && t3Box.state == .on, tailscale: offerTailscale && tailscaleBox.state == .on)
+    }
+
+    private func option(_ box: NSButton, _ detail: String) -> NSView {
+        box.state = .on
+        box.font = .systemFont(ofSize: 13)
+        let subtitle = PoolDialogs.label(detail, size: 11, color: .secondaryLabelColor, width: 282)
+        let indented = NSStackView(views: [subtitle])
+        indented.edgeInsets = NSEdgeInsets(top: 0, left: 18, bottom: 0, right: 0)
+        let stack = NSStackView(views: [box, indented])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        return stack
     }
 
     private func refresh() {

@@ -67,11 +67,21 @@ enum PoolDialogs {
             go: "Stop", destructive: true)
     }
 
-    static func removeComputerFirst(host: String) -> Bool {
-        stopAlert(
-            "Remove \(host)?",
-            "Relaybar removes claude-all, codex-all and the T3 Code entries from \(host), and its key from the home computer. Your accounts stay in the helper.",
-            go: "Continue…", destructive: false)
+    static func removeComputerFirst(host: String, client: PoolLinuxClient?) -> Bool {
+        stopAlert("Remove \(host)?", removeText(host: host, client: client), go: "Continue…", destructive: false)
+    }
+
+    static func removeText(host: String, client: PoolLinuxClient?) -> String {
+        let note = client.map(PoolJoin.removalNote) ?? ""
+        guard let client, !note.isEmpty else {
+            return
+                "Relaybar removes claude-all, codex-all and the T3 Code entries from \(host), and its key from the home computer. Your accounts stay in the helper."
+        }
+        let unlink =
+            client.t3Installed
+            ? " To clear \(host) from T3 Code on this Mac, use Settings, Connections, Remove from this device."
+            : ""
+        return "\(host) will stop using your accounts. \(note)\(unlink)"
     }
 
     static func removeComputerSecond(host: String) -> Bool {
@@ -221,6 +231,53 @@ enum PoolDialogs {
         password(
             title: "Install Tailscale on \(host)?", wrong: wrong, host: host, accept: "Install", skip: "Cancel",
             text: "Relaybar needs your password on \(host) once to install Tailscale there. Relaybar does not save it.")
+    }
+
+    static func computerPassword(host: String, wrong: Bool, tailscale: Bool, t3: Bool, why: String) -> String? {
+        var reasons: [String] = []
+        if tailscale { reasons.append("Tailscale needs it to install") }
+        if t3 { reasons.append("T3 Code needs it to stay on after you log out") }
+        let text = reasons.isEmpty ? "Relaybar needs it to \(why)." : reasons.joined(separator: ", and ") + "."
+        let field = NSSecureTextField(string: "")
+        field.placeholderString = "Password for \(host)"
+        let stack = column([field])
+        fit(stack)
+        let alert = NSAlert()
+        alert.messageText = "Type the password for \(host)"
+        alert.informativeText = wrong ? "That password did not work. Type it again." : text + " Relaybar does not keep it."
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard run(alert) == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return nil }
+        return field.stringValue
+    }
+
+    static func addedComputer(host: String, client: PoolLinuxClient, options: PoolAddOptions) {
+        let alert = NSAlert()
+        alert.messageText = "\(host) can use your accounts"
+        var paragraphs: [String] = []
+        let linked = options.t3Channel != nil
+        if linked {
+            let reach = client.t3Host != nil ? "at home and away" : "while you are at home"
+            paragraphs.append("Its chats show in T3 Code under \(host), \(reach). T3 Code asks you to confirm it once.")
+        } else if client.t3Entries {
+            paragraphs.append("T3 Code there now shows Claude, all accounts.")
+        }
+        paragraphs.append("In a terminal there, run claude-all or codex-all.")
+        if options.tailscale, linked, client.t3Host == nil {
+            paragraphs.append(
+                "T3 Code there listens on your home network, not on Tailscale, because this Mac could not reach \(host) through Tailscale. Use the same Tailscale account on both computers, then add it again."
+            )
+        }
+        if client.t3Installed {
+            paragraphs.append(
+                "To clear \(host) from T3 Code on this Mac later, use Settings, Connections, Remove from this device."
+            )
+        }
+        alert.informativeText = paragraphs.joined(separator: "\n\n")
+        alert.addButton(withTitle: "OK")
+        _ = run(alert)
     }
 
     private static func password(title: String, wrong: Bool, host: String, accept: String, skip: String, text: String) -> String? {
