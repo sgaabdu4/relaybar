@@ -33,9 +33,10 @@ struct PoolClientE2ETests {
         let key = try String(contentsOfFile: ClientE2E.environment["RELAYBAR_E2E_ACCESS_KEY_FILE"] ?? "", encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let marker = URL(fileURLWithPath: ClientE2E.environment["RELAYBAR_E2E_PAIR_FILE"] ?? "")
-        let hooks = PoolAddHooks(pair: { url in
-            try? Data("\(url.scheme ?? "")://\(url.host ?? "")".utf8).write(to: marker)
-        })
+        let replace = ClientE2E.environment["RELAYBAR_E2E_REPLACE"] == "replace"
+        let hooks = PoolAddHooks(
+            pair: { url in try? Data("\(url.scheme ?? "")://\(url.host ?? "")".utf8).write(to: marker) },
+            replaceLogins: { _ in replace })
         let client = try await PoolJoin.linuxClient(
             host: "e2e-client", hub: "e2e-hub", accessKey: key, options: PoolAddOptions(t3Channel: .nightly), hooks: hooks,
             run: ClientE2E.run)

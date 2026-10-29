@@ -4,7 +4,7 @@ installStep() {
   (
     cd "$repo" || exit 1
     env RELAYBAR_E2E_STEP="$step" RELAYBAR_E2E_SSH_CONFIG="$work/ssh_config" RELAYBAR_E2E_CLIENT_FILE="$work/client.json" \
-      RELAYBAR_E2E_ACCESS_KEY_FILE="$work/access-key" RELAYBAR_E2E_PAIR_FILE="$work/pair-marker" \
+      RELAYBAR_E2E_ACCESS_KEY_FILE="$work/access-key" RELAYBAR_E2E_PAIR_FILE="$work/pair-marker" RELAYBAR_E2E_REPLACE="${replaceLogins:-keep}" \
       RELAYBAR_CLAUDE_INSTALL_URL="$sites/claude.sh" RELAYBAR_CODEX_INSTALL_URL="$sites/codex.sh" RELAYBAR_T3_INSTALL_URL="$sites/t3.sh" \
       perl -e 'alarm shift; exec @ARGV or exit 127' 900 swift test --skip-build --filter "$name"
   ) > "$work/swift-$step.log" 2>&1 || fail "the $step step failed: $(cat "$work/swift-$step.log")"
@@ -110,6 +110,19 @@ esac
 EOF
 }
 
+writeLoginFixtures() {
+  printf '%s' '{"claudeAiOauth":{"accessToken":"fixture-login"}}' | clientRemote "cat > $homeDir/.claude/.credentials.json" || fail "cannot write the Claude login fixture"
+  printf '%s\n' '{"model":"sample-model","env":{"ANTHROPIC_AUTH_TOKEN":"old-token","KEEP":"1"}}' | clientRemote "cat > $homeDir/.claude/settings.json" || fail "cannot write the Claude settings fixture"
+  printf '%s' '{"tokens":{"fixture":true}}' | clientRemote "cat > $homeDir/.codex/auth.json" || fail "cannot write the Codex login fixture"
+  printf '%s\n' 'model = "sample"' 'model_provider = "other"' '' '[mcp_servers.x]' 'command = "x"' '' '[model_providers.relaybar]' 'name = "old"' | clientRemote "cat > $homeDir/.codex/config.toml" || fail "cannot write the Codex config fixture"
+}
+
+checkLoginsBack() {
+  local homeDir=${homeDir:?} loginsBefore=${loginsBefore:?}
+  [ "$(clientRemote "cd $homeDir && sha256sum .claude/.credentials.json .claude/settings.json .codex/auth.json .codex/config.toml")" = "$loginsBefore" ] || fail "$1: the Claude Code and Codex login and settings files are not as they were"
+  [ -z "$(clientRemote "ls -d $homeDir/.config/relaybar/kept $homeDir/.claude-hub $homeDir/.codex-hub 2> /dev/null; true")" ] || fail "$1: a kept folder or an old hub folder is left"
+}
+
 clientInstalls() {
   newCase
   umask 077
@@ -139,25 +152,32 @@ EOF
   keysBefore="$(remote "cat $homeDir/.ssh/authorized_keys")"
   [ -z "$(clientRemote 'command -v claude codex t3; true')" ] || fail "the client container already has one of the tools"
   writeInstallFixtures
-  clientRemote "mkdir -p $homeDir/e2e-sites $homeDir/.codex && echo keep > $homeDir/.codex/keep.txt" || fail "cannot prepare the client"
+  clientRemote "mkdir -p $homeDir/e2e-sites $homeDir/.codex $homeDir/.claude && echo keep > $homeDir/.codex/keep.txt" || fail "cannot prepare the client"
+  writeLoginFixtures
+  loginsBefore="$(clientRemote "cd $homeDir && sha256sum .claude/.credentials.json .claude/settings.json .codex/auth.json .codex/config.toml")" || fail "cannot read the client logins"
   for f in claude.sh codex.sh t3.sh t3-fake; do
     clientRemote "cat > $homeDir/e2e-sites/$f" < "$work/sites/$f" || fail "cannot copy the fixture $f"
   done
   (cd "$repo" && perl -e 'alarm shift; exec @ARGV or exit 127' 1800 swift build --build-tests) > "$work/swift-build.log" 2>&1 || fail "swift build failed: $(cat "$work/swift-build.log")"
 
-  installStep addInstalls e2eAddsTheClientWithInstalls
+  replaceLogins=keep installStep addInstalls e2eAddsTheClientWithInstalls
 
-  for f in claude codex t3 claude-all codex-all; do
+  for f in claude codex t3 claude+ codex+; do
     clientRemote "test -x $homeDir/.local/bin/$f" || fail "$f is not in ~/.local/bin on the client"
   done
   [ "$(clientRemote "$homeDir/.local/bin/claude --version")" = "1.0.0 (Claude Code)" ] || fail "the installed Claude Code does not run"
+  [ "$(clientRemote "$homeDir/.local/bin/claude+ --version")" = "1.0.0 (Claude Code)" ] || fail "claude+ does not run Claude Code"
+  clientRemote "$homeDir/.local/bin/codex+ --version" | grep -q '^codex-cli 1.0.0$' || fail "codex+ does not run Codex"
   [ "$(clientRemote "cat $homeDir/e2e-sites/t3-channel")" = nightly ] || fail "T3 Code was not installed from the nightly channel"
   grep -q '^t3code://pair$' "$work/pair-marker" || fail "no pair link was handed to the app"
   clientRemote "grep -x 'service install' $homeDir/e2e-sites/t3-calls.log && grep -x 'pair --label Relaybar' $homeDir/e2e-sites/t3-calls.log" > /dev/null || fail "the fake t3 did not see service install and pair"
   [ "$(clientRemote 'systemctl --user is-active t3code.service')" = active ] || fail "the T3 Code service is not active on the client"
   clientRemote "test -e $homeDir/.t3/fake-session && ! test -e $homeDir/.t3/fake-pending" || fail "the add did not wait for the link to be confirmed in T3 Code"
   grep -q 'e2e-session-1' "$work/client.json" || fail "the T3 Code session was not recorded"
-  clientRemote "grep -q 'exec \"\$HOME/.local/bin/claude\"' $homeDir/.local/bin/claude-all && grep -q 'exec \"\$HOME/.local/bin/codex\"' $homeDir/.local/bin/codex-all" || fail "claude-all and codex-all do not call the tools by their full path"
+  clientRemote "grep -q 'exec \"\$HOME/.local/bin/claude\"' $homeDir/.local/bin/claude+ && grep -q 'exec \"\$HOME/.local/bin/codex\" -c ' $homeDir/.local/bin/codex+" || fail "claude+ and codex+ do not call the tools by their full path"
+  clientRemote "grep -q CODEX_HOME $homeDir/.local/bin/codex+ || grep -q CLAUDE_CONFIG_DIR $homeDir/.local/bin/claude+" && fail "the launchers set a config folder"
+  [ -z "$(clientRemote "ls -d $homeDir/.claude-hub $homeDir/.codex-hub 2> /dev/null; true")" ] || fail "a hub folder was made on the client"
+  [ "$(clientRemote "cd $homeDir && sha256sum .claude/.credentials.json .claude/settings.json .codex/auth.json .codex/config.toml")" = "$loginsBefore" ] || fail "Keep Them changed a login or settings file"
   clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-after.json" || fail "T3 Code settings were not written on the client"
   python3 -I -c '
 import json, sys
@@ -166,26 +186,62 @@ found = data.get("providerInstances", {})
 if sorted(found) != ["claudeAgent_all_accounts", "codex_all_accounts"]:
     sys.exit("entries: %s" % sorted(found))
 home = sys.argv[2]
-for key, tool in (("claudeAgent_all_accounts", "claude"), ("codex_all_accounts", "codex")):
-    if found[key]["config"].get("binaryPath") != home + "/.local/bin/" + tool:
-        sys.exit("binaryPath of %s: %s" % (key, found[key]["config"]))
+want = {"claudeAgent_all_accounts": ("Claude+", home + "/.local/bin/claude"), "codex_all_accounts": ("Codex+", home + "/.local/bin/codex+")}
+for key, (name, binary) in want.items():
+    if found[key]["displayName"] != name or found[key]["config"] != {"binaryPath": binary}:
+        sys.exit("entry %s: %s" % (key, found[key]))
 ' "$work/settings-after.json" "$homeDir" || fail "the T3 Code entries on the client are wrong"
   grep -rqF "E2EFIXTURE" "$work" && fail "the pair token was written to a file on this Mac"
 
   swiftStep remove e2eRemovesTheClient
 
-  for f in .local/bin/claude .local/bin/codex .local/bin/t3 .local/bin/claude-all .local/bin/codex-all .local/share/claude .codex/packages .t3/runtime .config/systemd/user/t3code.service; do
+  for f in .local/bin/claude .local/bin/codex .local/bin/t3 .local/bin/claude+ .local/bin/codex+ .local/share/claude .codex/packages .t3/runtime .config/systemd/user/t3code.service; do
     [ -z "$(clientRemote "ls -d $homeDir/$f 2> /dev/null; true")" ] || fail "Remove left $f on the client"
   done
-  [ "$(clientRemote 'systemctl --user is-active t3code.service; true')" != active ] || fail "the T3 Code service is still active after Remove"
-  clientRemote "grep -x 'auth session revoke e2e-session-1' $homeDir/e2e-sites/t3-calls.log" > /dev/null || fail "Remove did not end the T3 Code link"
-  clientRemote "! test -e $homeDir/.t3/fake-session" || fail "the T3 Code session is still there after Remove"
-  clientRemote "grep -q 'Codex installer' $homeDir/.profile" && fail "Remove left the Codex block in ~/.profile"
-  for f in .claude .claude.json .codex/keep.txt .t3/userdata/threads.db .t3/userdata/settings.json; do
-    clientRemote "test -e $homeDir/$f" || fail "Remove deleted $f, which must stay"
-  done
-  out="$(clientRemote "find $homeDir -iname '*relaybar*' -not -name '*.relaybar-backup' 2> /dev/null; systemctl --user is-active relaybar-tunnel.service; true")"
-  [ "$out" = "inactive" ] || [ "$out" = "unknown" ] || fail "the client still has Relaybar files or an active tunnel: $out"
+  checkLoginsBack "after Keep Them"
+
+  replaceLogins=replace installStep addInstalls e2eAddsTheClientWithInstalls
+  [ -z "$(clientRemote "ls $homeDir/.claude/.credentials.json $homeDir/.codex/auth.json 2> /dev/null; true")" ] || fail "Replace left a login file in place"
+  [ -z "$(clientRemote "ls $homeDir/.local/bin/claude+ $homeDir/.local/bin/codex+ 2> /dev/null; true")" ] || fail "Replace made claude+ or codex+"
+  [ "$(clientRemote "stat -c %a $homeDir/.config/relaybar/kept")" = 700 ] || fail "the kept folder is not mode 0700"
+  [ "$(clientRemote "cd $homeDir/.config/relaybar/kept && sha256sum claude-credentials.json codex-auth.json | cut -d' ' -f1")" = "$(printf '%s\n' "$loginsBefore" | sed -n '1p;3p' | cut -d' ' -f1)" ] || fail "the kept logins are not the originals"
+  clientRemote "cat $homeDir/.claude/settings.json" > "$work/claude-settings.json"
+  clientRemote "cat $homeDir/.codex/config.toml" > "$work/codex-config.toml"
+  python3 -I -c '
+import json, sys, tomllib
+home = sys.argv[3]
+settings = json.load(open(sys.argv[1]))
+if settings.get("apiKeyHelper") != "/bin/cat \x27%s/.config/relaybar/access-key\x27" % home:
+    sys.exit("apiKeyHelper: %s" % settings.get("apiKeyHelper"))
+if settings.get("env") != {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "KEEP": "1"} or settings.get("model") != "sample-model":
+    sys.exit("settings: %s" % settings)
+config = tomllib.load(open(sys.argv[2], "rb"))
+provider = config["model_providers"]["relaybar"]
+if config.get("model_provider") != "relaybar" or config.get("model") != "sample" or config["mcp_servers"]["x"] != {"command": "x"}:
+    sys.exit("config: %s" % config)
+if provider["base_url"] != "http://127.0.0.1:8317/v1" or provider["auth"] != {"command": "/bin/cat", "args": [home + "/.config/relaybar/access-key"]}:
+    sys.exit("provider: %s" % provider)
+' "$work/claude-settings.json" "$work/codex-config.toml" "$homeDir" || fail "the Claude Code settings or Codex config on the client are wrong"
+  ! grep -qF -f "$work/access-key" "$work/claude-settings.json" "$work/codex-config.toml" || fail "the access key was written into the settings or the config"
+  helper="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["apiKeyHelper"])' "$work/claude-settings.json")"
+  cat > "$work/helper-headers.sh" <<EOF
+key=\$($helper)
+other=\$(cat "\$HOME/.config/relaybar/access-key")
+[ "\$key" = "\$other" ] || { echo "the helper command and the key file differ"; exit 0; }
+c() { curl -s -o /dev/null -w '%{http_code}' --max-time 5 "\$@" http://127.0.0.1:8317/v1/models; }
+echo "\$(c -H "x-api-key: \$key" -H "Authorization: Bearer \$key") \$(c -H "x-api-key: \$key") \$(c -H "Authorization: Bearer \$key") \$(c) \$(c -H "x-api-key: wrong" -H "Authorization: Bearer wrong")"
+EOF
+  out="$(clientRemote sh -s < "$work/helper-headers.sh")" || fail "cannot query the helper from the client"
+  case "$out" in "200 "*" "*" 401 401") ;; *) fail "the apiKeyHelper key was not accepted by the real helper (both headers, x-api-key only, bearer only, none, wrong: '$out')" ;; esac
+  headersResult="$out"
+  clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-replace.json"
+  python3 -I -c '
+import json, sys
+sys.exit(1 if json.load(open(sys.argv[1])).get("providerInstances") else 0)
+' "$work/settings-replace.json" || fail "Replace added T3 Code entries"
+  swiftStep remove e2eRemovesTheClient
+  checkLoginsBack "after Replace"
+  [ -z "$(clientRemote "ls -d $homeDir/.local/bin/claude+ $homeDir/.local/bin/codex+ 2> /dev/null; true")" ] || fail "Remove left claude+ or codex+"
   clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-restored.json"
   python3 -I -c '
 import json, sys
@@ -193,5 +249,5 @@ data = json.load(open(sys.argv[1]))
 sys.exit(1 if data.get("providerInstances") else 0)
 ' "$work/settings-restored.json" || fail "the T3 Code entries are still in the client settings"
   [ "$(remote "cat $homeDir/.ssh/authorized_keys")" = "$keysBefore" ] || fail "the hub authorized_keys is not as it was before the computer was added"
-  echo "  none of the three tools were on the client; fixture installers put them in ~/.local/bin, the T3 Code service ran, entries got full paths, the pair link reached the app, and Remove left only chats, ~/.claude, ~/.claude.json and other files of the user"
+  echo "  none of the three tools were on the client; Keep Them gave claude+ and codex+ and the Claude+ and Codex+ entries; Replace set apiKeyHelper and the Codex provider, the real helper answered '$headersResult' (both headers, x-api-key only, bearer only, none, wrong), and Remove put every login and settings file back byte for byte"
 }
