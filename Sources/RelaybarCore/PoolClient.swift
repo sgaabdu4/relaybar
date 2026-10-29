@@ -147,7 +147,7 @@ extension PoolJoin {
     public static func linuxClient(
         host: String, hub: String, hubLabel: String? = nil, accessKey: String, run: @escaping CommandRunner,
         progress: (String) -> Void = { _ in }, checkpoint: (PoolLinuxClient?) -> Void = { _ in }
-    ) throws -> PoolLinuxClient {
+    ) async throws -> PoolLinuxClient {
         let remote = PoolRemote(host: host, run: run)
         let hubName = try PoolHubPicker.validate(hub)
         let hubRemote = PoolRemote(host: hubName, run: run)

@@ -141,7 +141,7 @@ public struct PoolSetup: Sendable {
     }
 
     @discardableResult
-    public func useOnLinux(host typed: String, progress: @Sendable (String) -> Void = { _ in }) throws -> PoolLinuxClient {
+    public func useOnLinux(host typed: String, progress: @Sendable (String) -> Void = { _ in }) async throws -> PoolLinuxClient {
         guard var state = PoolState.load(env.paths) else { throw PoolSetupError.notCombining }
         guard let hub = state.tunnelDestination else { throw PoolSetupError.hubIsThisMac }
         guard let access = accessKey() else { throw PoolSetupError.accessKeyMissing }
@@ -153,7 +153,7 @@ public struct PoolSetup: Sendable {
             try state.save(env.paths)
         }
         let paths = env.paths
-        let client = try PoolJoin.linuxClient(
+        let client = try await PoolJoin.linuxClient(
             host: host, hub: hub, hubLabel: state.ssh, accessKey: access, run: env.run, progress: progress,
             checkpoint: { partial in
                 state.linuxClients.removeAll { $0.host == host }
