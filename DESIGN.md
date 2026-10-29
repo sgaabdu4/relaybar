@@ -27,7 +27,7 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Molecules: menu bar account group (logo, tag, stacked numbers); limit row (label, bar, value, reset).
 - Organisms: `AccountCard` (one account, clickable when it has an app to open); the status item image (`Render.row`).
 - Templates: the dropdown — account cards, then "Combine accounts…" or "All accounts ›" (subtitle "On homebox" or "On this Mac"), Customize, Add account, Open at login, Quit. The "All accounts" submenu has Claude and Codex section headers, one tickable row per account (states as a second line), "Change order…", a "Computers" section (one row per added computer, each with "Remove <host>…"), "Add a computer…" and "Stop combining…".
-- Pages: the dropdown and the add, rename, remove and make-desktop-app dialogs (standard `NSAlert`).
+- Pages: the dropdown and the add, rename, remove and make-desktop-app dialogs (standard `NSAlert`). "Add a computer" adds two tick boxes with a one-line secondary subtitle each (shown only when they apply, on by default) and a small secondary note; its password prompt is an `NSAlert` with a secure field. Its setup window is a checklist (`PoolAddPanel`): a green tick for done steps, a spinner on the current step, dim upcoming steps, and a sign-in row with "Waiting for you in the browser", Copy Link, Open Again and Cancel.
 
 ## Do's and Don'ts
 

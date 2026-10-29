@@ -17,7 +17,7 @@ Usage: scripts/pool-e2e.sh [--local] [--update] [--remote]
   no flag   the local real-binary cases: modelsNeedTheKey picksUpANewLogin prioritySticks sandboxBlocksHomeFiles
   --local   the local real-binary cases (when combined with other flags)
   --update  updateRules: the update script against a fixture release server
-  --remote  remoteInstall, tunnelComesBack, clientConnects and remoteStop against Linux containers in Docker
+  --remote  remoteInstall, tunnelComesBack, clientConnects, clientInstalls and remoteStop against Linux containers in Docker
 Set RELAYBAR_E2E_CACHE to keep the downloaded release between runs.
 EOF
 }
@@ -40,7 +40,7 @@ if [ $wantUpdate = 0 ] && [ $wantRemote = 0 ]; then
   wantLocal=1
 fi
 
-cd "$repo" && source scripts/pool-e2e-lib.sh || exit 1
+cd "$repo" && source scripts/pool-e2e-lib.sh && source scripts/pool-e2e-installs.sh || exit 1
 
 root="$(mktemp -d "${TMPDIR:-/tmp}/relaybar-pool-e2e.XXXXXX")"
 root="$(cd "$root" && pwd -P)"
@@ -985,6 +985,7 @@ if [ $wantRemote = 1 ]; then
   runCase remoteInstall
   runCase tunnelComesBack
   runCase clientConnects
+  runCase clientInstalls
   runCase remoteStop
 fi
 
