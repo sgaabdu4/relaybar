@@ -173,6 +173,17 @@ extension PoolJoinTests {
         #expect(!off.commands.contains { remoteScript($0).contains("t3.codes") })
     }
 
+    @Test func findsToolsThroughTheLoginShell() async throws {
+        let recorder = Recorder()
+        clientHost(recorder)
+        _ = try await add(recorder)
+        let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
+        #expect(probe.contains("[ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v $t\" </dev/null 2>/dev/null | grep '^/' | tail -n 1)"))
+        let order = try #require(probe.range(of: "-lc")).lowerBound
+        let needs = try #require(probe.range(of: "echo need:$t")).lowerBound
+        #expect(order < needs)
+    }
+
     @Test func leavesAnExistingT3CodeAlone() async throws {
         let running = "\nt3svc:yes\nt3exec:/home/laptop/.t3/runtime/versions/0.1.6/t3"
         let recorder = Recorder()
