@@ -146,6 +146,7 @@ Execution: One builder on Sonnet, slices in order; slice 1 starts by testing the
 
 ## Risks + recovery
 
+- An added computer's hub key can still ask the hub for a Unix socket forward (OpenSSH has no key option to refuse it; `permitlisten` covers TCP only) → it can only create a new socket file in the hub user's folders, never replace one, and nothing on the hub connects to such a file; commands, other ports and TCP listening are refused (checked in `clientConnects` and against the owner's hub).
 - Account bans → the risk text and two rules must be accepted before anything changes; cloud and away-from-home hubs are blocked.
 - T3 Code's secret store format is internal and could change → Relaybar writes it the way T3 Code Nightly 0.1.4 does; the journey checks a chat works; if T3 Code later stops reading it, chats through "all accounts" fail with a key error until Relaybar is updated. Open: the Codex account id field (journey).
 - The sign-in callback ports 54545 and 1455 are the ones the Claude and Codex logins use → if a `claude` or `codex` sign-in is running at the same time, Relaybar says so and waits.
