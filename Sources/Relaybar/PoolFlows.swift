@@ -262,6 +262,9 @@ extension PoolController {
         var password: String?
         var wrong = false
         var report = PoolTeardownReport()
+        let hub = state?.ssh ?? "the home computer"
+        var keysLeft: [String] = []
+        var leftAlone: Set<String> = []
         while true {
             let attempt = password
             report = await Task.detached {
@@ -269,6 +272,7 @@ extension PoolController {
             }.value
             UserDefaults.standard.removeObject(forKey: knownKey)
             clearCache()
+            keysLeft += report.keysLeft
             if let host = report.needsPassword {
                 panel.close()
                 password = PoolDialogs.restoreSleepPassword(host: host, wrong: wrong)
@@ -289,13 +293,34 @@ extension PoolController {
                     break
                 }
             }
+            var again = false
+            var forgot = false
+            for host in report.unreachableComputers where !leftAlone.contains(host) {
+                panel.close()
+                switch PoolDialogs.unreachable(host: host, reason: report.failed.first { $0.step == .linuxClient }?.reason ?? "") {
+                case .again: again = true
+                case .forget:
+                    let removal = await Task.detached { try? setup.forgetComputer(host: host) }.value
+                    if removal?.hubKeyProblem != nil { keysLeft.append(host) }
+                    forgot = true
+                case .leave: leftAlone.insert(host)
+                }
+            }
+            if again || forgot {
+                panel.showSetup(title: "Stopping", message: "Trying again")
+                continue
+            }
             break
         }
         panel.close()
         generation += 1
         clearCache()
-        let left = report.unreachable != nil
-        let others = report.failed.filter { entry in !(left && entry.step == PoolStep.remoteHelper) }
+        if joined, !keysLeft.isEmpty { showKeysLeft(hub: hub, names: keysLeft) }
+        let hubLeft = report.unreachable != nil
+        let computersLeft = !report.unreachableComputers.isEmpty
+        let others = report.failed.filter { entry in
+            !(hubLeft && entry.step == PoolStep.remoteHelper) && !(computersLeft && entry.step == PoolStep.linuxClient)
+        }
         guard !others.isEmpty else { return }
         let lines = others.map { "\(Self.words($0.step)): \($0.reason)" }.joined(separator: "\n")
         app.show("Some steps could not be undone", lines + "\n\nFix that, then choose Stop combining again to finish.")
@@ -345,10 +370,28 @@ extension PoolController {
         let panel = PoolProgressPanel()
         panel.showSetup(title: title, message: "Starting")
         let setup = PoolSetup(env: environment())
-        _ = await attempt(host: host, title: title, panel: panel) {
-            try await Task.detached { try setup.removeComputer(host: host) }.value
+        var removal: PoolClientRemoval?
+        while removal == nil {
+            do {
+                removal = try await Task.detached { try setup.removeComputer(host: host) }.value
+            } catch {
+                panel.close()
+                switch PoolDialogs.unreachable(host: host, reason: error.localizedDescription) {
+                case .again: panel.showSetup(title: title, message: "Trying again")
+                case .forget: removal = await Task.detached { (try? setup.forgetComputer(host: host)) ?? PoolClientRemoval() }.value
+                case .leave: return
+                }
+            }
         }
         panel.close()
+        if removal?.hubKeyProblem != nil { showKeysLeft(hub: state?.ssh ?? "the home computer", names: [host]) }
+    }
+
+    private func showKeysLeft(hub: String, names: [String]) {
+        app.show(
+            "Some keys are still on \(hub)",
+            "Relaybar could not reach \(hub) to remove the keys of \(names.joined(separator: ", ")). They can only open the helper port. Remove the lines that end in relaybar-client:<name> from ~/.ssh/authorized_keys on \(hub), or stop combining on the Mac that set it up."
+        )
     }
 
     private static func words(_ step: PoolStep) -> String {
