@@ -34,14 +34,25 @@ public enum PoolOrder {
             let target = effective.count - index
             return member.credential.priority == target ? nil : PoolPriority(name: member.credential.name, priority: target)
         }
-        let inUse = effective.first {
-            switch $0.state {
-            case .active, .unavailable: return true
-            case .paused, .signedOut: return false
-            }
-        }
+        let inUse = effective.first(where: serving)
         return PoolPlan(
             kind: kind, savedOrder: base.map { $0.credential.email.lowercased() }, effective: effective, inUse: inUse, changes: changes)
+    }
+
+    private static func serving(_ member: PoolMember) -> Bool {
+        switch member.state {
+        case .active, .unavailable: return true
+        case .paused, .signedOut: return false
+        }
+    }
+
+    public static func inUse(kind: PoolKind, members: [PoolMember]) -> PoolMember? {
+        members.filter { $0.credential.kind == kind }
+            .sorted {
+                $0.credential.priority != $1.credential.priority
+                    ? $0.credential.priority > $1.credential.priority : $0.credential.name < $1.credential.name
+            }
+            .first(where: serving)
     }
 
     public static func move(_ email: String, to index: Int, in order: [String]) -> [String] {
@@ -57,7 +68,7 @@ public enum PoolOrder {
 
 extension PoolSetup {
     public func updateOrder(members: [PoolMember]) async throws -> [PoolPlan] {
-        guard var state = PoolState.load(env.paths), let management else { return [] }
+        guard var state = PoolState.load(env.paths), !state.joined, let management else { return [] }
         var plans: [PoolPlan] = []
         for kind in [PoolKind.claude, .codex] {
             let plan = PoolOrder.plan(kind: kind, members: members, saved: state.order[kind.rawValue] ?? [])

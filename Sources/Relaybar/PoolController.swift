@@ -121,10 +121,12 @@ final class PoolController: NSObject {
         statuses = [:]
         guard loaded else { return }
         let saved = state?.order ?? [:]
+        let joined = state?.joined == true
         var inUse: [PoolKind: String] = [:]
         for kind in [PoolKind.claude, .codex] {
             let plan = PoolOrder.plan(kind: kind, members: members, saved: saved[kind.rawValue] ?? [])
-            inUse[kind] = plan.inUse?.credential.email.lowercased()
+            let current = joined ? PoolOrder.inUse(kind: kind, members: members) : plan.inUse
+            inUse[kind] = current?.credential.email.lowercased()
         }
         for row in PoolAccounts.rows(accounts: inputs(), members: members) {
             switch row.state {
@@ -209,7 +211,14 @@ final class PoolController: NSObject {
             }
             menu.addItem(.separator())
             menu.addItem(action("Add an account…", #selector(addAnAccount)))
-            if !orderLists().isEmpty { menu.addItem(action("Change order…", #selector(changeOrder))) }
+            if !orderLists().isEmpty {
+                let order = action("Change order…", #selector(changeOrder))
+                if state?.joined == true {
+                    order.isEnabled = false
+                    subtitle(order, "Set on the Mac that set up \(hostName).")
+                }
+                menu.addItem(order)
+            }
         } else {
             let item = NSMenuItem(title: reachable ? "Reading the helper…" : "Cannot reach \(hostName).", action: nil, keyEquivalent: "")
             item.isEnabled = false
