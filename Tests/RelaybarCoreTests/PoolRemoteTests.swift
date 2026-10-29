@@ -45,7 +45,8 @@ struct PoolRemoteTests {
         let install = try #require(scripts.first { $0.contains(" install ") })
         #expect(
             install
-                == "RELAYBAR_MAJOR=\"8\" sh \"$HOME/.local/share/relaybar/relaybar-helper.sh\" install \"$HOME/.local/share/relaybar-helper\"")
+                == "RELAYBAR_MAJOR=\"8\" sh \"$HOME/.local/share/relaybar/relaybar-helper.sh\" install \"$HOME/.local/share/relaybar-helper\""
+        )
         let order = [
             "relaybar-helper.sh\"; chmod", "config.yaml", "join.json", "relaybar-helper.service", " install ",
             "enable --now relaybar-helper-update.timer",
