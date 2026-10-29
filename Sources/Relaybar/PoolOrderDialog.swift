@@ -18,21 +18,30 @@ struct PoolOrderList {
 final class PoolOrderDialog: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private static let rowType = NSPasteboard.PasteboardType("com.relaybar.order-row")
     private var lists: [PoolOrderList]
+    private let live: [PoolOrderList]
     private let logos: [PoolKind: NSImage]
+    private var mode: PoolOrderMode
     private var current = 0
     private let table = NSTableView()
     private let scroll = NSScrollView()
+    private let note = PoolDialogs.label("", width: 384)
 
-    init(lists: [PoolOrderList], logos: [PoolKind: NSImage]) {
+    private static let autoNote = "New chats use the account whose weekly limit resets soonest, while it has room."
+    private static let manualNote = "Drag to change the order. The numbers show what is left."
+
+    init(lists: [PoolOrderList], live: [PoolOrderList], mode: PoolOrderMode, logos: [PoolKind: NSImage]) {
         self.lists = lists
+        self.live = live
+        self.mode = mode
         self.logos = logos
     }
 
-    func run() -> [PoolKind: [String]]? {
+    private var shown: [PoolOrderList] { mode == .automatic ? live : lists }
+
+    func run() -> (mode: PoolOrderMode, orders: [PoolKind: [String]])? {
         let alert = NSAlert()
-        alert.messageText = "Which account should new chats use first?"
-        alert.informativeText =
-            "New chats use the top account. When it has less than 10% left, new chats move to the next one. Open chats stay on their account."
+        alert.messageText = "How should new chats pick an account?"
+        alert.informativeText = "Open chats stay on their account."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         for (id, title, width) in [("order", "Order", 190), ("five", "5 hours", 64), ("seven", "7 days", 64), ("grip", "", 26)] {
@@ -62,6 +71,11 @@ final class PoolOrderDialog: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scroll.borderType = .lineBorder
         scroll.frame = NSRect(x: 0, y: 0, width: 384, height: 28 + visible * 28 + 2)
         var views: [NSView] = []
+        let how = NSSegmentedControl(
+            labels: ["Automatic", "Use my order"], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
+        how.selectedSegment = mode == .automatic ? 0 : 1
+        how.segmentDistribution = .fillEqually
+        views.append(how)
         if lists.count > 1 {
             let switcher = NSSegmentedControl(
                 labels: lists.map { $0.kind == .claude ? "Claude" : "Codex" }, trackingMode: .selectOne, target: self,
@@ -70,14 +84,21 @@ final class PoolOrderDialog: NSObject, NSTableViewDataSource, NSTableViewDelegat
             views.append(switcher)
         }
         views.append(scroll)
-        views.append(PoolDialogs.label("Drag to change the order. The numbers show what is left.", width: 384))
+        note.stringValue = mode == .automatic ? Self.autoNote : Self.manualNote
+        views.append(note)
         let stack = PoolDialogs.column(views, width: 384)
         scroll.heightAnchor.constraint(equalToConstant: scroll.frame.height).isActive = true
         PoolDialogs.fit(stack)
         alert.accessoryView = stack
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return Dictionary(uniqueKeysWithValues: lists.map { ($0.kind, $0.entries.map(\.email)) })
+        return (mode, Dictionary(uniqueKeysWithValues: lists.map { ($0.kind, $0.entries.map(\.email)) }))
+    }
+
+    @objc private func modeChanged(_ sender: NSSegmentedControl) {
+        mode = sender.selectedSegment == 0 ? .automatic : .manual
+        note.stringValue = mode == .automatic ? Self.autoNote : Self.manualNote
+        table.reloadData()
     }
 
     @objc private func switched(_ sender: NSSegmentedControl) {
@@ -86,21 +107,22 @@ final class PoolOrderDialog: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        lists[current].entries.count
+        shown[current].entries.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let entry = lists[current].entries[row]
+        let entry = shown[current].entries[row]
         switch tableColumn?.identifier.rawValue {
         case "order":
-            return OrderCell(number: row + 1, entry: entry, logo: logos[lists[current].kind] ?? NSImage())
+            return OrderCell(number: row + 1, entry: entry, logo: logos[shown[current].kind] ?? NSImage())
         case "five": return TextCell(entry.session, font: AccountCard.valueFont, color: .secondaryLabelColor)
         case "seven": return TextCell(entry.weekly, font: AccountCard.valueFont, color: .secondaryLabelColor)
-        default: return TextCell("≡", font: .systemFont(ofSize: 13), color: .tertiaryLabelColor)
+        default: return TextCell(mode == .manual ? "≡" : "", font: .systemFont(ofSize: 13), color: .tertiaryLabelColor)
         }
     }
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard mode == .manual else { return nil }
         let item = NSPasteboardItem()
         item.setString(String(row), forType: Self.rowType)
         return item
@@ -110,6 +132,7 @@ final class PoolOrderDialog: NSObject, NSTableViewDataSource, NSTableViewDelegat
         _ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
+        guard mode == .manual else { return [] }
         if dropOperation == .on { tableView.setDropRow(row, dropOperation: .above) }
         return .move
     }

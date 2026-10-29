@@ -146,7 +146,8 @@ final class PoolController: NSObject {
         let joined = state?.joined == true
         var inUse: [PoolKind: String] = [:]
         for kind in [PoolKind.claude, .codex] {
-            let plan = PoolOrder.plan(kind: kind, members: members, saved: saved[kind.rawValue] ?? [])
+            let plan = PoolOrder.plan(
+                kind: kind, members: members, saved: saved[kind.rawValue] ?? [], mode: state?.orderMode ?? .automatic)
             let current = joined ? PoolOrder.inUse(kind: kind, members: members) : plan.inUse
             inUse[kind] = current?.credential.email.lowercased()
         }
@@ -334,10 +335,11 @@ final class PoolController: NSObject {
         return item
     }
 
-    func orderLists() -> [PoolOrderList] {
+    func orderLists(live: Bool = false) -> [PoolOrderList] {
         let saved = state?.order ?? [:]
         return [PoolKind.claude, .codex].compactMap { kind in
-            let order = PoolOrder.plan(kind: kind, members: members, saved: saved[kind.rawValue] ?? []).savedOrder
+            let plan = PoolOrder.plan(kind: kind, members: members, saved: saved[kind.rawValue] ?? [], mode: live ? .automatic : .manual)
+            let order = live ? plan.effective.map { $0.credential.email.lowercased() } : plan.savedOrder
             let entries = order.compactMap { email -> PoolOrderEntry? in
                 guard let member = members.first(where: { $0.credential.kind == kind && $0.credential.email.lowercased() == email })
                 else { return nil }
