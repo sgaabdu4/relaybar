@@ -55,30 +55,70 @@ struct PoolConfigTests {
         #expect(PoolConflict.portInUse(8317).message.contains("8317"))
     }
 
-    @Test func codexHubConfigHasNoKey() {
-        let text = PoolConfig.codexHubConfig()
-        #expect(text.contains("model_provider = \"relaybar\""))
-        #expect(text.contains("wire_api = \"responses\""))
-        #expect(text.contains("requires_openai_auth = false"))
-        #expect(text.contains("supports_websockets = true"))
-        #expect(text.contains("base_url = \"http://127.0.0.1:8317/v1\""))
-        #expect(text.contains("command = \"/usr/bin/security\""))
-        #expect(text.contains("args = [\"find-generic-password\", \"-s\", \"Relaybar access key\", \"-w\"]"))
-        #expect(!text.contains("Bearer"))
-        #expect(!text.lowercased().contains("api_key"))
-        let linux = PoolConfig.codexHubConfig(keyCommand: ["/bin/cat", "/home/u/.config/relaybar/access-key"])
-        #expect(linux.contains("command = \"/bin/cat\""))
+    private func runLauncher(_ script: String, tool: String, arguments: [String], environment: [String: String] = [:]) throws -> (
+        output: [String], home: Fixture
+    ) {
+        let home = try Fixture()
+        try home.write(
+            "bin/\(tool)",
+            "#!/bin/sh\necho \"BASE=${ANTHROPIC_BASE_URL-unset}\"\necho \"TOKEN=${ANTHROPIC_AUTH_TOKEN-unset}\"\necho \"CLAUDE_DIR=${CLAUDE_CONFIG_DIR-unset}\"\necho \"CODEX_HOME=${CODEX_HOME-unset}\"\nfor a in \"$@\"; do echo \"ARG=$a\"; done\n"
+        )
+        try home.write("bin/\(tool)+", script)
+        for name in [tool, tool + "+"] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: home.root.appendingPathComponent("bin/\(name)").path)
+        }
+        let process = Process()
+        process.executableURL = home.root.appendingPathComponent("bin/\(tool)+")
+        process.arguments = arguments
+        var env = ["PATH": home.root.appendingPathComponent("bin").path + ":/usr/bin:/bin", "HOME": home.root.path]
+        env.merge(environment) { $1 }
+        process.environment = env
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        return (String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init), home)
     }
 
-    @Test func terminalCommandsReadTheKeyFromTheKeychain() {
-        let claude = PoolConfig.terminalCommand(claude: true)
-        #expect(claude.hasPrefix("#!/bin/sh\n"))
-        #expect(claude.contains("find-generic-password -s \"Relaybar access key\" -w"))
-        #expect(claude.contains("CLAUDE_CONFIG_DIR=\"$HOME/.claude-hub\""))
-        #expect(claude.contains("exec claude \"$@\""))
-        let codex = PoolConfig.terminalCommand(claude: false)
-        #expect(codex.contains("CODEX_HOME=\"$HOME/.codex-hub\" exec codex \"$@\""))
-        #expect(!codex.contains("find-generic-password"))
+    @Test func launchersSetTheProviderOnlyAtStart() throws {
+        let claudeScript = PoolConfig.claudePlus(keyCommand: "echo fixture-key")
+        #expect(!claudeScript.contains("CLAUDE_CONFIG_DIR") && !claudeScript.contains("claude-hub"))
+        let claude = try runLauncher(claudeScript, tool: "claude", arguments: ["--version"])
+        #expect(
+            claude.output == ["BASE=http://127.0.0.1:8317", "TOKEN=fixture-key", "CLAUDE_DIR=unset", "CODEX_HOME=unset", "ARG=--version"])
+        let written = try FileManager.default.subpathsOfDirectory(atPath: claude.home.root.path).sorted()
+        #expect(written == ["bin", "bin/claude", "bin/claude+"])
+        let keychain = PoolConfig.claudePlus()
+        #expect(keychain.contains("key=$(/usr/bin/security find-generic-password -s \"Relaybar access key\" -w)"))
+        #expect(keychain.contains("exec claude \"$@\""))
+
+        let codexScript = PoolConfig.codexPlus()
+        #expect(!codexScript.contains("CODEX_HOME") && !codexScript.contains("codex-hub") && !codexScript.contains("Bearer"))
+        let codex = try runLauncher(
+            codexScript, tool: "codex", arguments: ["app-server", "--listen", "stdio"], environment: ["CODEX_HOME": "/t3/own"])
+        let expected = [
+            "model_provider=\"relaybar\"", "model_providers.relaybar.name=\"All accounts\"",
+            "model_providers.relaybar.base_url=\"http://127.0.0.1:8317/v1\"", "model_providers.relaybar.wire_api=\"responses\"",
+            "model_providers.relaybar.requires_openai_auth=false", "model_providers.relaybar.supports_websockets=true",
+            "model_providers.relaybar.auth.command=\"/usr/bin/security\"",
+            "model_providers.relaybar.auth.args=[\"find-generic-password\",\"-s\",\"Relaybar access key\",\"-w\"]",
+        ]
+        #expect(Array(codex.output.prefix(4)) == ["BASE=unset", "TOKEN=unset", "CLAUDE_DIR=unset", "CODEX_HOME=/t3/own"])
+        #expect(
+            Array(codex.output.dropFirst(4)) == expected.flatMap { ["ARG=-c", "ARG=\($0)"] } + [
+                "ARG=app-server", "ARG=--listen", "ARG=stdio",
+            ])
+        #expect(try FileManager.default.subpathsOfDirectory(atPath: codex.home.root.path).sorted() == ["bin", "bin/codex", "bin/codex+"])
+
+        let linux = PoolConfig.codexPlus(
+            keyCommand: ["/bin/cat", "/home/sam/.config/relaybar/access-key"], binary: "/home/sam/.local/bin/codex")
+        #expect(linux.contains("model_providers.relaybar.auth.command=\"/bin/cat\""))
+        #expect(linux.contains("model_providers.relaybar.auth.args=[\"/home/sam/.config/relaybar/access-key\"]"))
+        #expect(linux.contains("exec \"/home/sam/.local/bin/codex\" -c"))
+        #expect(!linux.contains("fixture-key"))
     }
 
     @Test func keychainWritesGoThroughStandardInput() {

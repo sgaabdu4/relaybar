@@ -202,3 +202,8 @@ extension Harness {
         }
     }
 }
+
+extension PoolPaths {
+    var claudeHub: URL { home.appendingPathComponent(".claude-hub") }
+    var codexHub: URL { home.appendingPathComponent(".codex-hub") }
+}

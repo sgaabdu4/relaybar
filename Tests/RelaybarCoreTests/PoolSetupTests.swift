@@ -44,11 +44,11 @@ struct PoolSetupTests {
         #expect(state.runsOnThisMac)
         #expect(
             state.steps == [
-                .keychainAccessKey, .keychainManagementSecret, .helperFolder, .helperAgent, .updateAgent, .hubFolders, .terminalCommands,
+                .keychainAccessKey, .keychainManagementSecret, .helperFolder, .helperAgent, .updateAgent, .terminalCommands,
                 .t3Entries, .t3Default, .t3UsageSource,
             ])
         #expect(state.previousSelection == #"{"instanceId":"claudeAgent","model":"m"}"#)
-        #expect(state.hubFolders == [".claude-hub", ".codex-hub"])
+        #expect(state.hubFolders.isEmpty)
         #expect(!state.defaultKept)
         #expect(state.usageSourceAdded)
         let config = try String(contentsOf: harness.paths.config, encoding: .utf8)
@@ -59,8 +59,10 @@ struct PoolSetupTests {
         #expect(FileManager.default.fileExists(atPath: harness.paths.sandbox.path))
         #expect(FileManager.default.fileExists(atPath: harness.paths.agent(Pool.helperLabel).path))
         #expect(FileManager.default.fileExists(atPath: harness.paths.agent(Pool.updateLabel).path))
-        #expect(PoolFile.isOwned(harness.paths.codexConfig))
-        #expect(try FileManager.default.attributesOfItem(atPath: harness.paths.claudeAll.path)[.posixPermissions] as? Int == 0o755)
+        for launcher in [harness.paths.claudePlus, harness.paths.codexPlus] {
+            #expect(PoolFile.isOwned(launcher))
+            #expect(try FileManager.default.attributesOfItem(atPath: launcher.path)[.posixPermissions] as? Int == 0o755)
+        }
         let settings = try harness.home.json(t3Path)
         #expect((settings["defaultModelSelection"] as? [String: String])?["instanceId"] == "claudeAgent_all_accounts")
         #expect((settings["usageLimitSources"] as? [String: Any])?.keys.sorted() == ["relaybar"])
@@ -83,8 +85,9 @@ struct PoolSetupTests {
         #expect((settings["providerInstances"] as? [String: Any])?.isEmpty == true)
         #expect(settings["theme"] as? String == "dark")
         #expect(!FileManager.default.fileExists(atPath: harness.paths.helper.path))
-        #expect(!FileManager.default.fileExists(atPath: harness.paths.claudeAll.path))
-        #expect(Set(harness.trashed.urls.map(\.lastPathComponent)) == [".claude-hub", ".codex-hub"])
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.claudePlus.path))
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.codexPlus.path))
+        #expect(harness.trashed.urls.isEmpty)
     }
 
     @Test func skipsT3WhenItIsNotInstalled() async throws {
@@ -281,16 +284,68 @@ struct PoolSetupTests {
         try await PoolSetup(env: harness.env(t3: false)).combineOnThisMac()
     }
 
-    @Test func doesNotRecordAHubFolderTheUserHad() async throws {
+    private func snapshot(_ harness: Harness, _ folders: [String]) throws -> [String: Data] {
+        var found: [String: Data] = [:]
+        for folder in folders {
+            let root = harness.home.root.appendingPathComponent(folder)
+            for path in (try? FileManager.default.subpathsOfDirectory(atPath: root.path)) ?? [] {
+                found["\(folder)/\(path)"] = try? Data(contentsOf: root.appendingPathComponent(path))
+            }
+        }
+        return found
+    }
+
+    @Test func usesYourOwnFolders() async throws {
         let harness = try seeded()
         helperLifecycle(harness)
-        try harness.home.folder(".claude-hub")
+        try harness.home.write(".claude/settings.json", #"{"model":"sample"}"#)
+        try harness.home.write(".claude/.credentials.json", #"{"claudeAiOauth":{}}"#)
+        try harness.home.write(".claude/rules/style.md", "style")
+        try harness.home.write(".codex/config.toml", "model = \"sample\"\n")
+        try harness.home.write(".codex/auth.json", #"{"tokens":{}}"#)
+        let before = try snapshot(harness, [".claude", ".codex"])
         let setup = PoolSetup(env: harness.env())
         try await setup.combineOnThisMac()
-        #expect(PoolState.load(harness.paths)?.hubFolders == [".codex-hub"])
+        let state = try #require(PoolState.load(harness.paths))
+        #expect(state.hubFolders.isEmpty && !state.steps.contains(.hubFolders))
+        for hub in [".claude-hub", ".codex-hub"] {
+            #expect(!FileManager.default.fileExists(atPath: harness.home.root.appendingPathComponent(hub).path))
+        }
+        #expect(try snapshot(harness, [".claude", ".codex"]) == before)
+        #expect(try String(contentsOf: harness.paths.claudePlus, encoding: .utf8) == PoolConfig.claudePlus())
+        #expect(try String(contentsOf: harness.paths.codexPlus, encoding: .utf8) == PoolConfig.codexPlus())
+        let instances = try #require(try harness.home.json(t3Path)["providerInstances"] as? [String: [String: Any]])
+        let claude = try #require(instances["claudeAgent_all_accounts"])
+        let codex = try #require(instances["codex_all_accounts"])
+        #expect(claude["displayName"] as? String == "Claude+" && codex["displayName"] as? String == "Codex+")
+        #expect((claude["config"] as? [String: String]) == [:])
+        #expect((codex["config"] as? [String: String]) == ["binaryPath": harness.paths.codexPlus.path])
+        #expect(
+            (claude["environment"] as? [[String: Any]])?.map { $0["name"] as? String } == ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"])
+        for file in [harness.paths.claudePlus, harness.paths.codexPlus] {
+            #expect(try !String(contentsOf: file, encoding: .utf8).contains("Bearer"))
+        }
         #expect(setup.stop().finished)
-        #expect(harness.trashed.urls.map(\.lastPathComponent) == [".codex-hub"])
-        #expect(FileManager.default.fileExists(atPath: harness.paths.claudeHub.path))
+        #expect(try snapshot(harness, [".claude", ".codex"]) == before)
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.claudePlus.path))
+        #expect(harness.trashed.urls.isEmpty)
+    }
+
+    @Test func stopsAnEarlierBuildsSetup() async throws {
+        let harness = try seeded()
+        try harness.home.write(".local/bin/claude-all", "#!/bin/sh\n# \(PoolFile.marker).\n")
+        try harness.home.write(".local/bin/codex-all", "#!/bin/sh\n# \(PoolFile.marker).\n")
+        try harness.home.folder(".claude-hub")
+        try harness.home.folder(".codex-hub")
+        var state = PoolState()
+        state.steps = [.hubFolders, .terminalCommands]
+        state.hubFolders = [".claude-hub", ".codex-hub"]
+        try state.save(harness.paths)
+        let report = PoolSetup(env: harness.env()).stop()
+        #expect(report.finished)
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.claudeAll.path))
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.codexAll.path))
+        #expect(Set(harness.trashed.urls.map(\.lastPathComponent)) == [".claude-hub", ".codex-hub"])
     }
 
     @Test func readsTheKeysBackFromTheKeychain() throws {

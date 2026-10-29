@@ -83,39 +83,33 @@ public enum PoolConfig {
         """
     }
 
-    public static func codexHubConfig(keyCommand: [String]? = nil) -> String {
+    static func codexProvider(keyCommand: [String]?) -> [(String, String)] {
         let command = keyCommand ?? ["/usr/bin/security", "find-generic-password", "-s", Pool.accessService, "-w"]
-        let arguments = command.dropFirst().map { "\"\(escape($0))\"" }.joined(separator: ", ")
-        return """
-            # \(PoolFile.marker).
-            model_provider = "relaybar"
-
-            [model_providers.relaybar]
-            name = "All accounts"
-            base_url = "http://127.0.0.1:\(Pool.port)/v1"
-            wire_api = "responses"
-            requires_openai_auth = false
-            supports_websockets = true
-
-            [model_providers.relaybar.auth]
-            command = "\(escape(command[0]))"
-            args = [\(arguments)]
-
-            """
+        let arguments = command.dropFirst().map { "\"\(escape($0))\"" }.joined(separator: ",")
+        return [
+            ("model_provider", "\"relaybar\""),
+            ("model_providers.relaybar.name", "\"All accounts\""),
+            ("model_providers.relaybar.base_url", "\"http://127.0.0.1:\(Pool.port)/v1\""),
+            ("model_providers.relaybar.wire_api", "\"responses\""),
+            ("model_providers.relaybar.requires_openai_auth", "false"),
+            ("model_providers.relaybar.supports_websockets", "true"),
+            ("model_providers.relaybar.auth.command", "\"\(escape(command[0]))\""),
+            ("model_providers.relaybar.auth.args", "[\(arguments)]"),
+        ]
     }
 
-    public static func terminalCommand(claude: Bool, keyCommand: String? = nil, binary: String? = nil) -> String {
+    public static func claudePlus(keyCommand: String? = nil, binary: String? = nil) -> String {
         let read = keyCommand ?? "/usr/bin/security find-generic-password -s \"\(Pool.accessService)\" -w"
-        let program = binary.map { "\"\($0)\"" } ?? (claude ? "claude" : "codex")
-        let launch =
-            claude
-            ? "CLAUDE_CONFIG_DIR=\"$HOME/.claude-hub\" ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(Pool.port)\" ANTHROPIC_AUTH_TOKEN=\"$key\" exec \(program) \"$@\""
-            : "CODEX_HOME=\"$HOME/.codex-hub\" exec \(program) \"$@\""
-        let key =
-            claude
-            ? "key=$(\(read)) || { echo \"Relaybar could not read its access key.\" >&2; exit 1; }\n"
-            : ""
-        return "#!/bin/sh\n# \(PoolFile.marker).\n\(key)\(launch)\n"
+        let program = binary.map { "\"\($0)\"" } ?? "claude"
+        return "#!/bin/sh\n# \(PoolFile.marker).\n"
+            + "key=$(\(read)) || { echo \"Relaybar could not read its access key.\" >&2; exit 1; }\n"
+            + "ANTHROPIC_BASE_URL=\"http://127.0.0.1:\(Pool.port)\" ANTHROPIC_AUTH_TOKEN=\"$key\" exec \(program) \"$@\"\n"
+    }
+
+    public static func codexPlus(keyCommand: [String]? = nil, binary: String? = nil) -> String {
+        let program = binary.map { "\"\($0)\"" } ?? "codex"
+        let overrides = codexProvider(keyCommand: keyCommand).map { "-c " + Shell.quote("\($0.0)=\($0.1)") }.joined(separator: " ")
+        return "#!/bin/sh\n# \(PoolFile.marker).\nexec \(program) \(overrides) \"$@\"\n"
     }
 
     static func escape(_ value: String) -> String {

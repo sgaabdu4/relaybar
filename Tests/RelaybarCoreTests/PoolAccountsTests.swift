@@ -84,7 +84,7 @@ struct PoolAccountsTests {
 
     @Test func offersNewAccounts() {
         let offers = PoolAccounts.offers(known: [ann.id], current: [ann, bob, cat])
-        #expect(offers.map(\.title) == ["Add Bob to Claude, all accounts?", "Add Cat to Codex, all accounts?"])
+        #expect(offers.map(\.title) == ["Add Bob to All accounts?", "Add Cat to All accounts?"])
         #expect(offers[0].addButton == "Add")
         #expect(offers[0].declineButton == "Not now")
         #expect(PoolAccounts.offers(known: [ann.id, bob.id, cat.id], current: [ann, bob, cat]).isEmpty)

@@ -57,8 +57,8 @@ enum PoolDialogs {
         return stopAlert(
             "Stop combining?",
             joined
-                ? "Relaybar removes Claude and Codex, all accounts, from T3 Code on this Mac. The home computer keeps the helper for your other computers."
-                : "Relaybar removes Claude and Codex, all accounts, from T3 Code and signs every account out of the helper. Your own accounts do not change."
+                ? "Relaybar removes Claude+ and Codex+ from T3 Code on this Mac. The home computer keeps the helper for your other computers."
+                : "Relaybar removes Claude+ and Codex+ from T3 Code and signs every account out of the helper. Your own accounts do not change."
                     + others,
             go: "Continue…", destructive: false)
     }
@@ -77,7 +77,7 @@ enum PoolDialogs {
         let note = client.map(PoolJoin.removalNote) ?? ""
         guard let client, !note.isEmpty else {
             return
-                "Relaybar removes claude-all, codex-all and the T3 Code entries from \(host), and its key from the home computer. Your accounts stay in the helper."
+                "Relaybar removes claude+, codex+ and the T3 Code entries from \(host), and its key from the home computer. Your accounts stay in the helper."
         }
         let unlink =
             client.t3Installed
@@ -106,8 +106,8 @@ enum PoolDialogs {
         alert.messageText = "Your accounts are combined on \(host ?? "this Mac")."
         let first =
             t3
-            ? "New chats in T3 Code now use Claude, all accounts."
-            : "Use the claude-all and codex-all commands in a terminal to use your combined accounts."
+            ? "New chats in T3 Code now use Claude+."
+            : "Use the claude+ and codex+ commands in a terminal to use your combined accounts."
         var text = first + (tailscale ? " It works on your home Wi-Fi." : t3 ? " T3 Code also shows what is left on each account." : "")
         if let note { text += "\n\n" + note }
         alert.informativeText = text
@@ -280,10 +280,10 @@ enum PoolDialogs {
             } else if result.notes.contains(.t3NotFound) {
                 paragraphs.append("T3 Code was already running there. Relaybar could not find it to link it, so it left it as it was.")
             } else if result.client.t3Entries {
-                paragraphs.append("T3 Code there now shows Claude, all accounts.")
+                paragraphs.append("T3 Code there now shows Claude+ and Codex+.")
             }
         }
-        paragraphs.append("In a terminal there, run claude-all or codex-all.")
+        paragraphs.append("In a terminal there, run claude+ or codex+.")
         if result.notes.contains(.tailscaleUnreachable) {
             paragraphs.append(
                 "T3 Code there listens on your home network, not on Tailscale, because this Mac could not reach \(host) through Tailscale. Use the same Tailscale account on both computers, then add it again."

@@ -77,14 +77,14 @@ extension T3SettingsTests {
 
     @Test func addsPoolEntriesWithSensitiveEnvironment() throws {
         let (home, settings) = try seeded()
-        try settings.addPoolEntries(accessKey: "k-123", claudeHome: "/h/.claude-hub", codexHome: "/h/.codex-hub", hex: "#32ade6")
+        try settings.addPoolEntries(accessKey: "k-123", hex: "#32ade6", codexBinary: "/h/.local/bin/codex+")
         let root = try home.json(settingsPath)
         let instances = try #require(root["providerInstances"] as? [String: [String: Any]])
         #expect(instances.keys.sorted() == ["claudeAgent_all_accounts", "claudeAgent_keep", "claudeAgent_old", "codex_all_accounts"])
         let claude = try #require(instances["claudeAgent_all_accounts"])
         #expect(claude["driver"] as? String == "claudeAgent")
-        #expect(claude["displayName"] as? String == "Claude, all accounts")
-        #expect((claude["config"] as? [String: String])?["homePath"] == "/h/.claude-hub")
+        #expect(claude["displayName"] as? String == "Claude+")
+        #expect((claude["config"] as? [String: String]) == [:])
         let environment = try #require(claude["environment"] as? [[String: Any]])
         #expect(environment[0]["name"] as? String == "ANTHROPIC_BASE_URL")
         #expect(environment[0]["value"] as? String == "http://127.0.0.1:8317")
@@ -94,10 +94,9 @@ extension T3SettingsTests {
         #expect(environment[1]["sensitive"] as? Bool == true)
         #expect(environment[1]["valueRedacted"] as? Bool == true)
         let codex = try #require(instances["codex_all_accounts"])
-        #expect(codex["displayName"] as? String == "Codex, all accounts")
+        #expect(codex["displayName"] as? String == "Codex+")
         let config = try #require(codex["config"] as? [String: String])
-        #expect(config["homePath"] == "/h/.codex-hub")
-        #expect(config["setupMode"] == "existing")
+        #expect(config == ["binaryPath": "/h/.local/bin/codex+"])
         let name = "provider-env-" + T3Settings.encode("claudeAgent_all_accounts") + "-" + T3Settings.encode("ANTHROPIC_AUTH_TOKEN")
         #expect(secretNames(home) == [name + ".bin"])
         let file = settings.secretFile(name)
@@ -112,7 +111,7 @@ extension T3SettingsTests {
 
     @Test func backupHasNoPoolKey() throws {
         let (home, settings) = try seeded()
-        try settings.addPoolEntries(accessKey: "plain-key-xyz", claudeHome: "/h/.claude-hub", codexHome: "/h/.codex-hub", hex: "#32ade6")
+        try settings.addPoolEntries(accessKey: "plain-key-xyz", hex: "#32ade6", codexBinary: "/h/.local/bin/codex+")
         _ = try settings.setPoolDefault()
         _ = try settings.addUsageSource(url: "http://127.0.0.1:8317", managementSecret: "plain-secret-xyz", alreadyAdded: false)
         for name in ["", ".relaybar-backup"] {
@@ -236,7 +235,7 @@ extension T3SettingsTests {
         let file = home.root.appendingPathComponent(settingsPath)
         #expect(throws: T3SettingsError.unreadable) { try settings.validate() }
         #expect(throws: T3SettingsError.unreadable) {
-            try settings.addPoolEntries(accessKey: "k", claudeHome: "/h/.claude-hub", codexHome: "/h/.codex-hub", hex: "#32ade6")
+            try settings.addPoolEntries(accessKey: "k", hex: "#32ade6", codexBinary: "/h/.local/bin/codex+")
         }
         #expect(throws: T3SettingsError.unreadable) { _ = try settings.setPoolDefault() }
         #expect(throws: T3SettingsError.unreadable) {
@@ -259,7 +258,7 @@ extension T3SettingsTests {
         let original = try String(contentsOf: file, encoding: .utf8)
         let flow = T3Flow()
         let settings = T3Settings(home: home.root, flow: flow)
-        try settings.addPoolEntries(accessKey: "k", claudeHome: "/h/.claude-hub", codexHome: "/h/.codex-hub", hex: "#32ade6")
+        try settings.addPoolEntries(accessKey: "k", hex: "#32ade6", codexBinary: "/h/.local/bin/codex+")
         _ = try settings.setPoolDefault()
         _ = try settings.addUsageSource(url: "u", managementSecret: "s", alreadyAdded: false)
         let backup = file.appendingPathExtension("relaybar-backup")

@@ -136,7 +136,9 @@ public enum PoolTeardown {
                 if FileManager.default.fileExists(atPath: folder.path) { try env.trash(folder) }
             }
         case .terminalCommands:
-            for file in [paths.claudeAll, paths.codexAll] where PoolFile.isOwned(file) { PoolFile.remove(file) }
+            for file in [paths.claudePlus, paths.codexPlus, paths.claudeAll, paths.codexAll] where PoolFile.isOwned(file) {
+                PoolFile.remove(file)
+            }
         case .t3Entries: try env.t3.removePoolEntries()
         case .t3UsageSource: try env.t3.removeUsageSource()
         case .t3Default:

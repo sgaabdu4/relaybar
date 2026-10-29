@@ -44,7 +44,6 @@ public enum PoolKind: String, Codable, Sendable {
     case claude
     case codex
 
-    public var allAccountsName: String { self == .claude ? Pool.claudeName : Pool.codexName }
     public var callbackPort: UInt16 { self == .claude ? 54545 : 1455 }
     public var callbackPath: String { self == .claude ? "/callback" : "/auth/callback" }
 }

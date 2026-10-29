@@ -62,7 +62,7 @@ struct PoolTeardownTests {
             #"{"defaultModelSelection": {"instanceId": "codex", "model": "m"}, "favorites": [{"provider": "claudeAgent", "model": "cm"}], "providerInstances": {}}"#
         )
         try t3.addPoolEntries(
-            accessKey: "k", claudeHome: harness.paths.claudeHub.path, codexHome: harness.paths.codexHub.path, hex: "#32ade6")
+            accessKey: "k", hex: "#32ade6")
         guard case .set(let previous) = try t3.setPoolDefault() else {
             Issue.record("the default did not change")
             return

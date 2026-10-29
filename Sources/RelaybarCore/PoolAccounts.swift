@@ -91,7 +91,7 @@ public enum PoolAccounts {
 
     public static func offers(known: Set<String>, current: [PoolAccountInput]) -> [PoolAccountOffer] {
         current.filter { !known.contains($0.id) }.map {
-            PoolAccountOffer(account: $0, title: "Add \($0.name) to \($0.kind.allAccountsName)?")
+            PoolAccountOffer(account: $0, title: "Add \($0.name) to All accounts?")
         }
     }
 }

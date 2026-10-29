@@ -123,27 +123,29 @@ extension PoolJoinTests {
         clientHost(recorder, host)
         _ = try await add(recorder)
         let launchers = recorder.commands.filter {
-            remoteScript($0).contains(".local/bin/claude-all") || remoteScript($0).contains(".local/bin/codex-all")
+            remoteScript($0).contains(".local/bin/claude+") || remoteScript($0).contains(".local/bin/codex+")
         }
-        let claude = try #require(launchers.first { remoteScript($0).contains("claude-all") })
-        let codex = try #require(launchers.first { remoteScript($0).contains("codex-all") })
+        let claude = try #require(launchers.first { remoteScript($0).contains("claude+") })
+        let codex = try #require(launchers.first { remoteScript($0).contains("codex+") })
         #expect(String(decoding: claude.stdin ?? Data(), as: UTF8.self).contains("exec \"$HOME/.local/bin/claude\" \"$@\""))
-        #expect(String(decoding: codex.stdin ?? Data(), as: UTF8.self).contains("exec \"$HOME/.local/bin/codex\" \"$@\""))
+        #expect(String(decoding: codex.stdin ?? Data(), as: UTF8.self).contains("exec \"$HOME/.local/bin/codex\" -c "))
         let push = try #require(onLaptop(recorder).last { remoteScript($0).contains("relaybar-new") })
         let settings = try #require(try JSONSerialization.jsonObject(with: push.stdin ?? Data()) as? [String: Any])
         let instances = try #require(settings["providerInstances"] as? [String: [String: Any]])
         #expect((instances["claudeAgent_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/home/sam/.local/bin/claude")
-        #expect((instances["codex_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/home/sam/.local/bin/codex")
+        #expect((instances["codex_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/home/sam/.local/bin/codex+")
         let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
         #expect(probe.contains("PATH=\"$HOME/.local/bin:$PATH\" command -v $t"))
 
         let plain = Recorder()
         clientHost(plain, FakeClientHost(probe: FakeClientHost.probe + "\nt3:yes", settings: t3File))
         _ = try await add(plain)
-        let bare = try #require(plain.commands.first { remoteScript($0).contains("claude-all") && $0.stdin != nil })
+        let bare = try #require(plain.commands.first { remoteScript($0).contains("claude+") && $0.stdin != nil })
         #expect(String(decoding: bare.stdin ?? Data(), as: UTF8.self).contains("exec claude \"$@\""))
         let bareSettings = try #require(plain.commands.last { remoteScript($0).contains("relaybar-new") })
-        #expect(!String(decoding: bareSettings.stdin ?? Data(), as: UTF8.self).contains("binaryPath"))
+        let bareRoot = try #require(try JSONSerialization.jsonObject(with: bareSettings.stdin ?? Data()) as? [String: Any])
+        let bareInstances = try #require(bareRoot["providerInstances"] as? [String: [String: Any]])
+        #expect((bareInstances["claudeAgent_all_accounts"]?["config"] as? [String: String]) == [:])
     }
 
     @Test func installsT3CodeOnTheMacsChannel() async throws {
@@ -231,15 +233,15 @@ extension PoolJoinTests {
         let found = "\npath:claude:/home/sam/.nvm/bin/claude\npath:codex:/opt/tools/bin/codex\nt3:yes"
         clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + found, settings: t3File))
         _ = try await add(recorder)
-        let claude = try #require(recorder.commands.first { remoteScript($0).contains("claude-all") && $0.stdin != nil })
-        let codex = try #require(recorder.commands.first { remoteScript($0).contains("codex-all") && $0.stdin != nil })
+        let claude = try #require(recorder.commands.first { remoteScript($0).contains("claude+") && $0.stdin != nil })
+        let codex = try #require(recorder.commands.first { remoteScript($0).contains("codex+") && $0.stdin != nil })
         #expect(String(decoding: claude.stdin ?? Data(), as: UTF8.self).contains("exec \"/home/sam/.nvm/bin/claude\" \"$@\""))
-        #expect(String(decoding: codex.stdin ?? Data(), as: UTF8.self).contains("exec \"/opt/tools/bin/codex\" \"$@\""))
+        #expect(String(decoding: codex.stdin ?? Data(), as: UTF8.self).contains("exec \"/opt/tools/bin/codex\" -c "))
         let push = try #require(onLaptop(recorder).last { remoteScript($0).contains("relaybar-new") })
         let settings = try #require(try JSONSerialization.jsonObject(with: push.stdin ?? Data()) as? [String: Any])
         let instances = try #require(settings["providerInstances"] as? [String: [String: Any]])
         #expect((instances["claudeAgent_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/home/sam/.nvm/bin/claude")
-        #expect((instances["codex_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/opt/tools/bin/codex")
+        #expect((instances["codex_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/home/sam/.local/bin/codex+")
         let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
         #expect(probe.contains("elif [ -x \"$p\" ]; then echo path:$t:$p; fi"))
 
@@ -247,7 +249,7 @@ extension PoolJoinTests {
         let bad = "\npath:claude:/home/sam/a b/claude\npath:codex:/home/sam/$(x)/codex\nt3:yes"
         clientHost(unsafe, FakeClientHost(probe: FakeClientHost.probe + bad, settings: t3File))
         _ = try await add(unsafe)
-        let bare = try #require(unsafe.commands.first { remoteScript($0).contains("claude-all") && $0.stdin != nil })
+        let bare = try #require(unsafe.commands.first { remoteScript($0).contains("claude+") && $0.stdin != nil })
         #expect(String(decoding: bare.stdin ?? Data(), as: UTF8.self).contains("exec claude \"$@\""))
 
         let pairing = Recorder()
@@ -842,6 +844,23 @@ extension PoolJoinTests {
             remoteScript(command).contains("echo linger:stays") ? CommandResult() : (host.answer(command) ?? CommandResult())
         }
         #expect(try !PoolJoin.removeLinuxClient(client, hubRoutes: [], run: quiet.runner).lingerStays)
+    }
+
+    @Test func removesAnEarlierBuildsSetup() async throws {
+        let old = PoolLinuxClient(host: "laptop", folders: [".claude-hub", ".codex-hub", ".config/relaybar"], linger: false)
+        let recorder = Recorder()
+        try PoolJoin.removeLinuxClient(old, hubRoutes: [], run: recorder.runner)
+        let script = try #require(onLaptop(recorder).map(plainScript).last { $0.contains("relaybar-tunnel.service") })
+        #expect(script.contains("for f in claude+ codex+ claude-all codex-all; do"))
+        #expect(script.contains("f=\"$HOME/.codex-hub/config.toml\"; grep -q '\(PoolFile.marker)' \"$f\" 2>/dev/null && rm -f \"$f\""))
+        for folder in [".claude-hub", ".codex-hub", ".config/relaybar"] {
+            #expect(script.contains("rmdir \"$HOME/\(folder)\" 2>/dev/null"))
+        }
+        let fresh = PoolLinuxClient(host: "laptop", folders: [".config/relaybar"])
+        let current = Recorder()
+        try PoolJoin.removeLinuxClient(fresh, hubRoutes: [], run: current.runner)
+        let text = try #require(onLaptop(current).map(plainScript).last { $0.contains("relaybar-tunnel.service") })
+        #expect(!text.contains("rmdir \"$HOME/.claude-hub\""))
     }
 
     @Test func neverRemovesTailscale() async throws {

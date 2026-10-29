@@ -204,7 +204,7 @@ final class PoolController: NSObject {
         subtitle(
             item,
             T3Code.isInstalled
-                ? "From \(offer.host). Adds them to T3 Code here." : "From \(offer.host). Adds claude-all and codex-all here.")
+                ? "From \(offer.host). Adds them to T3 Code here." : "From \(offer.host). Adds claude+ and codex+ here.")
         return [item, .separator()]
     }
 
