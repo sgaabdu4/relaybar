@@ -7,6 +7,8 @@ releaseVersion=8.0.44
 githubDownload=https://github.com/router-for-me/CLIProxyAPI/releases/download
 cache="${RELAYBAR_E2E_CACHE:-${TMPDIR:-/tmp}/relaybar-pool-e2e-cache}"
 containerName=rb-pool-e2e
+clientName=rb-pool-e2e-client
+homeDir=/home/homeuser
 imageTag=relaybar-pool-linux
 
 usage() {
@@ -15,7 +17,7 @@ Usage: scripts/pool-e2e.sh [--local] [--update] [--remote]
   no flag   the local real-binary cases: modelsNeedTheKey picksUpANewLogin prioritySticks sandboxBlocksHomeFiles
   --local   the local real-binary cases (when combined with other flags)
   --update  updateRules: the update script against a fixture release server
-  --remote  remoteInstall, tunnelComesBack and remoteStop against a Linux container in Docker
+  --remote  remoteInstall, tunnelComesBack, clientConnects and remoteStop against Linux containers in Docker
 Set RELAYBAR_E2E_CACHE to keep the downloaded release between runs.
 EOF
 }
@@ -67,7 +69,7 @@ cleanupAll() {
     [ -d "$dir" ] && stopTracked "$dir"
   done
   if [ -f "$root/docker-started" ]; then
-    docker rm -f "$containerName" > /dev/null 2>&1
+    docker rm -f "$containerName" "$clientName" > /dev/null 2>&1
   fi
   rm -rf "$root"
 }
@@ -661,49 +663,64 @@ EOF
 
 sshOpts=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5)
 
-remote() { ssh "${sshOpts[@]}" -i "$sshKey" -p "$sshPort" homeuser@127.0.0.1 "$@"; }
+boxSsh() {
+  local port=$1
+  shift
+  ssh "${sshOpts[@]}" -i "$sshKey" -p "$port" homeuser@127.0.0.1 "$@"
+}
 
-remoteSetup() {
-  mkdir -p "$root/dockerctx"
-  docker rm -f "$containerName" > /dev/null 2>&1
-  docker build -q -t "$imageTag" -f "$dockerfile" "$root/dockerctx" > "$root/docker-build.log" 2>&1 || {
-    remoteError="docker build failed: $(cat "$root/docker-build.log")"
-    return 1
-  }
-  sshPort="$(freePort)"
-  docker run -d --user root --name "$containerName" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --security-opt label=disable \
-    -p "127.0.0.1:$sshPort:22" "$imageTag" > /dev/null 2> "$root/docker-run.log" || {
-    remoteError="docker run failed: $(cat "$root/docker-run.log")"
+remote() { boxSsh "$sshPort" "$@"; }
+
+clientRemote() { boxSsh "$clientPort" "$@"; }
+
+launchBox() {
+  local name=$1 port=$2 i state
+  docker rm -f "$name" > /dev/null 2>&1
+  docker run -d --user root --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --security-opt label=disable \
+    -p "127.0.0.1:$port:22" "$imageTag" > /dev/null 2> "$root/docker-run.log" || {
+    boxError="docker run failed: $(cat "$root/docker-run.log")"
     return 1
   }
   touch "$root/docker-started"
-  sshKey="$root/id_e2e"
-  ssh-keygen -q -t ed25519 -N '' -f "$sshKey" > /dev/null || {
-    remoteError="ssh-keygen failed"
-    return 1
-  }
-  local i state
   for ((i = 0; i < 90; i++)); do
-    state="$(docker exec "$containerName" systemctl is-system-running 2> /dev/null)"
+    state="$(docker exec "$name" systemctl is-system-running 2> /dev/null)"
     if [ "$state" = running ] || [ "$state" = degraded ]; then
       break
     fi
     sleep 1
   done
   if [ "$state" != running ] && [ "$state" != degraded ]; then
-    remoteError="systemd in the container did not finish starting (state: $state)"
+    boxError="systemd in the container did not finish starting (state: $state)"
     return 1
   fi
-  docker exec -i "$containerName" sh -c 'cat > /home/homeuser/.ssh/authorized_keys && chown homeuser:homeuser /home/homeuser/.ssh/authorized_keys && chmod 600 /home/homeuser/.ssh/authorized_keys' < "$sshKey.pub" || {
-    remoteError="cannot install the test public key"
+  docker exec -i "$name" sh -c 'cat > /home/homeuser/.ssh/authorized_keys && chown homeuser:homeuser /home/homeuser/.ssh/authorized_keys && chmod 600 /home/homeuser/.ssh/authorized_keys' < "$sshKey.pub" || {
+    boxError="cannot install the test public key"
     return 1
   }
   for ((i = 0; i < 60; i++)); do
-    remote true > /dev/null 2>&1 && return 0
+    boxSsh "$port" true > /dev/null 2>&1 && return 0
     sleep 1
   done
-  remoteError="ssh to the container did not come up"
+  boxError="ssh to the container did not come up"
   return 1
+}
+
+remoteSetup() {
+  mkdir -p "$root/dockerctx"
+  docker build -q -t "$imageTag" -f "$dockerfile" "$root/dockerctx" > "$root/docker-build.log" 2>&1 || {
+    remoteError="docker build failed: $(cat "$root/docker-build.log")"
+    return 1
+  }
+  sshPort="$(freePort)"
+  sshKey="$root/id_e2e"
+  ssh-keygen -q -t ed25519 -N '' -f "$sshKey" > /dev/null || {
+    remoteError="ssh-keygen failed"
+    return 1
+  }
+  launchBox "$containerName" "$sshPort" || {
+    remoteError="$boxError"
+    return 1
+  }
 }
 
 remoteInstall() {
@@ -896,6 +913,113 @@ remoteStop() {
   echo "  removal script stopped the helper, closed port 8317 and removed its files"
 }
 
+swiftStep() {
+  local step=$1 name=$2
+  (
+    cd "$repo" || exit 1
+    env RELAYBAR_E2E_STEP="$step" RELAYBAR_E2E_SSH_CONFIG="$work/ssh_config" RELAYBAR_E2E_CLIENT_FILE="$work/client.json" \
+      RELAYBAR_E2E_ACCESS_KEY_FILE="$work/access-key" \
+      perl -e 'alarm shift; exec @ARGV or exit 127' 900 swift test --skip-build --filter "$name"
+  ) > "$work/swift-$step.log" 2>&1 || fail "the $step step failed: $(cat "$work/swift-$step.log")"
+  grep -q "Test $name() passed" "$work/swift-$step.log" || fail "the $step test did not run: $(cat "$work/swift-$step.log")"
+}
+
+clientConnects() {
+  newCase
+  umask 077
+  local hubIp keysBefore out
+  [ -n "${remoteError:-}" ] && fail "$remoteError"
+  clientPort="$(freePort)"
+  launchBox "$clientName" "$clientPort" || fail "$boxError"
+  docker exec "$clientName" loginctl enable-linger homeuser || fail "cannot turn on lingering on the client"
+  hubIp="$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$containerName")"
+  [ -n "$hubIp" ] || fail "cannot read the address of the hub container"
+  cat > "$work/ssh_config" <<EOF
+Host e2e-hub
+  HostName 127.0.0.1
+  Port $sshPort
+Host e2e-client
+  HostName 127.0.0.1
+  Port $clientPort
+Host *
+  User homeuser
+  IdentityFile $sshKey
+  IdentitiesOnly yes
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  LogLevel ERROR
+EOF
+  cat > "$work/read-keys.sh" <<'EOF'
+sed -n '/api-keys:/{n;s/^ *- *"\(.*\)"$/\1/p;}' "$HOME/.local/share/relaybar-helper/config.yaml"
+EOF
+  remote sh -s < "$work/read-keys.sh" > "$work/access-key" || fail "cannot read the access key from the hub"
+  [ -s "$work/access-key" ] || fail "the hub has no access key"
+  cat > "$work/read-secret.sh" <<'EOF'
+sed -n 's/^ *secret-key: *"\(.*\)"$/\1/p' "$HOME/.local/share/relaybar-helper/config.yaml"
+EOF
+  remote sh -s < "$work/read-secret.sh" > "$work/mgmt-secret" || fail "cannot read the management secret from the hub"
+  [ -s "$work/mgmt-secret" ] || fail "the hub has no management secret"
+  keysBefore="$(remote "cat $homeDir/.ssh/authorized_keys")"
+  printf '%s' '{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}' > "$work/settings-before.json"
+  clientRemote "umask 077; mkdir -p $homeDir/.t3/userdata && cat > $homeDir/.t3/userdata/settings.json" < "$work/settings-before.json" || fail "cannot write the T3 Code fixture on the client"
+  (cd "$repo" && perl -e 'alarm shift; exec @ARGV or exit 127' 1800 swift build --build-tests) > "$work/swift-build.log" 2>&1 || fail "swift build failed: $(cat "$work/swift-build.log")"
+
+  swiftStep add e2eAddsTheClient
+
+  cat > "$work/probe-hub.sh" <<EOF
+k="\$HOME/.config/relaybar/hub_key"
+ssh -i "\$k" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="\$HOME/.config/relaybar/known_hosts" -o StrictHostKeyChecking=yes -o ConnectTimeout=5 homeuser@$hubIp id 2> /dev/null < /dev/null
+echo "rc=\$?"
+ssh -i "\$k" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="\$HOME/.config/relaybar/known_hosts" -o StrictHostKeyChecking=yes -o ConnectTimeout=5 -W 127.0.0.1:22 homeuser@$hubIp 2> /dev/null < /dev/null | head -c 20
+true
+EOF
+  out="$(clientRemote sh -s < "$work/probe-hub.sh")" || fail "cannot run the key checks on the client"
+  [ "$out" = "rc=1" ] || fail "the client key was not refused a command and another port on the hub (got '$out')"
+  cat > "$work/query.sh" <<'EOF'
+umask 077
+H=$(mktemp)
+trap 'rm -f "$H"' EXIT
+printf 'Authorization: Bearer %s\n' "$(cat "$HOME/.config/relaybar/access-key")" > "$H"
+plain=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8317/v1/models)
+keyed=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "@$H" http://127.0.0.1:8317/v1/models)
+echo "$plain $keyed"
+EOF
+  out="$(clientRemote sh -s < "$work/query.sh")" || fail "cannot query the helper from the client"
+  [ "$out" = "401 200" ] || fail "through the client tunnel models answered '$out' (without key, with key), expected '401 200'"
+  [ "$(remote "grep -c ' relaybar-client:e2e-client\$' $homeDir/.ssh/authorized_keys")" = 1 ] || fail "the hub does not hold exactly one tagged key line"
+  remote "grep ' relaybar-client:e2e-client\$' $homeDir/.ssh/authorized_keys" | grep -q '^restrict,port-forwarding,permitopen="127.0.0.1:8317",command="/bin/false" ssh-ed25519 ' || fail "the tagged key line does not carry the helper-port-only options"
+  [ "$(remote "cat $homeDir/.ssh/authorized_keys.relaybar-backup")" = "$keysBefore" ] || fail "the authorized_keys backup is not the file as it was"
+  clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-after.json" || fail "cannot read the T3 Code settings on the client"
+  python3 -I -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+ids = sorted(data.get("providerInstances", {}))
+if ids != ["claudeAgent_all_accounts", "codex_all_accounts"]:
+    sys.exit("entries: %s" % ids)
+if data["defaultModelSelection"]["instanceId"] != "claudeAgent_all_accounts":
+    sys.exit("default not switched")
+if "usageLimitSources" in data:
+    sys.exit("usage source added on the client")
+' "$work/settings-after.json" || fail "the client T3 Code settings are wrong"
+  out="$(clientRemote "stat -c %a $homeDir/.t3/userdata/secrets; for f in $homeDir/.t3/userdata/secrets/*.bin; do stat -c %a \"\$f\"; done")"
+  [ "$out" = "$(printf '700\n600')" ] || fail "the T3 Code secret folder or file has the wrong mode ($out)"
+  [ -z "$(clientRemote "grep -rlF -f /dev/stdin $homeDir 2> /dev/null; true" < "$work/mgmt-secret")" ] || fail "the management secret is on the client"
+  [ "$(clientRemote "stat -c %a $homeDir/.config/relaybar/hub_key")" = 600 ] || fail "the client key is not mode 0600"
+
+  swiftStep remove e2eRemovesTheClient
+
+  out="$(clientRemote "find $homeDir -iname '*relaybar*' -not -name '*.relaybar-backup' 2> /dev/null; ls -A $homeDir/.claude-hub $homeDir/.codex-hub $homeDir/.local/bin/claude-all $homeDir/.local/bin/codex-all $homeDir/.t3/userdata/secrets 2> /dev/null; systemctl --user is-active relaybar-tunnel.service; true")"
+  [ "$out" = "inactive" ] || [ "$out" = "unknown" ] || fail "the client still has Relaybar files or an active tunnel: $out"
+  clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-restored.json"
+  python3 -I -c '
+import json, sys
+sys.exit(0 if json.load(open(sys.argv[1])) == json.load(open(sys.argv[2])) else 1)
+' "$work/settings-restored.json" "$work/settings-before.json" || fail "the client T3 Code settings were not put back"
+  [ "$(clientRemote 'curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8317/v1/models; true')" = 000 ] || fail "port 8317 still answers on the client"
+  [ "$(remote "cat $homeDir/.ssh/authorized_keys")" = "$keysBefore" ] || fail "the hub authorized_keys is not as it was before the computer was added"
+  echo "  the client key was refused a command and another port, the client tunnel answered 401 then 200, T3 Code got both entries and no usage source, and removal left no trace"
+}
+
 tunnelLoop() {
   while :; do
     ssh -N -L "127.0.0.1:$1:127.0.0.1:8317" -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
@@ -946,6 +1070,7 @@ if [ $wantRemote = 1 ]; then
   fi
   runCase remoteInstall
   runCase tunnelComesBack
+  runCase clientConnects
   runCase remoteStop
 fi
 
