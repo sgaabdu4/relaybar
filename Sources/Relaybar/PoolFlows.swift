@@ -235,11 +235,15 @@ extension PoolController {
     @objc func changeOrder() {
         let lists = orderLists()
         guard !lists.isEmpty,
-            let result = PoolOrderDialog(lists: lists, logos: [.claude: app.claudeLogo, .codex: app.codexLogo]).run()
+            let result = PoolOrderDialog(
+                lists: lists, live: orderLists(live: true), mode: state?.orderMode ?? .automatic,
+                logos: [.claude: app.claudeLogo, .codex: app.codexLogo]
+            ).run()
         else { return }
         let setup = PoolSetup(env: environment())
         do {
-            for (kind, emails) in result { try setup.setOrder(kind: kind, emails: emails) }
+            try setup.setOrderMode(result.mode)
+            for (kind, emails) in result.orders { try setup.setOrder(kind: kind, emails: emails) }
         } catch {
             return app.show("Relaybar could not save the order", error.localizedDescription)
         }
