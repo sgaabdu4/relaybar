@@ -177,18 +177,28 @@ final class PoolAddPanel: NSObject, PoolWorkPanel {
         rows[stage]?.set(state)
         if stage == .tailscale {
             rows[stage]?.retitle(state == .yourTurn ? "Sign in to Tailscale for \(host)" : title(stage))
-            if state == .yourTurn { showWaiting() } else { hideSignIn() }
+            if state == .yourTurn { showWaiting("Waiting for you in the browser", copyable: true) } else { hideSignIn() }
+        }
+        if stage == .link {
+            rows[stage]?.retitle(state == .yourTurn ? "Confirm in T3 Code" : title(stage))
+            if state == .yourTurn { showWaiting("Waiting for you in T3 Code", copyable: false) } else { hideSignIn() }
         }
         resize()
     }
 
     func showSignIn(_ url: URL) {
         link = url
-        showWaiting()
+        showWaiting("Waiting for you in the browser", copyable: true)
         resize()
     }
 
-    private func showWaiting() {
+    func rememberPairLink(_ url: URL) {
+        link = url
+    }
+
+    private func showWaiting(_ text: String, copyable: Bool) {
+        waitText.stringValue = text
+        copy.isHidden = !copyable
         waiting.isHidden = false
         rule.isHidden = false
     }
