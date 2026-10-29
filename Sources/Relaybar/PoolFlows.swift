@@ -268,6 +268,7 @@ extension PoolController {
         let hub = state?.ssh ?? "the home computer"
         var keysLeft: [String] = []
         var lingerStays: [String] = []
+        var t3LinkStays: [String] = []
         var leftAlone: Set<String> = []
         while true {
             let attempt = password
@@ -278,6 +279,7 @@ extension PoolController {
             clearCache()
             keysLeft += report.keysLeft
             lingerStays += report.lingerStays
+            t3LinkStays += report.t3LinkStays
             if let host = report.needsPassword {
                 panel.close()
                 password = PoolDialogs.restoreSleepPassword(host: host, wrong: wrong)
@@ -322,6 +324,7 @@ extension PoolController {
         clearCache()
         if joined, !keysLeft.isEmpty { showKeysLeft(hub: hub, names: keysLeft) }
         await releaseLinger(lingerStays)
+        showT3LinkStays(t3LinkStays)
         let hubLeft = report.unreachable != nil
         let computersLeft = !report.unreachableComputers.isEmpty
         let others = report.failed.filter { entry in
@@ -369,7 +372,12 @@ extension PoolController {
             },
             pair: { link in
                 guard PoolJoin.isPairLink(link) else { return }
-                DispatchQueue.main.async { MainActor.assumeIsolated { _ = NSWorkspace.shared.open(link) } }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        panel.rememberPairLink(link)
+                        _ = NSWorkspace.shared.open(link)
+                    }
+                }
             },
             linkFailed: { name in await MainActor.run { PoolDialogs.linkFailed(host: name) } })
         var added: PoolAddResult?
@@ -414,6 +422,15 @@ extension PoolController {
         panel.close()
         if removal?.hubKeyProblem != nil { showKeysLeft(hub: state?.ssh ?? "the home computer", names: [host]) }
         if removal?.lingerStays == true { await releaseLinger([host]) }
+        if removal?.t3LinkStays == true { showT3LinkStays([host]) }
+    }
+
+    private func showT3LinkStays(_ hosts: [String]) {
+        guard !hosts.isEmpty else { return }
+        app.show(
+            "T3 Code still trusts this Mac at \(hosts.joined(separator: ", "))",
+            "Relaybar could not end the link between this Mac and T3 Code there. To end it, open T3 Code there, go to its sessions and revoke the one called Relaybar."
+        )
     }
 
     private func releaseLinger(_ hosts: [String]) async {

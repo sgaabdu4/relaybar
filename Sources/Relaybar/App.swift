@@ -528,6 +528,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.messageText = title
         alert.informativeText = text
         NSApp.activate()
+        alert.window.level = .floating
+        alert.window.orderFrontRegardless()
         alert.runModal()
     }
 

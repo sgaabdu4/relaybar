@@ -10,6 +10,8 @@ enum PoolRetry {
 enum PoolDialogs {
     private static func run(_ alert: NSAlert) -> NSApplication.ModalResponse {
         NSApp.activate()
+        alert.window.level = .floating
+        alert.window.orderFrontRegardless()
         return alert.runModal()
     }
 
