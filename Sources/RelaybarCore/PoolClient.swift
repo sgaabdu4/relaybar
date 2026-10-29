@@ -210,10 +210,12 @@ extension PoolJoin {
         let found = PoolClientProbe(lines: lines)
         let installT3 = options.t3Channel != nil && found.t3Path == nil && !found.t3Running
         let pairable = options.t3Channel != nil && (installT3 || (found.t3Running && found.t3Path != nil))
+        let replace = try await decideReplace(remote, lines: lines, hooks: hooks, progress: progress)
         var stages: [PoolAddStage] = [.letIn]
         if !found.missing.isEmpty { stages.append(.tools) }
         if options.tailscale { stages.append(.tailscale) }
         stages += [.route, .commands]
+        if replace { stages.append(.logins) }
         if installT3 { stages.append(.t3) }
         if pairable { stages.append(.link) }
         hooks.plan(stages)
@@ -302,17 +304,22 @@ extension PoolJoin {
             report(.route, .done)
 
             report(.commands, .working)
-            progress("Setting up claude+ and codex+ on \(host)")
+            progress(replace ? "Saving the key on \(host)" : "Setting up claude+ and codex+ on \(host)")
             let keyFile = "\(clientConfig)/access-key"
             try remote.execute("umask 077; cat > \"\(keyFile)\"", stdin: Data(accessKey.utf8))
-            try remote.execute("mkdir -p \"$HOME/.local/bin\"")
-            let launchers = [
-                ("claude+", PoolConfig.claudePlus(keyCommand: "cat \"\(keyFile)\"", binary: binary("claude"))),
-                ("codex+", PoolConfig.codexPlus(keyCommand: ["/bin/cat", home + "/.config/relaybar/access-key"], binary: binary("codex"))),
-            ]
-            for (name, text) in launchers {
-                try remote.execute(
-                    "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"", stdin: Data(text.utf8))
+            if !replace {
+                try remote.execute("mkdir -p \"$HOME/.local/bin\"")
+                let launchers = [
+                    ("claude+", PoolConfig.claudePlus(keyCommand: "cat \"\(keyFile)\"", binary: binary("claude"))),
+                    (
+                        "codex+",
+                        PoolConfig.codexPlus(keyCommand: ["/bin/cat", home + "/.config/relaybar/access-key"], binary: binary("codex"))
+                    ),
+                ]
+                for (name, text) in launchers {
+                    try remote.execute(
+                        "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"", stdin: Data(text.utf8))
+                }
             }
             let unit = try PoolTunnel.linuxUnit(
                 user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port,
@@ -339,6 +346,14 @@ extension PoolJoin {
             }
             report(.commands, .done)
 
+            if replace {
+                report(.logins, .working)
+                progress("Switching Claude Code and Codex on \(host) to your accounts")
+                try replaceLogins(remote, home: home, lines: lines, client: &client, checkpoint: checkpoint)
+                result.replaced = true
+                report(.logins, .done)
+            }
+
             var t3 = found.t3Path
             if installT3, let channel = options.t3Channel {
                 report(.t3, .working)
@@ -360,7 +375,7 @@ extension PoolJoin {
                 try waitForT3(remote)
                 hasT3 = true
             }
-            if hasT3 {
+            if hasT3, !replace {
                 progress("Adding the entries to T3 Code on \(host)")
                 try addT3Entries(
                     remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint,
@@ -593,7 +608,10 @@ extension PoolJoin {
         do { try removeT3(remote, client: client) } catch { problem = problem ?? error }
         let config = clientConfig
         var steps = [
+            PoolReplace.restoreScript(client.kept, createdFolders: client.createdFolders),
             "systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1",
+        ].compactMap { $0 }
+        steps += [
             "rm -f \"$HOME/.config/systemd/user/relaybar-tunnel.service\" \"\(config)/access-key\" \"\(config)/hub_key\" \"\(config)/hub_key.pub\" \"\(config)/known_hosts\"",
             "f=\"$HOME/.codex-hub/config.toml\"; grep -q '\(PoolFile.marker)' \"$f\" 2>/dev/null && rm -f \"$f\"",
             "for f in \((clientCommands + legacyClientCommands).joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; grep -q '\(PoolFile.marker)' \"$p\" 2>/dev/null && rm -f \"$p\"; done",

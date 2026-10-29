@@ -155,7 +155,8 @@ final class PoolAddPanel: NSObject, PoolWorkPanel {
         case .tools: "Installing Claude Code and Codex"
         case .tailscale: "Installing Tailscale"
         case .route: "Finding the way to \(hub)"
-        case .commands: "Setting up claude+ and codex+"
+        case .commands: "Saving the key and starting the connection"
+        case .logins: "Switching Claude Code and Codex to your accounts"
         case .t3: "Installing T3 Code"
         case .link: "Linking T3 Code to this Mac"
         }

@@ -50,12 +50,16 @@ public struct PoolAddResult: Equatable, Sendable {
     public var link = Link.notTried
     public var listening = Listening.unchanged
     public var notes: [Note] = []
+    public var replaced = false
 
-    public init(client: PoolLinuxClient, link: Link = .notTried, listening: Listening = .unchanged, notes: [Note] = []) {
+    public init(
+        client: PoolLinuxClient, link: Link = .notTried, listening: Listening = .unchanged, notes: [Note] = [], replaced: Bool = false
+    ) {
         self.client = client
         self.link = link
         self.listening = listening
         self.notes = notes
+        self.replaced = replaced
     }
 
     public subscript<Value>(dynamicMember path: KeyPath<PoolLinuxClient, Value>) -> Value { client[keyPath: path] }
@@ -67,6 +71,7 @@ public enum PoolAddStage: Int, CaseIterable, Sendable {
     case tailscale
     case route
     case commands
+    case logins
     case t3
     case link
 }
@@ -78,6 +83,7 @@ public struct PoolAddHooks: Sendable {
     public var signIn: @Sendable (URL) -> Void
     public var pair: @Sendable (URL) -> Void
     public var linkFailed: @Sendable (String) async -> Bool
+    public var replaceLogins: @Sendable (String) async -> Bool
     public var pause: @Sendable (TimeInterval) async -> Void
 
     public init(
@@ -87,6 +93,7 @@ public struct PoolAddHooks: Sendable {
         signIn: @escaping @Sendable (URL) -> Void = { _ in },
         pair: @escaping @Sendable (URL) -> Void = { _ in },
         linkFailed: @escaping @Sendable (String) async -> Bool = { _ in false },
+        replaceLogins: @escaping @Sendable (String) async -> Bool = { _ in false },
         pause: @escaping @Sendable (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
     ) {
         self.plan = plan
@@ -95,6 +102,7 @@ public struct PoolAddHooks: Sendable {
         self.signIn = signIn
         self.pair = pair
         self.linkFailed = linkFailed
+        self.replaceLogins = replaceLogins
         self.pause = pause
     }
 
@@ -136,6 +144,7 @@ extension PoolJoin {
         + "systemctl --user show t3code.service -p ExecStart 2>/dev/null | sed -n 's/^ExecStart={ path=\\([^ ;]*\\) ;.*/t3exec:\\1/p'; "
         + "for f in .profile .bashrc .zshrc .zprofile; do grep -q '>>> Codex installer >>>' \"$HOME/$f\" 2>/dev/null && echo profile:codex; done; "
         + "[ -e \"$HOME/.codex\" ] || echo codexdir:new; "
+        + PoolReplace.probe
 
     static let t3Runtime = "$HOME/.t3/userdata/server-runtime.json"
     static let t3Unit = "$HOME/.config/systemd/user/t3code.service"
@@ -346,6 +355,7 @@ extension PoolJoin {
             .filter(\.0).map(\.1)
         let stays = [(client.t3Installed, "Your chats"), (client.tailscaleInstalled, "Tailscale")].filter(\.0).map(\.1)
         var parts: [String] = []
+        if !client.kept.isEmpty { parts.append("Relaybar puts back the Claude Code and Codex logins and settings it set aside.") }
         if !goes.isEmpty { parts.append("Relaybar removes what it installed there: \(list(goes)).") }
         if !stays.isEmpty { parts.append("\(list(stays)) \(stays.count == 1 && stays[0] != "Your chats" ? "stays" : "stay").") }
         return parts.joined(separator: " ")
