@@ -846,6 +846,249 @@ extension PoolJoinTests {
         #expect(try !PoolJoin.removeLinuxClient(client, hubRoutes: [], run: quiet.runner).lingerStays)
     }
 
+    private func runHere(_ command: Command, home: URL) -> CommandResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", plainScript(command)]
+        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try? process.run()
+        input.fileHandleForWriting.write(command.stdin ?? Data())
+        try? input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return CommandResult(status: process.terminationStatus, output: String(decoding: data, as: UTF8.self))
+    }
+
+    private func fileBacked(_ host: FakeClientHost, home: Fixture) -> Recorder {
+        let recorder = Recorder()
+        recorder.respond = { [self] command in
+            guard command.executable == "/usr/bin/ssh" else { return host.answer(command) ?? CommandResult() }
+            let text = remoteScript(command)
+            let touches = [".claude/settings.json", ".claude/.credentials.json", ".codex/config.toml", ".codex/auth.json", "relaybar/kept"]
+            if !text.contains("for d in"), touches.contains(where: text.contains) || text.contains("mkdir -p \"$HOME/.claude\"") {
+                return runHere(command, home: home.root)
+            }
+            return host.answer(command) ?? CommandResult()
+        }
+        return recorder
+    }
+
+    private func tree(_ home: Fixture, _ folders: [String]) -> [String: Data] {
+        var found: [String: Data] = [:]
+        for folder in folders {
+            let root = home.root.appendingPathComponent(folder)
+            for path in (try? FileManager.default.subpathsOfDirectory(atPath: root.path)) ?? [] {
+                found["\(folder)/\(path)"] = try? Data(contentsOf: root.appendingPathComponent(path))
+            }
+        }
+        return found
+    }
+
+    private func seedLogins(_ home: Fixture) throws {
+        try home.write(
+            ".claude/settings.json",
+            "{\n  \"model\": \"sample-model\",\n  \"env\": {\"ANTHROPIC_AUTH_TOKEN\": \"old-token\", \"KEEP\": \"1\"}\n}\n")
+        try home.write(".claude/.credentials.json", "{\"claudeAiOauth\": {\"accessToken\": \"sample\"}}")
+        try home.write(".claude/rules/style.md", "style")
+        try home.write(
+            ".codex/config.toml",
+            "model = \"sample\"\nmodel_provider = \"other\"\n\n[mcp_servers.x]\ncommand = \"x\"\n\n[model_providers.relaybar]\nname = \"old\"\n\n[model_providers.relaybar.auth]\ncommand = \"old\"\n\n[projects.p]\ntrust = \"trusted\"\n"
+        )
+        try home.write(".codex/auth.json", "{\"tokens\": {}}")
+    }
+
+    @Test func replacesTheLoginsAfterAsking() async throws {
+        let home = try Fixture()
+        try seedLogins(home)
+        let host = FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex\nt3:yes", settings: t3File)
+        let recorder = fileBacked(host, home: home)
+        let asked = Asked()
+        let log = AddLog()
+        var hooks = log.hooks
+        hooks.replaceLogins = { name in
+            asked.add(false, name)
+            return true
+        }
+        let result = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: nil), hooks: hooks,
+            run: recorder.runner)
+        #expect(asked.calls.map(\.why) == ["laptop"])
+        #expect(result.replaced && !result.client.t3Entries)
+        #expect(log.plan == [.letIn, .route, .commands, .logins])
+        #expect(
+            result.client.kept == [
+                PoolKeptFile(path: ".claude/.credentials.json", existed: true, edited: false),
+                PoolKeptFile(path: ".codex/auth.json", existed: true, edited: false),
+                PoolKeptFile(path: ".claude/settings.json", existed: true, edited: true),
+                PoolKeptFile(path: ".codex/config.toml", existed: true, edited: true),
+            ])
+        let kept = home.root.appendingPathComponent(".config/relaybar/kept")
+        #expect(try FileManager.default.attributesOfItem(atPath: kept.path)[.posixPermissions] as? Int == 0o700)
+        #expect(try String(contentsOf: kept.appendingPathComponent("claude-credentials.json"), encoding: .utf8).contains("accessToken"))
+        #expect(try String(contentsOf: kept.appendingPathComponent("codex-auth.json"), encoding: .utf8) == "{\"tokens\": {}}")
+        #expect(!FileManager.default.fileExists(atPath: home.root.appendingPathComponent(".claude/.credentials.json").path))
+        #expect(!FileManager.default.fileExists(atPath: home.root.appendingPathComponent(".codex/auth.json").path))
+
+        let settings = try home.json(".claude/settings.json")
+        #expect(settings["model"] as? String == "sample-model")
+        #expect(settings["apiKeyHelper"] as? String == "/bin/cat '/home/sam/.config/relaybar/access-key'")
+        let env = try #require(settings["env"] as? [String: String])
+        #expect(env == ["ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", "KEEP": "1"])
+        let config = try String(contentsOf: home.root.appendingPathComponent(".codex/config.toml"), encoding: .utf8)
+        let sections = Self.sections(of: config)
+        #expect(sections[""]?["model_provider"] == "\"relaybar\"" && sections[""]?["model"] == "\"sample\"")
+        #expect(sections["mcp_servers.x"] == ["command": "\"x\""] && sections["projects.p"] == ["trust": "\"trusted\""])
+        #expect(sections["model_providers.relaybar"]?["base_url"] == "\"http://127.0.0.1:8317/v1\"")
+        #expect(sections["model_providers.relaybar"]?["name"] == "\"All accounts\"")
+        #expect(
+            sections["model_providers.relaybar.auth"] == ["command": "\"/bin/cat\"", "args": "[\"/home/sam/.config/relaybar/access-key\"]"])
+        #expect(config.components(separatedBy: "[model_providers.relaybar]").count == 2)
+        #expect(config.hasPrefix("model_provider = \"relaybar\"\n"))
+        for text in [
+            String(decoding: try Data(contentsOf: home.root.appendingPathComponent(".claude/settings.json")), as: UTF8.self), config,
+        ] {
+            #expect(!text.contains(secrets.accessKey))
+        }
+        for command in recorder.commands {
+            #expect(!([command.executable] + command.arguments).joined(separator: " ").contains(secrets.accessKey))
+        }
+        let scripts = recorder.commands.map(plainScript)
+        #expect(!scripts.contains { $0.contains(".local/bin/claude+") || $0.contains(".local/bin/codex+") })
+        #expect(!recorder.commands.contains { remoteScript($0).contains(".t3/userdata/settings.json") && $0.stdin != nil })
+        let backup = try #require(scripts.firstIndex { $0.contains("cp -p \"$f\" \"$HOME/.config/relaybar/kept/claude-settings.json\"") })
+        let write = try #require(scripts.firstIndex { $0.contains("mv \"$t\" \"$f\"") && $0.contains(".claude/settings.json") })
+        #expect(backup == write)
+
+        let bare = try Fixture()
+        let empty = fileBacked(FakeClientHost(probe: "new:.config/relaybar\nlinger:off"), home: bare)
+        let silent = Asked()
+        var quiet = AddLog().hooks
+        quiet.replaceLogins = { name in
+            silent.add(false, name)
+            return false
+        }
+        let fresh = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: quiet, run: empty.runner)
+        #expect(silent.calls.isEmpty && fresh.replaced)
+        #expect(
+            fresh.client.kept == [
+                PoolKeptFile(path: ".claude/settings.json", existed: false, edited: true),
+                PoolKeptFile(path: ".codex/config.toml", existed: false, edited: true),
+            ])
+        #expect(fresh.client.createdFolders == [])
+        #expect(try bare.json(".claude/settings.json")["apiKeyHelper"] != nil)
+    }
+
+    static func sections(of toml: String) -> [String: [String: String]] {
+        var result: [String: [String: String]] = ["": [:]]
+        var current = ""
+        for line in toml.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) where !line.isEmpty {
+            if line.hasPrefix("[") {
+                current = String(line.dropFirst().dropLast())
+                result[current] = result[current] ?? [:]
+            } else if let equals = line.firstIndex(of: "=") {
+                let key = line[..<equals].trimmingCharacters(in: .whitespaces)
+                result[current]?[key] = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return result
+    }
+
+    @Test func keepsTheLoginsWhenAsked() async throws {
+        let home = try Fixture()
+        try seedLogins(home)
+        let before = tree(home, [".claude", ".codex"])
+        let host = FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex\nt3:yes", settings: t3File)
+        let recorder = fileBacked(host, home: home)
+        let asked = Asked()
+        let log = AddLog()
+        var hooks = log.hooks
+        hooks.replaceLogins = { name in
+            asked.add(false, name)
+            return false
+        }
+        let result = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks, run: recorder.runner)
+        #expect(asked.calls.count == 1 && !result.replaced && result.client.kept.isEmpty)
+        #expect(log.plan == [.letIn, .route, .commands])
+        #expect(tree(home, [".claude", ".codex"]) == before)
+        #expect(!FileManager.default.fileExists(atPath: home.root.appendingPathComponent(".config/relaybar/kept").path))
+        let scripts = recorder.commands.map(plainScript)
+        #expect(scripts.contains { $0.contains(".local/bin/claude+") } && scripts.contains { $0.contains(".local/bin/codex+") })
+        #expect(result.client.t3Entries)
+
+        for (blocked, why) in [("link:.claude/settings.json", "a link"), ("login:claude", "bad json")] {
+            let other = try Fixture()
+            try seedLogins(other)
+            if why == "bad json" { try other.write(".claude/settings.json", "{ not json") }
+            let probe = "new:.config/relaybar\nlinger:off\nlogin:claude\n" + blocked
+            let guarded = fileBacked(FakeClientHost(probe: probe), home: other)
+            let silent = Asked()
+            var quiet = AddLog().hooks
+            quiet.replaceLogins = { name in
+                silent.add(true, name)
+                return true
+            }
+            let kept = try await PoolJoin.linuxClient(
+                host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: quiet, run: guarded.runner)
+            #expect(!kept.replaced, "\(why)")
+            #expect(silent.calls.isEmpty, "\(why)")
+            #expect(guarded.commands.map(plainScript).contains { $0.contains(".local/bin/claude+") }, "\(why)")
+        }
+    }
+
+    @Test func removePutsTheLoginsBack() async throws {
+        let home = try Fixture()
+        try seedLogins(home)
+        let before = tree(home, [".claude", ".codex"])
+        let host = FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex\nclaudedir:new")
+        let recorder = fileBacked(host, home: home)
+        var hooks = AddLog().hooks
+        hooks.replaceLogins = { _ in true }
+        let result = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks, run: recorder.runner)
+        #expect(tree(home, [".claude", ".codex"]) != before)
+        let restore = try #require(PoolReplace.restoreScript(result.client.kept, createdFolders: result.client.createdFolders))
+        let removal = Recorder()
+        removal.respond = { _ in CommandResult() }
+        try PoolJoin.removeLinuxClient(result.client, hubRoutes: [], run: removal.runner)
+        let undo = try #require(onLaptop(removal).map(plainScript).last { $0.contains("relaybar-tunnel.service") })
+        #expect(undo.hasPrefix(restore))
+        let command = try #require(onLaptop(removal).first { plainScript($0).hasPrefix(restore) })
+        let ran = runHere(command, home: home.root)
+        #expect(ran.status == 0)
+        #expect(tree(home, [".claude", ".codex"]) == before)
+        #expect(!FileManager.default.fileExists(atPath: home.root.appendingPathComponent(".config/relaybar/kept").path))
+
+        let fresh = try Fixture()
+        let created = fileBacked(FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nclaudedir:new\ncodexdir:new"), home: fresh)
+        let bare = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks, run: created.runner)
+        #expect(bare.client.createdFolders == [".claude", ".codex"])
+        let undoFresh = try #require(PoolReplace.restoreScript(bare.client.kept, createdFolders: bare.client.createdFolders))
+        let last = Recorder()
+        try PoolJoin.removeLinuxClient(bare.client, hubRoutes: [], run: last.runner)
+        let again = try #require(onLaptop(last).first { plainScript($0).hasPrefix(undoFresh) })
+        _ = runHere(again, home: fresh.root)
+        #expect(!FileManager.default.fileExists(atPath: fresh.root.appendingPathComponent(".claude").path))
+        #expect(!FileManager.default.fileExists(atPath: fresh.root.appendingPathComponent(".codex").path))
+
+        let edited = try Fixture()
+        try edited.write(".codex/auth.json", "new login")
+        let mine = PoolKeptFile(path: ".codex/auth.json", existed: true, edited: false)
+        let kept = edited.root.appendingPathComponent(".config/relaybar/kept/codex-auth.json")
+        try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("old login".utf8).write(to: kept)
+        let script = try #require(PoolReplace.restoreScript([mine], createdFolders: []))
+        _ = runHere(Command("/usr/bin/ssh", ["-o", "x", "laptop", "--", "sh -c " + Shell.quote(script)]), home: edited.root)
+        #expect(try String(contentsOf: edited.root.appendingPathComponent(".codex/auth.json"), encoding: .utf8) == "new login")
+    }
+
     @Test func removesAnEarlierBuildsSetup() async throws {
         let old = PoolLinuxClient(host: "laptop", folders: [".claude-hub", ".codex-hub", ".config/relaybar"], linger: false)
         let recorder = Recorder()

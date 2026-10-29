@@ -121,6 +121,24 @@ struct PoolConfigTests {
         #expect(!linux.contains("fixture-key"))
     }
 
+    @Test func settingsAndConfigPointAtTheHelper() throws {
+        let fresh = try #require(PoolReplace.claudeSettings(existing: nil, home: "/home/sam"))
+        let root = try #require(try JSONSerialization.jsonObject(with: fresh) as? [String: Any])
+        #expect(root["apiKeyHelper"] as? String == "/bin/cat '/home/sam/.config/relaybar/access-key'")
+        #expect((root["env"] as? [String: String]) == ["ANTHROPIC_BASE_URL": "http://127.0.0.1:8317"])
+        #expect(PoolReplace.claudeSettings(existing: Data("{ nope".utf8), home: "/home/sam") == nil)
+        #expect(PoolReplace.claudeSettings(existing: Data("[1]".utf8), home: "/home/sam") == nil)
+        let text = PoolReplace.codexConfig(existing: "", keyFile: "/home/sam/.config/relaybar/access-key")
+        #expect(text.hasPrefix("model_provider = \"relaybar\"\n\n[model_providers.relaybar]\nname = \"All accounts\"\n"))
+        #expect(!text.contains("Bearer") && text.hasSuffix("args = [\"/home/sam/.config/relaybar/access-key\"]\n"))
+        let dotted = PoolReplace.codexConfig(
+            existing:
+                "model_providers.relaybar.name = \"x\"\n  model_provider=\"y\"\nmodel_provider_extra = 1\n[a]\nmodel_provider = \"keep\"\n",
+            keyFile: "/k")
+        #expect(dotted.contains("model_provider_extra = 1") && dotted.contains("[a]\nmodel_provider = \"keep\""))
+        #expect(!dotted.contains("= \"x\"") && !dotted.contains("model_provider=\"y\""))
+    }
+
     @Test func keychainWritesGoThroughStandardInput() {
         let recorder = Recorder()
         let keychain = PoolKeychain(run: recorder.runner)

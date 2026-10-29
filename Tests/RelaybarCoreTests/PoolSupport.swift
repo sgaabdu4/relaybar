@@ -135,7 +135,7 @@ func plainScript(_ command: Command) -> String {
 struct FakeClientHost: Sendable {
     static let hubFacts =
         "user=sam\nport=22\naddr=192.168.1.20\naddr=172.17.0.1\nts=100.64.0.7\nhostkey=ssh-ed25519 AAAAhubkey root@hub\n"
-    static let probe = "new:.claude-hub\nnew:.codex-hub\nnew:.config/relaybar\nlinger:off"
+    static let probe = "new:.config/relaybar\nlinger:off\nlogin:codex"
 
     var system = "Linux\n"
     var systemStatus: Int32 = 0

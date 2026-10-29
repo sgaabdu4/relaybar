@@ -317,7 +317,10 @@ struct PoolJoinTests {
         #expect(text.contains("/home/sam/.config/relaybar/access-key"))
         #expect(!text.contains(secrets.accessKey))
         #expect(!text.contains("CODEX_HOME"))
-        #expect(!recorder.commands.contains { remoteScript($0).contains("config.toml") || remoteScript($0).contains("-hub") })
+        #expect(
+            !recorder.commands.contains {
+                $0.stdin != nil && (remoteScript($0).contains("config.toml") || remoteScript($0).contains("-hub"))
+            })
         let launcher = try #require(recorder.commands.first { remoteScript($0).contains("local/bin/claude+") && $0.stdin != nil })
         let claude = String(decoding: launcher.stdin ?? Data(), as: UTF8.self)
         #expect(claude.contains("cat \"$HOME/.config/relaybar/access-key\""))
@@ -624,7 +627,7 @@ struct PoolJoinTests {
         let recorder = Recorder()
         clientHost(
             recorder,
-            FakeClientHost(probe: "new:.codex-hub\nnew:.config/relaybar\nlinger:off", hubAdds: "created:ssh\ncreated:keys\n"))
+            FakeClientHost(probe: "new:.codex-hub\nnew:.config/relaybar\nlinger:off\nlogin:codex", hubAdds: "created:ssh\ncreated:keys\n"))
         let client = try await add(recorder)
         var expected = PoolLinuxClient(host: "laptop", folders: [".codex-hub", ".config/relaybar"], linger: true)
         expected.hubKey = true
@@ -646,7 +649,7 @@ struct PoolJoinTests {
         #expect(undo.contains("rmdir \"$HOME/.config/relaybar\""))
         #expect(!undo.contains("rmdir \"$HOME/.claude-hub\""))
         #expect(undo.contains("loginctl disable-linger"))
-        clientHost(recorder, FakeClientHost(probe: "new:.claude-hub"))
+        clientHost(recorder, FakeClientHost(probe: "new:.claude-hub\nlogin:codex"))
         let kept = try await add(recorder)
         var plain = PoolLinuxClient(host: "laptop", folders: [".claude-hub"], linger: false)
         plain.hubKey = true

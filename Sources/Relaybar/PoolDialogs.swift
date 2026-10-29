@@ -252,6 +252,16 @@ enum PoolDialogs {
         return field.stringValue
     }
 
+    static func replaceLogins(host: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Replace the Claude Code and Codex logins on \(host) with your combined accounts?"
+        alert.informativeText =
+            "Relaybar keeps the old logins and settings aside and puts them back when you remove \(host). If you keep them, \(host) gets the commands claude+ and codex+ instead."
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Keep Them")
+        return run(alert) == .alertFirstButtonReturn
+    }
+
     static func linkFailed(host: String) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Relaybar could not link \(host) to T3 Code"
@@ -265,6 +275,10 @@ enum PoolDialogs {
         let alert = NSAlert()
         alert.messageText = "\(host) can use your accounts"
         var paragraphs: [String] = []
+        if result.replaced {
+            paragraphs.append(
+                "Claude Code and Codex there now use your combined accounts. Removing \(host) puts the old logins and settings back.")
+        }
         switch result.link {
         case .linked:
             let reach = result.listening == .tailscale ? "at home and away" : "while you are at home"
@@ -279,11 +293,11 @@ enum PoolDialogs {
                 )
             } else if result.notes.contains(.t3NotFound) {
                 paragraphs.append("T3 Code was already running there. Relaybar could not find it to link it, so it left it as it was.")
-            } else if result.client.t3Entries {
+            } else if result.client.t3Entries, !result.replaced {
                 paragraphs.append("T3 Code there now shows Claude+ and Codex+.")
             }
         }
-        paragraphs.append("In a terminal there, run claude+ or codex+.")
+        if !result.replaced { paragraphs.append("In a terminal there, run claude+ or codex+.") }
         if result.notes.contains(.tailscaleUnreachable) {
             paragraphs.append(
                 "T3 Code there listens on your home network, not on Tailscale, because this Mac could not reach \(host) through Tailscale. Use the same Tailscale account on both computers, then add it again."

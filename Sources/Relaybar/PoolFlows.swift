@@ -383,7 +383,8 @@ extension PoolController {
                     }
                 }
             },
-            linkFailed: { name in await MainActor.run { PoolDialogs.linkFailed(host: name) } })
+            linkFailed: { name in await MainActor.run { PoolDialogs.linkFailed(host: name) } },
+            replaceLogins: { name in await MainActor.run { PoolDialogs.replaceLogins(host: name) } })
         var added: PoolAddResult?
         let worked = await attempt(host: host, title: "Setting up \(host)", panel: panel) {
             let work = Task.detached { try await setup.useOnLinux(host: host, options: options, hooks: hooks) }
