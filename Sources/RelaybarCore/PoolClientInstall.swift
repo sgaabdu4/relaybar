@@ -49,6 +49,13 @@ public struct PoolAddResult: Equatable, Sendable {
     public var listening = Listening.unchanged
     public var notes: [Note] = []
 
+    public init(client: PoolLinuxClient, link: Link = .notTried, listening: Listening = .unchanged, notes: [Note] = []) {
+        self.client = client
+        self.link = link
+        self.listening = listening
+        self.notes = notes
+    }
+
     public subscript<Value>(dynamicMember path: KeyPath<PoolLinuxClient, Value>) -> Value { client[keyPath: path] }
 }
 
