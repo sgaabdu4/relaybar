@@ -354,10 +354,7 @@ extension PoolController {
             plan: { stages in Task { @MainActor in panel.plan(stages) } },
             report: { stage, stageState in Task { @MainActor in panel.set(stage, stageState) } },
             password: { wrong, why in
-                await MainActor.run {
-                    PoolDialogs.computerPassword(
-                        host: host, wrong: wrong, tailscale: options.tailscale, t3: options.t3Channel != nil, why: why)
-                }
+                await MainActor.run { PoolDialogs.computerPassword(host: host, wrong: wrong, why: why) }
             },
             signIn: { link in
                 Task { @MainActor in
