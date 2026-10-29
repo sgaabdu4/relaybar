@@ -8,6 +8,7 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
     case noRoute(host: String, tried: [String])
     case t3Unreadable(String)
     case noKeyTool(String)
+    case unsafeTunnel
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +26,8 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
             return
                 "T3 Code's settings file on \(host) could not be read, so Relaybar did not change anything there. Fix or move ~/.t3/userdata/settings.json on \(host), then try again."
         case .noKeyTool(let host): return "\(host) cannot make an SSH key. Install the OpenSSH client there, then try again."
+        case .unsafeTunnel:
+            return "A name or folder for the tunnel holds characters Relaybar cannot use safely, so it did not set up the tunnel."
         }
     }
 }
@@ -41,6 +44,7 @@ struct PoolHubFacts: Equatable {
     var user: String
     var port: Int
     var addresses: [String]
+    var tailscale: [String] = []
     var hostKeys: [String]
 
     static let script =
@@ -77,7 +81,7 @@ struct PoolHubFacts: Equatable {
         for address in home.filter({ !carrier.contains($0) }) + tailscale + carrier where !addresses.contains(address) {
             addresses.append(address)
         }
-        return PoolHubFacts(user: user, port: port, addresses: addresses, hostKeys: keys)
+        return PoolHubFacts(user: user, port: port, addresses: addresses, tailscale: tailscale, hostKeys: keys)
     }
 
     private static func isAddress(_ value: String) -> Bool {
@@ -96,6 +100,12 @@ struct PoolHubFacts: Equatable {
             words[1].allSatisfy({ $0.isLetter || $0.isNumber || "+/=".contains($0) })
         else { return nil }
         return "\(words[0]) \(words[1])"
+    }
+
+    func routes(worked: String) -> [String] {
+        var ordered: [String] = []
+        for address in tailscale + [worked] + addresses where !ordered.contains(address) { ordered.append(address) }
+        return ordered
     }
 
     func knownHosts() -> String {
@@ -202,7 +212,8 @@ extension PoolJoin {
                     "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"",
                     stdin: Data(PoolConfig.terminalCommand(claude: claude, keyCommand: read).utf8))
             }
-            let unit = PoolTunnel.linuxUnit(destination: "\(facts.user)@\(address)", key: key, knownHosts: knownHosts, port: facts.port)
+            let unit = try PoolTunnel.linuxUnit(
+                user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port)
             try remote.execute("cat > \"$HOME/.config/systemd/user/relaybar-tunnel.service\"", stdin: Data(unit.utf8))
             if lines.contains("linger:off") {
                 let enabled = try remote.execute(

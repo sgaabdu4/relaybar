@@ -107,13 +107,34 @@ struct PoolTunnelTests {
         #expect(text.contains("<key>ThrottleInterval</key>"))
     }
 
-    @Test func writesALinuxTunnelUnit() {
-        let unit = PoolTunnel.linuxUnit(
-            destination: "sam@192.168.1.20", key: "/home/sam/.config/relaybar/hub_key",
-            knownHosts: "/home/sam/.config/relaybar/known_hosts", port: 22)
-        #expect(unit.contains("ExecStart='/usr/bin/ssh' '-N' '-L' '127.0.0.1:8317:127.0.0.1:8317'"))
-        #expect(unit.contains("'-i' '/home/sam/.config/relaybar/hub_key' '-o' 'IdentitiesOnly=yes'"))
-        #expect(unit.contains("'StrictHostKeyChecking=yes' '-p' '22' '--' 'sam@192.168.1.20'"))
-        #expect(unit.contains("Restart=always"))
+    private func unit(addresses: [String], key: String = "/home/sam/.config/relaybar/hub_key", ssh: String = "/usr/bin/ssh") throws
+        -> String
+    {
+        try PoolTunnel.linuxUnit(
+            user: "sam", addresses: addresses, key: key, knownHosts: "/home/sam/.config/relaybar/known_hosts", port: 22, ssh: ssh)
+    }
+
+    @Test func writesALinuxTunnelUnit() throws {
+        let text = try unit(addresses: ["100.64.0.7", "192.168.1.20"])
+        #expect(
+            text.contains(
+                "ExecStart=/bin/sh -c 'for a in \"100.64.0.7\" \"192.168.1.20\"; do \"/usr/bin/ssh\" \"-N\" \"-L\" \"127.0.0.1:8317:127.0.0.1:8317\""
+            ))
+        #expect(text.contains("\"-i\" \"/home/sam/.config/relaybar/hub_key\" \"-o\" \"IdentitiesOnly=yes\""))
+        #expect(
+            text.contains(
+                "\"StrictHostKeyChecking=yes\" \"-p\" \"22\" \"-o\" \"ConnectTimeout=10\" \"--\" \"sam@$$a\"; r=$$?; done; exit $$r'"))
+        #expect(text.contains("Restart=always\nRestartSec=10"))
+        #expect(try unit(addresses: ["192.168.1.20"], ssh: "/usr/local/bin/ssh").contains("do \"/usr/local/bin/ssh\" \"-N\""))
+    }
+
+    @Test func refusesUnsafeTunnelWords() {
+        #expect(throws: PoolInputError.badCharacters) { _ = try unit(addresses: ["192.168.1.20; reboot"]) }
+        #expect(throws: PoolInputError.startsWithDash) { _ = try unit(addresses: ["-oProxyCommand=x"]) }
+        #expect(throws: PoolInputError.empty) { _ = try unit(addresses: []) }
+        #expect(throws: PoolClientError.unsafeTunnel) { _ = try unit(addresses: ["192.168.1.20"], key: "/home/a\"b/hub_key") }
+        #expect(throws: PoolClientError.unsafeTunnel) { _ = try unit(addresses: ["192.168.1.20"], key: "/home/$HOME/hub_key") }
+        #expect(throws: PoolClientError.unsafeTunnel) { _ = try unit(addresses: ["192.168.1.20"], ssh: "/usr/bin/ssh'x") }
+        #expect(PoolClientError.unsafeTunnel.errorDescription?.contains("cannot use safely") == true)
     }
 }
