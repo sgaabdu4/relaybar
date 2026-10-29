@@ -330,6 +330,43 @@ extension PoolTeardownTests {
         #expect(PoolState.load(harness.paths)?.linuxClients.isEmpty == true)
     }
 
+    private func runRemoval(home: URL) -> CommandResult {
+        PoolProcess.run(Command("/bin/sh", ["-c", PoolTeardown.remoteRemoval], environment: ["HOME": home.path]))
+    }
+
+    @Test func removalDeletesEveryClientKeyAndKeepsTheOwnersKeys() throws {
+        let fixture = try Fixture()
+        let mine = "ssh-ed25519 AAAAmine me@mac"
+        let restricted = "restrict,port-forwarding,permitopen=\"127.0.0.1:8317\",command=\"/bin/false\" ssh-ed25519 AAAA"
+        try fixture.write(
+            ".ssh/authorized_keys", "\(restricted)one relaybar-client:laptop\n\(mine)\n\(restricted)two relaybar-client:desktop\n")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: fixture.root.appendingPathComponent(".ssh/authorized_keys").path)
+        #expect(runRemoval(home: fixture.root).succeeded)
+        let file = fixture.root.appendingPathComponent(".ssh/authorized_keys")
+        #expect(try String(contentsOf: file, encoding: .utf8) == mine + "\n")
+        let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
+        #expect(mode == 0o600)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: fixture.root.appendingPathComponent(".ssh").path)
+        #expect(leftovers == ["authorized_keys"])
+        #expect(runRemoval(home: fixture.root).succeeded)
+        #expect(try String(contentsOf: file, encoding: .utf8) == mine + "\n")
+    }
+
+    @Test func removalNeverWritesThroughALinkedKeyFile() throws {
+        let fixture = try Fixture()
+        let text = "ssh-ed25519 AAAAmine relaybar-client:laptop\n"
+        try fixture.write("elsewhere/keys", text)
+        try fixture.folder(".ssh")
+        try FileManager.default.createSymbolicLink(
+            at: fixture.root.appendingPathComponent(".ssh/authorized_keys"),
+            withDestinationURL: fixture.root.appendingPathComponent("elsewhere/keys"))
+        #expect(runRemoval(home: fixture.root).succeeded)
+        #expect(try String(contentsOf: fixture.root.appendingPathComponent("elsewhere/keys"), encoding: .utf8) == text)
+        let bare = try Fixture()
+        #expect(runRemoval(home: bare.root).succeeded)
+    }
+
     @Test func aJoinedMacWhoseHubIsGoneStillFinishesStop() throws {
         let harness = try Harness()
         try harness.home.write("Library/LaunchAgents/com.relaybar.helper-tunnel.plist", "x")

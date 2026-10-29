@@ -25,7 +25,10 @@ public enum PoolTeardown {
         + "systemctl --user disable --now \"$u\" >/dev/null 2>&1; done; "
         + "rm -f \"$HOME/.config/systemd/user/relaybar-helper.service\" \"$HOME/.config/systemd/user/relaybar-helper-update.service\" "
         + "\"$HOME/.config/systemd/user/relaybar-helper-update.timer\" \"$HOME/.config/systemd/user/relaybar-tunnel.service\"; "
-        + "systemctl --user daemon-reload >/dev/null 2>&1; rm -rf \"$HOME/.local/share/relaybar-helper\" \"$HOME/.local/share/relaybar\"; true"
+        + "systemctl --user daemon-reload >/dev/null 2>&1; rm -rf \"$HOME/.local/share/relaybar-helper\" \"$HOME/.local/share/relaybar\"; "
+        + "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then umask 077; "
+        + "t=$(mktemp \"$d/.relaybar.XXXXXX\") && awk '$NF ~ /^relaybar-client:/ { next } { print }' \"$f\" > \"$t\" "
+        + "&& { cmp -s \"$t\" \"$f\" || cat \"$t\" > \"$f\"; }; rm -f \"$t\"; fi; true"
 
     public static func run(
         _ env: PoolEnvironment, sudoPassword: String? = nil, progress: (PoolStep) -> Void = { _ in }

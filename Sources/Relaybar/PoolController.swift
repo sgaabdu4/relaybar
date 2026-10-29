@@ -9,6 +9,7 @@ final class PoolController: NSObject {
     private(set) var members: [PoolMember] = []
     private(set) var loaded = false
     private var reachable = true
+    private var reachReason: String?
     private var lastFetch = Date.distantPast
     private var fetching = false
     private var lastScan = Date.distantPast
@@ -63,6 +64,7 @@ final class PoolController: NSObject {
         members = []
         loaded = false
         reachable = true
+        reachReason = nil
         statuses = [:]
     }
 
@@ -94,6 +96,7 @@ final class PoolController: NSObject {
         guard let management = await Task.detached(operation: { setup.management }).value else {
             guard started == generation else { return }
             reachable = false
+            reachReason = nil
             return app.redraw()
         }
         do {
@@ -103,14 +106,33 @@ final class PoolController: NSObject {
             members = fetched
             loaded = true
             reachable = true
+            reachReason = nil
             _ = try? await setup.updateOrder(members: members)
         } catch {
+            let reason = await reachProblem(error)
             guard started == generation else { return }
             reachable = false
+            reachReason = reason
         }
         guard started == generation else { return }
         rebuildStatuses()
         app.redraw()
+    }
+
+    private func reachProblem(_ error: Error) async -> String? {
+        guard let state else { return nil }
+        var probe: CommandResult?
+        if !PoolReach.isRejectedKey(error), let target = state.tunnelDestination, !state.runsOnThisMac {
+            probe = await Task.detached { PoolProcess.run(PoolReach.probe(host: target)) }.value
+        }
+        return PoolReach.reason(host: hostName, error: error, probe: probe)
+    }
+
+    private func unreachableItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Cannot reach \(hostName).", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        if let reachReason { subtitle(item, reachReason) }
+        return item
     }
 
     func status(for account: Account) -> PoolStatus? {
@@ -202,6 +224,10 @@ final class PoolController: NSObject {
         let menu = NSMenu()
         menu.autoenablesItems = false
         if loaded {
+            if !reachable {
+                menu.addItem(unreachableItem())
+                menu.addItem(.separator())
+            }
             let rows = PoolAccounts.rows(accounts: inputs(), members: members)
             for kind in [PoolKind.claude, .codex] {
                 let mine = rows.filter { $0.account.kind == kind }
@@ -220,9 +246,13 @@ final class PoolController: NSObject {
                 menu.addItem(order)
             }
         } else {
-            let item = NSMenuItem(title: reachable ? "Reading the helper…" : "Cannot reach \(hostName).", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            if reachable {
+                let item = NSMenuItem(title: "Reading the helper…", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            } else {
+                menu.addItem(unreachableItem())
+            }
         }
         let computers = state?.linuxClients ?? []
         if !computers.isEmpty {
