@@ -156,6 +156,8 @@ public struct PoolSetup: Sendable {
             try state.save(env.paths)
         }
         let paths = env.paths
+        var options = options
+        if options.t3Channel != nil, options.t3Model == nil { options.t3Model = env.t3.claudeModel() }
         let result = try await PoolJoin.linuxClient(
             host: host, hub: hub, hubLabel: state.ssh, accessKey: access, options: options, hooks: hooks ?? PoolAddHooks(pause: env.pause),
             run: env.run, progress: progress,

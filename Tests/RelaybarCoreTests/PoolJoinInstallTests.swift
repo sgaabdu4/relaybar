@@ -428,6 +428,16 @@ extension PoolJoinTests {
         #expect(!lost.commands.contains { remoteScript($0).contains("pair --label") })
     }
 
+    @Test func setsTheDefaultOnAFreshT3Code() async throws {
+        let recorder = Recorder()
+        clientHost(recorder)
+        let client = try await add(recorder, options: PoolAddOptions(t3Channel: .nightly, t3Model: "claude-x"))
+        let pushed = try #require(onLaptop(recorder).first { remoteScript($0).contains("relaybar-new") })
+        let settings = try #require(try JSONSerialization.jsonObject(with: pushed.stdin ?? Data()) as? [String: Any])
+        #expect(settings["defaultModelSelection"] as? [String: String] == ["instanceId": "claudeAgent_all_accounts", "model": "claude-x"])
+        #expect(client.t3DefaultSet && client.previousSelection == nil)
+    }
+
     @Test func addsEntriesAfterT3CodeStarts() async throws {
         let recorder = Recorder()
         clientHost(recorder)

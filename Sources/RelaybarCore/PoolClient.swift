@@ -368,7 +368,8 @@ extension PoolJoin {
                 try addT3Entries(
                     remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint,
                     claudeBinary: local.contains("claude") ? home + "/.local/bin/claude" : elsewhere["claude"],
-                    codexBinary: local.contains("codex") ? home + "/.local/bin/codex" : elsewhere["codex"], orEmpty: installT3)
+                    codexBinary: local.contains("codex") ? home + "/.local/bin/codex" : elsewhere["codex"], orEmpty: installT3,
+                    model: options.t3Model)
             }
             if installT3 {
                 let computer = PoolTailscaleComputer(host: host, run: run, pause: hooks.pause)
@@ -515,7 +516,7 @@ extension PoolJoin {
 
     private static func addT3Entries(
         _ remote: PoolRemote, home: String, accessKey: String, client: inout PoolLinuxClient, checkpoint: (PoolLinuxClient?) -> Void,
-        claudeBinary: String?, codexBinary: String?, orEmpty: Bool
+        claudeBinary: String?, codexBinary: String?, orEmpty: Bool, model: String?
     ) throws {
         try withT3 { t3 in
             guard try pullT3(remote, into: t3, orEmpty: orEmpty) else { return }
@@ -524,7 +525,7 @@ extension PoolJoin {
             try t3.addPoolEntries(
                 accessKey: accessKey, claudeHome: home + "/.claude-hub", codexHome: home + "/.codex-hub", hex: PoolSetup.combinedColor,
                 claudeBinary: claudeBinary, codexBinary: codexBinary)
-            if case .set(let previous) = try t3.setPoolDefault() {
+            if case .set(let previous) = try t3.setPoolDefault(fallbackModel: model) {
                 client.t3DefaultSet = true
                 client.previousSelection = previous
             }

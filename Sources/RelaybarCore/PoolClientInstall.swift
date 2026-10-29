@@ -31,10 +31,12 @@ public enum T3Channel: String, CaseIterable, Sendable {
 public struct PoolAddOptions: Equatable, Sendable {
     public var t3Channel: T3Channel?
     public var tailscale: Bool
+    public var t3Model: String?
 
-    public init(t3Channel: T3Channel? = nil, tailscale: Bool = false) {
+    public init(t3Channel: T3Channel? = nil, tailscale: Bool = false, t3Model: String? = nil) {
         self.t3Channel = t3Channel
         self.tailscale = tailscale
+        self.t3Model = t3Model
     }
 }
 
