@@ -21,7 +21,9 @@ public enum PoolOrder {
         return [session, weekly].contains { ($0?.left ?? 100) < lowPercent }
     }
 
-    public static func plan(kind: PoolKind, members: [PoolMember], saved: [String]) -> PoolPlan {
+    public static func plan(
+        kind: PoolKind, members: [PoolMember], saved: [String], mode: PoolOrderMode = .automatic, now: Date = Date()
+    ) -> PoolPlan {
         let mine = members.filter { $0.credential.kind == kind }
         let rank = Dictionary(
             saved.enumerated().map { ($1.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
@@ -29,7 +31,11 @@ public enum PoolOrder {
             .sorted { rank[$0.credential.email.lowercased()]! < rank[$1.credential.email.lowercased()]! }
         let added = mine.filter { rank[$0.credential.email.lowercased()] == nil }.sorted { $0.credential.name < $1.credential.name }
         let base = known + added
-        let effective = base.filter { !nearlyUsedUp($0) } + base.filter(nearlyUsedUp)
+        let effective =
+            mode == .manual
+            ? base.filter { !nearlyUsedUp($0) } + base.filter(nearlyUsedUp)
+            : resetFirst(base.filter { serving($0) && !nearlyUsedUp($0) }, now: now)
+                + resetFirst(base.filter { serving($0) && nearlyUsedUp($0) }, now: now) + base.filter { !serving($0) }
         let changes = effective.enumerated().compactMap { index, member -> PoolPriority? in
             let target = effective.count - index
             return member.credential.priority == target ? nil : PoolPriority(name: member.credential.name, priority: target)
@@ -37,6 +43,30 @@ public enum PoolOrder {
         let inUse = effective.first(where: serving)
         return PoolPlan(
             kind: kind, savedOrder: base.map { $0.credential.email.lowercased() }, effective: effective, inUse: inUse, changes: changes)
+    }
+
+    private static func weeklyReset(_ member: PoolMember, now: Date) -> Date? {
+        guard case .active(_, let weekly) = member.state, let at = weekly?.resetsAt, at > now else { return nil }
+        return at
+    }
+
+    private static func weeklyLeft(_ member: PoolMember) -> Int {
+        guard case .active(_, let weekly) = member.state, let weekly else { return -1 }
+        return weekly.left
+    }
+
+    private static func resetFirst(_ group: [PoolMember], now: Date) -> [PoolMember] {
+        let hour: (PoolMember) -> Int? = { member in weeklyReset(member, now: now).map { Int($0.timeIntervalSince1970 / 3600) } }
+        return group.enumerated().sorted { first, second in
+            let (one, two) = (hour(first.element), hour(second.element))
+            if one != two {
+                guard let one else { return false }
+                guard let two else { return true }
+                return one < two
+            }
+            let (left, right) = (weeklyLeft(first.element), weeklyLeft(second.element))
+            return left != right ? left > right : first.offset < second.offset
+        }.map(\.element)
     }
 
     private static func serving(_ member: PoolMember) -> Bool {
@@ -71,7 +101,8 @@ extension PoolSetup {
         guard var state = PoolState.load(env.paths), !state.joined, let management else { return [] }
         var plans: [PoolPlan] = []
         for kind in [PoolKind.claude, .codex] {
-            let plan = PoolOrder.plan(kind: kind, members: members, saved: state.order[kind.rawValue] ?? [])
+            let plan = PoolOrder.plan(
+                kind: kind, members: members, saved: state.order[kind.rawValue] ?? [], mode: state.orderMode)
             state.order[kind.rawValue] = plan.savedOrder
             try await PoolOrder.apply(plan, management: management)
             plans.append(plan)
@@ -80,6 +111,12 @@ extension PoolSetup {
         latest.order = state.order
         try latest.save(env.paths)
         return plans
+    }
+
+    public func setOrderMode(_ mode: PoolOrderMode) throws {
+        guard var state = PoolState.load(env.paths) else { return }
+        state.orderMode = mode
+        try state.save(env.paths)
     }
 
     public func setOrder(kind: PoolKind, emails: [String]) throws {

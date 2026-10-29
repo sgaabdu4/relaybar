@@ -34,6 +34,15 @@ struct PoolStateTests {
         #expect(
             !client.t3Installed && !client.t3Service && client.t3Host == nil && !client.tailscaleInstalled && client.t3Session == nil
                 && client.t3Binary == nil)
+        #expect(state.orderMode == .automatic)
+        var manual = state
+        manual.orderMode = .manual
+        try manual.save(harness.paths)
+        #expect(PoolState.load(harness.paths)?.orderMode == .manual)
+        try harness.home.write(
+            "Library/Application Support/Relaybar/pool.json",
+            older.replacingOccurrences(of: "\"order\": {},", with: "\"orderMode\": \"sideways\","))
+        #expect(PoolState.load(harness.paths)?.orderMode == .automatic)
         var newer = state
         newer.linuxClients[0].hubKey = true
         newer.linuxClients[0].t3Secrets = ["provider-env-x"]
