@@ -226,6 +226,42 @@ extension PoolJoinTests {
         #expect(!lost.client.t3Installed)
     }
 
+    @Test func usesTheFullPathOfALoginShellTool() async throws {
+        let recorder = Recorder()
+        let found = "\npath:claude:/home/sam/.nvm/bin/claude\npath:codex:/opt/tools/bin/codex\nt3:yes"
+        clientHost(recorder, FakeClientHost(probe: FakeClientHost.probe + found, settings: t3File))
+        _ = try await add(recorder)
+        let claude = try #require(recorder.commands.first { remoteScript($0).contains("claude-all") && $0.stdin != nil })
+        let codex = try #require(recorder.commands.first { remoteScript($0).contains("codex-all") && $0.stdin != nil })
+        #expect(String(decoding: claude.stdin ?? Data(), as: UTF8.self).contains("exec \"/home/sam/.nvm/bin/claude\" \"$@\""))
+        #expect(String(decoding: codex.stdin ?? Data(), as: UTF8.self).contains("exec \"/opt/tools/bin/codex\" \"$@\""))
+        let push = try #require(onLaptop(recorder).last { remoteScript($0).contains("relaybar-new") })
+        let settings = try #require(try JSONSerialization.jsonObject(with: push.stdin ?? Data()) as? [String: Any])
+        let instances = try #require(settings["providerInstances"] as? [String: [String: Any]])
+        #expect((instances["claudeAgent_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/home/sam/.nvm/bin/claude")
+        #expect((instances["codex_all_accounts"]?["config"] as? [String: String])?["binaryPath"] == "/opt/tools/bin/codex")
+        let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
+        #expect(probe.contains("elif [ -x \"$p\" ]; then echo path:$t:$p; fi"))
+
+        let unsafe = Recorder()
+        let bad = "\npath:claude:/home/sam/a b/claude\npath:codex:/home/sam/$(x)/codex\nt3:yes"
+        clientHost(unsafe, FakeClientHost(probe: FakeClientHost.probe + bad, settings: t3File))
+        _ = try await add(unsafe)
+        let bare = try #require(unsafe.commands.first { remoteScript($0).contains("claude-all") && $0.stdin != nil })
+        #expect(String(decoding: bare.stdin ?? Data(), as: UTF8.self).contains("exec claude \"$@\""))
+
+        let pairing = Recorder()
+        clientHost(pairing, FakeClientHost(probe: FakeClientHost.probe + "\nt3path:/home/sam/.nvm/bin/t3\nt3svc:yes"))
+        _ = try await add(pairing, options: PoolAddOptions(t3Channel: .nightly))
+        let pair = try #require(onLaptop(pairing).map(plainScript).first { $0.contains("pair --label Relaybar") })
+        #expect(pair.contains("\"/home/sam/.nvm/bin/t3\" pair"))
+        let probeScript = try #require(onLaptop(pairing).map(plainScript).first { $0.contains("for d in") })
+        #expect(
+            probeScript.contains(
+                "p=$(PATH=\"$HOME/.local/bin:$PATH\" command -v t3 2>/dev/null); [ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v t3\""
+            ))
+    }
+
     @Test func leavesAnExistingT3CodeAlone() async throws {
         let running = "\nt3svc:yes\nt3exec:/home/laptop/.t3/runtime/versions/0.1.6/t3"
         let recorder = Recorder()
