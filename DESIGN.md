@@ -9,7 +9,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Account colours: the AppKit system colours orange, blue, green, purple, pink, teal, yellow and red, plus "No color" (label colour). Owner: `Tint` in `Sources/Relaybar/Render.swift`.
 - Low warning (10% left or less): light red, sRGB (1, 0.55, 0.55) in dark appearance and (0.88, 0.3, 0.3) in light. Owner: `Tint.low`.
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
-- Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "all accounts" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
+- Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
 - Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo and a white pill with the tag in the darker colour. Owner: `DesktopApp.icon`.
 
 ## Typography

@@ -22,7 +22,7 @@ Each account's session and weekly limits are only visible inside that account's 
 - Add account: creates the account folder, signs in through the browser in the background, can make a separate Claude or Codex desktop app with a colour-badged icon, and adds the account to T3 Code when T3 Code is installed.
 - Remove account: hide it, or delete its folder, desktop app, Keychain login and T3 Code entry after three confirmations. Main `~/.claude` and `~/.codex` folders can only be hidden.
 - Planned: automatic updates through Sparkle and signed releases on GitHub.
-- Combine accounts (optional): runs CLIProxyAPI on this Mac or a Linux computer at home so T3 Code, `claude-all` and `codex-all` use whichever account has room, in the user's order. Relaybar installs, locks in, updates and removes the helper, signs each account in to it, and adds "Claude, all accounts" and "Codex, all accounts" to T3 Code.
+- Combine accounts (optional): runs CLIProxyAPI on this Mac or a Linux computer at home so T3 Code, `claude+` and `codex+` use whichever account has room, in the user's order. Relaybar installs, locks in, updates and removes the helper, signs each account in to it, and adds "Claude+" and "Codex+" to T3 Code. It uses your normal `~/.claude` and `~/.codex` folders and does not edit them on this Mac. An added computer can use the combined accounts for plain `claude` and `codex`; Relaybar keeps that computer's old logins and puts them back on Remove.
 
 ## Brand Personality / Tone
 
