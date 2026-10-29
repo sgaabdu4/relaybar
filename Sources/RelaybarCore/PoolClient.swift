@@ -366,6 +366,7 @@ extension PoolJoin {
                     client.t3Host = tailscaleAddress
                     checkpoint(client)
                     try setT3Host(remote, address: tailscaleAddress)
+                    try keepT3Retrying(remote)
                     try remote.execute("\"$HOME/.local/bin/t3\" service restart </dev/null", limit: 120)
                     try waitForT3(remote, address: tailscaleAddress)
                 }

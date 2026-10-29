@@ -144,6 +144,15 @@ extension PoolJoin {
         guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "ready" else { throw PoolClientError.t3NotReady(remote.host) }
     }
 
+    static let t3Retry = "$HOME/.config/systemd/user/t3code.service.d/relaybar.conf"
+
+    static func keepT3Retrying(_ remote: PoolRemote) throws {
+        let answer = try remote.execute(
+            "f=\"\(t3Retry)\"; d=$(dirname \"$f\"); if [ -L \"$d\" ] || [ -L \"$f\" ]; then echo link; exit 0; fi; "
+                + "mkdir -p \"$d\" && printf '[Unit]\\nStartLimitIntervalSec=0\\n' > \"$f\" && systemctl --user daemon-reload")
+        if answer.contains("link") { throw PoolFileError.link("\(remote.host):.config/systemd/user/t3code.service.d") }
+    }
+
     static func setT3Host(_ remote: PoolRemote, address: String) throws {
         let answer = try remote.execute(
             "f=\"\(t3Env)\"; if [ -L \"$f\" ]; then echo link; exit 0; fi; mkdir -p \"$HOME/.t3\"; t=$(mktemp) || exit 1; "
@@ -212,7 +221,8 @@ extension PoolJoin {
         if client.t3Host != nil {
             steps.append(
                 "f=\"\(t3Env)\"; if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then t=$(mktemp) && { grep -v '^T3CODE_HOST=' \"$f\" > \"$t\"; "
-                    + "if [ -s \"$t\" ]; then cat \"$t\" > \"$f\"; else rm -f \"$f\"; fi; }; rm -f \"$t\"; fi;")
+                    + "if [ -s \"$t\" ]; then cat \"$t\" > \"$f\"; else rm -f \"$f\"; fi; }; rm -f \"$t\"; fi; "
+                    + "f=\"\(t3Retry)\"; d=$(dirname \"$f\"); if [ ! -L \"$d\" ]; then rm -f \"$f\"; rmdir \"$d\" 2>/dev/null; systemctl --user daemon-reload 2>/dev/null; fi;")
         }
         guard !steps.isEmpty else { return }
         try remote.execute(steps.joined(separator: " ") + " true", limit: 300)
