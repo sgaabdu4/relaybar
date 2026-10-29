@@ -403,8 +403,6 @@ extension PoolJoin {
                     report(.link, .done)
                 } else {
                     result.link = .notLinked
-                    client.t3LinkMissing = true
-                    checkpoint(client)
                     report(.link, .problem("Not linked"))
                 }
             }

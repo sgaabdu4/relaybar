@@ -211,7 +211,7 @@ extension PoolJoinTests {
         let declined = try await outcome(
             FakeClientHost(pair: "no link\n"), options: PoolAddOptions(t3Channel: .nightly), hooks: PoolAddHooks(linkFailed: { _ in false })
         )
-        #expect(declined.link == .notLinked && declined.client.t3LinkMissing)
+        #expect(declined.link == .notLinked)
 
         let quiet = try await outcome(FakeClientHost(), options: PoolAddOptions())
         #expect(quiet.link == .notTried && quiet.listening == .unchanged && quiet.notes.isEmpty)
@@ -354,9 +354,10 @@ extension PoolJoinTests {
 
         let wrong = Recorder()
         clientHost(wrong, FakeClientHost(pair: "App link: https://evil.example/pair#token=FIXTURE\n"))
-        let refused = try await add(
-            wrong, options: PoolAddOptions(t3Channel: .stable), hooks: PoolAddHooks(pair: { opens.add($0) }))
-        #expect(refused.t3LinkMissing)
+        let refused = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .stable),
+            hooks: PoolAddHooks(pair: { opens.add($0) }), run: wrong.runner)
+        #expect(refused.link == .notLinked)
         #expect(opens.urls.count == 1)
     }
 
@@ -391,7 +392,7 @@ extension PoolJoinTests {
                 return false
             })
         let client = try await setup.useOnLinux(host: "laptop", options: PoolAddOptions(t3Channel: .stable), hooks: hooks)
-        #expect(client.t3LinkMissing)
+        #expect(client.link == .notLinked)
         #expect(client.t3Installed && client.t3Service && client.t3Entries)
         #expect(asked.calls.map(\.why) == ["laptop"])
         #expect(opens.urls.isEmpty)
@@ -407,7 +408,7 @@ extension PoolJoinTests {
         let plain = try await PoolJoin.linuxClient(
             host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .stable),
             hooks: PoolAddHooks(plan: log.hooks.plan, report: log.hooks.report), run: quiet.runner)
-        #expect(plain.t3LinkMissing)
+        #expect(plain.link == .notLinked)
         #expect(log.last(.link) == .problem("Not linked"))
     }
 
@@ -427,7 +428,7 @@ extension PoolJoinTests {
         #expect(calls.count == 2)
         #expect(asked.calls.count == 1)
         #expect(opens.urls.map(\.host) == ["pair"])
-        #expect(!client.t3LinkMissing)
+        #expect(client.link == .linked)
     }
 
     @Test func limitsT3CodeToTailscale() async throws {

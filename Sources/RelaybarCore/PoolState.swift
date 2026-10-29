@@ -52,7 +52,6 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
     public var t3Service = false
     public var t3Host: String?
     public var tailscaleInstalled = false
-    public var t3LinkMissing = false
 
     public init(host: String, folders: [String] = [], linger: Bool = false) {
         self.host = host
@@ -80,7 +79,6 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
         t3Service = try values.decodeIfPresent(Bool.self, forKey: .t3Service) ?? false
         t3Host = try values.decodeIfPresent(String.self, forKey: .t3Host)
         tailscaleInstalled = try values.decodeIfPresent(Bool.self, forKey: .tailscaleInstalled) ?? false
-        t3LinkMissing = try values.decodeIfPresent(Bool.self, forKey: .t3LinkMissing) ?? false
     }
 }
 
