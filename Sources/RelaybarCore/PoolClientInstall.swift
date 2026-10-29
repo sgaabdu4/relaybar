@@ -42,7 +42,7 @@ public struct PoolAddOptions: Equatable, Sendable {
 public struct PoolAddResult: Equatable, Sendable {
     public enum Link: Equatable, Sendable { case linked, notLinked, notTried }
     public enum Listening: Equatable, Sendable { case tailscale, homeNetwork, unchanged }
-    public enum Note: Equatable, Sendable { case tailscaleUnreachable, t3Kept, t3NotFound }
+    public enum Note: Equatable, Sendable { case tailscaleUnreachable, t3Kept, t3NotFound, t3NotRunning }
 
     public var client: PoolLinuxClient
     public var link = Link.notTried
