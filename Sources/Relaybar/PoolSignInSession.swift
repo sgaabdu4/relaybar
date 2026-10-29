@@ -12,6 +12,7 @@ final class SignInSession {
     private let panel: PoolProgressPanel
     private let management: PoolManagement
     private var ids: [String]
+    private let single: Bool
     private var done: Set<String> = []
     private var waiting: Int?
     private var link: URL?
@@ -20,15 +21,16 @@ final class SignInSession {
     private var ended: CheckedContinuation<SignInEnd, Never>?
     private(set) var active = true
 
-    init(pool: PoolController, panel: PoolProgressPanel, management: PoolManagement) {
+    init(pool: PoolController, panel: PoolProgressPanel, management: PoolManagement, only: String? = nil) {
         self.pool = pool
         self.panel = panel
         self.management = management
-        ids = pool.app.accounts.map(\.id)
+        single = only != nil
+        ids = only.map { [$0] } ?? pool.app.accounts.map(\.id)
     }
 
     func run() async -> SignInEnd {
-        panel.showSignIn(ids.compactMap(entry))
+        panel.showSignIn(ids.compactMap(entry), canStop: !single)
         panel.onAction = { [weak self] index, action in self?.handle(index, action) }
         panel.onAdd = { [weak self] in self?.pool.app.chooseAndAddAccount() }
         return await withCheckedContinuation { continuation in
@@ -39,6 +41,7 @@ final class SignInSession {
     }
 
     func accountsChanged() {
+        guard !single else { return }
         let known = Set(ids)
         for account in pool.app.accounts where !known.contains(account.id) {
             ids.append(account.id)
@@ -70,14 +73,19 @@ final class SignInSession {
     private func handle(_ index: Int, _ action: SignInAction) {
         guard active, ids.indices.contains(index) else { return }
         switch action {
-        case .signIn:
+        case .signIn, .copyLink:
+            let copy = action == .copyLink
+            if copy, waiting == index {
+                Task { await reopen(index, copy: true) }
+                return
+            }
             guard waiting == nil else { return }
             guard !pool.signing else {
                 return pool.app.show("A sign-in is already open", "Finish it in the browser, then try again.")
             }
-            start(index)
+            start(index, copy: copy)
         case .openAgain:
-            Task { await reopen(index) }
+            Task { await reopen(index, copy: false) }
         case .cancel:
             guard !cancelling else { return }
             cancelling = true
@@ -95,36 +103,47 @@ final class SignInSession {
         }
     }
 
-    private func signInTool() -> PoolSignIn {
+    private func signInTool(_ index: Int = 0, copy: Bool = false) -> PoolSignIn {
         PoolSignIn(
             management: management,
             open: { [weak self] url in
-                Task { @MainActor in self?.link = url }
-                _ = NSWorkspace.shared.open(url)
+                Task { @MainActor in
+                    self?.link = url
+                    self?.deliver(url, to: index, copy: copy)
+                }
             })
     }
 
-    private func reopen(_ index: Int) async {
+    private func deliver(_ url: URL, to index: Int, copy: Bool) {
+        guard copy else {
+            _ = NSWorkspace.shared.open(url)
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        panel.copied(index)
+    }
+
+    private func reopen(_ index: Int, copy: Bool) async {
         guard waiting == index, !cancelling else { return }
         if let link, await signInTool().isLive(link) {
-            _ = NSWorkspace.shared.open(link)
-            return
+            return deliver(link, to: index, copy: copy)
         }
         guard waiting == index, !cancelling else { return }
         let old = task
         old?.cancel()
         await old?.value
         guard active, waiting == index else { return }
-        start(index)
+        start(index, copy: copy)
     }
 
-    private func start(_ index: Int) {
+    private func start(_ index: Int, copy: Bool) {
         guard let account = account(ids[index]) else { return }
         waiting = index
         link = nil
         pool.signing = true
         panel.set(index, .waiting)
-        let tool = signInTool()
+        let tool = signInTool(index, copy: copy)
         let kind = pool.kind(of: account)
         let inputs = pool.inputs()
         let row = inputs.first { $0.id == account.id }

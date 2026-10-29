@@ -205,26 +205,19 @@ extension PoolController {
     }
 
     func signIn(_ account: PoolAccountInput) async {
-        guard !signing else {
+        guard !signing, session?.active != true else {
             return app.show("A sign-in is already open", "Finish it in the browser, then try again.")
         }
-        signing = true
-        defer { signing = false }
         let setup = PoolSetup(env: environment())
         guard let management = await Task.detached(operation: { setup.management }).value else {
             return app.show("Relaybar cannot reach the helper", PoolError.unreachable.localizedDescription)
         }
-        let tool = PoolSignIn(management: management, open: { _ = NSWorkspace.shared.open($0) })
-        let outcome = await tool.signIn(kind: account.kind)
-        let list = inputs()
-        let row = list.first { $0.id == account.id } ?? account
-        switch await tool.settle(outcome, for: row, in: list, done: []) {
-        case .credited: break
-        case .wrong(let email):
-            app.show(
-                "That was \(email)", "Sign in as \(account.email ?? account.name). Click \(account.name) in All accounts to try again.")
-        case .unfinished(let unfinished): app.show("The sign-in did not finish", unfinished.message)
-        }
+        let panel = PoolProgressPanel()
+        let current = SignInSession(pool: self, panel: panel, management: management, only: account.id)
+        session = current
+        _ = await current.run()
+        if session === current { session = nil }
+        panel.close()
         await fetch()
     }
 

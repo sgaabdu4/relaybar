@@ -10,6 +10,7 @@ enum SignInState: Equatable {
 enum SignInAction {
     case signIn
     case openAgain
+    case copyLink
     case cancel
 }
 
@@ -30,6 +31,9 @@ final class SignInRow: NSStackView {
     private let signIn = NSButton(title: "Sign In", target: nil, action: nil)
     private let openAgain = NSButton(title: "Open Again", target: nil, action: nil)
     private let cancel = NSButton(title: "Cancel", target: nil, action: nil)
+    private let copyReady = NSButton(title: "Copy Link", target: nil, action: nil)
+    private let copyWaiting = NSButton(title: "Copy Link", target: nil, action: nil)
+    private let start = NSStackView()
     private let done = NSStackView()
     private let waiting = NSStackView()
     var onAction: (SignInAction) -> Void = { _ in }
@@ -65,7 +69,7 @@ final class SignInRow: NSStackView {
         waitingText.font = .systemFont(ofSize: 12)
         waitLine.setViews([spinner, waitingText], in: .leading)
         waitLine.spacing = 6
-        for button in [signIn, openAgain, cancel] {
+        for button in [signIn, openAgain, cancel, copyReady, copyWaiting] {
             button.controlSize = .small
             button.bezelStyle = .rounded
             button.target = self
@@ -73,7 +77,11 @@ final class SignInRow: NSStackView {
         signIn.action = #selector(signInPressed)
         openAgain.action = #selector(openAgainPressed)
         cancel.action = #selector(cancelPressed)
-        buttons.setViews([openAgain, cancel], in: .leading)
+        copyReady.action = #selector(copyPressed(_:))
+        copyWaiting.action = #selector(copyPressed(_:))
+        start.setViews([copyReady, signIn], in: .leading)
+        start.spacing = 6
+        buttons.setViews([copyWaiting, openAgain, cancel], in: .leading)
         buttons.spacing = 6
         waiting.setViews([waitLine, buttons], in: .leading)
         waiting.orientation = .vertical
@@ -86,7 +94,7 @@ final class SignInRow: NSStackView {
         doneText.textColor = .systemGreen
         done.setViews([tick, doneText], in: .leading)
         done.spacing = 4
-        for view in [logo, info, spacer, waiting, signIn, done] { addArrangedSubview(view) }
+        for view in [logo, info, spacer, waiting, start, done] { addArrangedSubview(view) }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -95,13 +103,14 @@ final class SignInRow: NSStackView {
         spinner.stopAnimation(nil)
         problem.isHidden = true
         waiting.isHidden = true
-        signIn.isHidden = true
+        start.isHidden = true
         done.isHidden = true
         signIn.title = "Sign In"
         signIn.isEnabled = !locked
+        copyReady.isEnabled = !locked
         switch state {
         case .ready:
-            signIn.isHidden = false
+            start.isHidden = false
         case .waiting:
             waiting.isHidden = false
             spinner.startAnimation(nil)
@@ -111,7 +120,7 @@ final class SignInRow: NSStackView {
             problem.stringValue = text
             problem.isHidden = false
             signIn.title = "Try Again"
-            signIn.isHidden = false
+            start.isHidden = false
         }
     }
 
@@ -120,6 +129,15 @@ final class SignInRow: NSStackView {
     @objc private func openAgainPressed() { onAction(.openAgain) }
 
     @objc private func cancelPressed() { onAction(.cancel) }
+
+    @objc private func copyPressed(_ sender: NSButton) { onAction(.copyLink) }
+
+    func showCopied() {
+        for button in [copyReady, copyWaiting] { button.title = "Copied" }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            for button in [self?.copyReady, self?.copyWaiting] { button?.title = "Copy Link" }
+        }
+    }
 }
 
 @MainActor
@@ -215,7 +233,7 @@ final class PoolProgressPanel: NSObject {
         note.stringValue = message
     }
 
-    func showSignIn(_ entries: [SignInEntry]) {
+    func showSignIn(_ entries: [SignInEntry], canStop: Bool = true) {
         heading.stringValue = "Sign in to each account"
         note.preferredMaxLayoutWidth = Self.inner
         width = Self.wide
@@ -225,6 +243,8 @@ final class PoolProgressPanel: NSObject {
         rows = []
         states = []
         for entry in entries { addRow(entry) }
+        stop.isHidden = !canStop
+        done.title = canStop ? "Done" : "Close"
         footer?.isHidden = false
         rebuild()
         present()
@@ -260,6 +280,11 @@ final class PoolProgressPanel: NSObject {
         refresh()
     }
 
+    func copied(_ index: Int) {
+        guard rows.indices.contains(index) else { return }
+        rows[index].showCopied()
+    }
+
     func set(_ index: Int, _ state: SignInState) {
         guard states.indices.contains(index) else { return }
         states[index] = state
@@ -270,7 +295,7 @@ final class PoolProgressPanel: NSObject {
     private func refresh() {
         let locked = states.contains(.waiting)
         for (row, state) in zip(rows, states) { row.apply(state, locked: locked) }
-        done.isEnabled = states.contains(.done)
+        done.isEnabled = stop.isHidden || states.contains(.done)
     }
 
     func close() {
