@@ -127,4 +127,28 @@ struct PoolOrderTests {
         try PoolSetup(env: none.env()).setOrder(kind: .claude, emails: ["x"])
         #expect(PoolState.load(none.paths) == nil)
     }
+
+    @Test func aJoinedMacNeverSendsPriorities() async throws {
+        let harness = try Harness()
+        try PoolState(ssh: "homebox", joined: true).save(harness.paths)
+        harness.recorder.respond = { _ in CommandResult(output: "msecret\n") }
+        harness.http.handler = { _ in ok(["status": "ok"]) }
+        let plans = try await PoolSetup(env: harness.env()).updateOrder(members: [member("a@example.com"), member("b@example.com")])
+        #expect(plans.isEmpty)
+        #expect(harness.http.requests.isEmpty)
+    }
+
+    @Test func namesTheAccountInUseFromTheHelperPriorities() {
+        let members = [
+            member("a@example.com", priority: 2), member("b@example.com", priority: 9, disabled: true),
+            member("c@example.com", priority: 5, status: "error"), member("d@example.com", priority: 2),
+            member("e@example.com", kind: .codex, priority: 1),
+        ]
+        #expect(PoolOrder.inUse(kind: .claude, members: members)?.credential.email == "a@example.com")
+        #expect(PoolOrder.inUse(kind: .claude, members: Array(members.dropFirst().prefix(2))) == nil)
+        #expect(PoolOrder.inUse(kind: .codex, members: members)?.credential.email == "e@example.com")
+        let raised = members + [member("f@example.com", priority: 3)]
+        #expect(PoolOrder.inUse(kind: .claude, members: raised)?.credential.email == "f@example.com")
+        #expect(PoolOrder.inUse(kind: .claude, members: []) == nil)
+    }
 }
