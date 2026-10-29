@@ -174,12 +174,13 @@ enum PoolDialogs {
         case leave
     }
 
-    static func unreachable(host: String) -> Unreachable {
+    static func unreachable(host: String, reason: String? = nil) -> Unreachable {
+        let computer = reason != nil
         while true {
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "Relaybar could not reach \(host)."
-            alert.informativeText = "The helper there is still running."
+            alert.informativeText = reason.map { "Your accounts are still set up there.\n\n" + $0 } ?? "The helper there is still running."
             alert.addButton(withTitle: "Try Again")
             alert.addButton(withTitle: "Forget It…")
             alert.addButton(withTitle: "Leave It")
@@ -188,7 +189,9 @@ enum PoolDialogs {
             case .alertSecondButtonReturn:
                 if stopAlert(
                     "Forget \(host)?",
-                    "Relaybar leaves the helper running on \(host) and stops tracking it. You can remove it there by hand later.",
+                    computer
+                        ? "Relaybar leaves the setup on \(host) and stops tracking it. It also removes the key of \(host) from the home computer when it can. You can remove the rest there by hand later."
+                        : "Relaybar leaves the helper running on \(host) and stops tracking it. You can remove it there by hand later.",
                     go: "Forget It", destructive: true)
                 {
                     return .forget

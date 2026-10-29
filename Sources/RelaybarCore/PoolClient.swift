@@ -29,6 +29,14 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
     }
 }
 
+public struct PoolClientRemoval: Equatable, Sendable {
+    public var hubKeyProblem: String?
+
+    public init(hubKeyProblem: String? = nil) {
+        self.hubKeyProblem = hubKeyProblem
+    }
+}
+
 struct PoolHubFacts: Equatable {
     var user: String
     var port: Int
@@ -211,7 +219,9 @@ extension PoolJoin {
                 try addT3Entries(remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint)
             }
         } catch {
-            if (try? removeLinuxClient(client, hubRoutes: [hubName], run: run)) != nil { checkpoint(nil) }
+            if let removal = try? removeLinuxClient(client, hubRoutes: [hubName], run: run), removal.hubKeyProblem == nil {
+                checkpoint(nil)
+            }
             throw error
         }
         return client
@@ -306,7 +316,7 @@ extension PoolJoin {
         !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
-    private static func removeHubKey(_ client: PoolLinuxClient, routes: [String], run: @escaping CommandRunner) throws {
+    static func removeHubKey(_ client: PoolLinuxClient, routes: [String], run: @escaping CommandRunner) throws {
         let script =
             "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -e \"$f\" ]; then umask 077; tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; "
             + "\(dropTagged(client.host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
@@ -324,14 +334,15 @@ extension PoolJoin {
         throw PoolSSHError.failed(PoolHubPicker.explain(first?.error ?? "", host: routes.first ?? ""))
     }
 
-    public static func removeLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String] = [], run: @escaping CommandRunner) throws {
+    @discardableResult
+    public static func removeLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String] = [], run: @escaping CommandRunner) throws
+        -> PoolClientRemoval
+    {
+        let removal = forgetLinuxClient(client, hubRoutes: hubRoutes, run: run)
         var problem: Error?
-        if client.hubKey {
-            do { try removeHubKey(client, routes: hubRoutes, run: run) } catch { problem = error }
-        }
         let remote = PoolRemote(host: client.host, run: run)
         if client.t3Entries {
-            do { try removeT3Entries(remote, client: client) } catch { problem = problem ?? error }
+            do { try removeT3Entries(remote, client: client) } catch { problem = error }
         }
         let config = clientConfig
         var steps = [
@@ -349,5 +360,16 @@ extension PoolJoin {
         let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; true"))
         if !result.succeeded { problem = problem ?? PoolSSHError.failed(PoolHubPicker.explain(result.error, host: client.host)) }
         if let problem { throw problem }
+        return removal
+    }
+
+    public static func forgetLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String], run: @escaping CommandRunner)
+        -> PoolClientRemoval
+    {
+        var removal = PoolClientRemoval()
+        if client.hubKey {
+            do { try removeHubKey(client, routes: hubRoutes, run: run) } catch { removal.hubKeyProblem = error.localizedDescription }
+        }
+        return removal
     }
 }

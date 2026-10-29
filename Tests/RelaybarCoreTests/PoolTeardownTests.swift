@@ -265,6 +265,92 @@ extension PoolTeardownTests {
     }
 }
 
+extension PoolTeardownTests {
+    private func combined(_ harness: Harness, computers: [String]) async throws -> PoolSetup {
+        harness.answerHomeAndComputers()
+        let setup = PoolSetup(env: harness.env())
+        _ = try await setup.combineOnHome(host: "homebox")
+        for computer in computers { try setup.useOnLinux(host: computer) }
+        return setup
+    }
+
+    private func down(_ harness: Harness, _ hosts: String...) {
+        let base = harness.recorder.respond
+        harness.recorder.respond = { command in
+            hosts.contains { command.arguments.contains($0) } ? CommandResult(status: 255, error: "Connection refused") : base(command)
+        }
+    }
+
+    @Test func stopKeepsGoingWhenAComputerIsOffline() async throws {
+        let harness = try Harness()
+        let setup = try await combined(harness, computers: ["laptop", "desktop"])
+        let working = harness.recorder.respond
+        down(harness, "laptop")
+        let first = setup.stop()
+        #expect(first.unreachableComputers == ["laptop"])
+        #expect(first.failed.map(\.step) == [.linuxClient])
+        #expect(first.undone.contains(.remoteHelper))
+        let kept = try #require(PoolState.load(harness.paths))
+        #expect(kept.linuxClients.map(\.host) == ["laptop"])
+        #expect(kept.steps.contains(.linuxClient))
+        let sent = harness.recorder.commands.filter { $0.arguments.contains("desktop") }.map(remoteScript)
+        #expect(sent.contains { $0.contains("rmdir") })
+        harness.recorder.respond = working
+        let second = setup.stop()
+        #expect(second.finished)
+        #expect(second.unreachableComputers.isEmpty)
+        #expect(PoolState.load(harness.paths) == nil)
+    }
+
+    @Test func forgettingAnOfflineComputerStillRemovesItsKeyFromTheHub() async throws {
+        let harness = try Harness()
+        let setup = try await combined(harness, computers: ["laptop"])
+        down(harness, "laptop")
+        #expect(throws: PoolSSHError.self) { try setup.removeComputer(host: "laptop") }
+        #expect(PoolState.load(harness.paths)?.linuxClients.map(\.host) == ["laptop"])
+        let mark = harness.recorder.commands.count
+        let forgotten = try setup.forgetComputer(host: "laptop")
+        #expect(forgotten.hubKeyProblem == nil)
+        let sent = Array(harness.recorder.commands.dropFirst(mark))
+        #expect(sent.count == 1)
+        let drop = plainScript(try #require(sent.first))
+        #expect(sent.first?.arguments.contains("homebox") == true)
+        #expect(drop.contains("awk -v t=' relaybar-client:laptop'"))
+        let state = try #require(PoolState.load(harness.paths))
+        #expect(state.linuxClients.isEmpty)
+        #expect(!state.steps.contains(.linuxClient))
+        #expect(try setup.forgetComputer(host: "laptop") == PoolClientRemoval())
+        #expect(setup.stop().finished)
+    }
+
+    @Test func forgettingStillWorksWhenTheHubIsDownToo() async throws {
+        let harness = try Harness()
+        let setup = try await combined(harness, computers: ["laptop"])
+        down(harness, "laptop", "homebox")
+        let forgotten = try setup.forgetComputer(host: "laptop")
+        #expect(forgotten.hubKeyProblem?.contains("refused the connection") == true)
+        #expect(PoolState.load(harness.paths)?.linuxClients.isEmpty == true)
+    }
+
+    @Test func aJoinedMacWhoseHubIsGoneStillFinishesStop() throws {
+        let harness = try Harness()
+        try harness.home.write("Library/LaunchAgents/com.relaybar.helper-tunnel.plist", "x")
+        var client = PoolLinuxClient(host: "laptop", folders: [".codex-hub"])
+        client.hubKey = true
+        var joined = PoolState(ssh: "homebox", joined: true)
+        joined.steps = [.tunnelAgent, .linuxClient]
+        joined.linuxClients = [client]
+        try joined.save(harness.paths)
+        down(harness, "homebox")
+        let report = PoolTeardown.run(harness.env())
+        #expect(report.finished)
+        #expect(report.keysLeft == ["laptop"])
+        #expect(report.undone.contains(.linuxClient))
+        #expect(harness.recorder.commands.contains { $0.arguments.contains("laptop") && remoteScript($0).contains("rmdir") })
+        #expect(PoolState.load(harness.paths) == nil)
+    }
+}
+
 final class Seen: @unchecked Sendable {
     var steps: [PoolStep] = []
 }

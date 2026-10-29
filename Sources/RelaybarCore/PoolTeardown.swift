@@ -4,13 +4,16 @@ public struct PoolTeardownReport: Equatable, Sendable {
     public var undone: [PoolStep] = []
     public var failed: [(step: PoolStep, reason: String)] = []
     public var unreachable: String?
+    public var unreachableComputers: [String] = []
+    public var keysLeft: [String] = []
     public var needsPassword: String?
 
     public init() {}
 
     public static func == (left: PoolTeardownReport, right: PoolTeardownReport) -> Bool {
         left.undone == right.undone && left.failed.map(\.step) == right.failed.map(\.step)
-            && left.unreachable == right.unreachable && left.needsPassword == right.needsPassword
+            && left.unreachable == right.unreachable && left.unreachableComputers == right.unreachableComputers
+            && left.keysLeft == right.keysLeft && left.needsPassword == right.needsPassword
     }
 
     public var finished: Bool { failed.isEmpty }
@@ -33,7 +36,11 @@ public enum PoolTeardown {
         for step in reversed.filter({ $0 == .linuxClient }) + reversed.filter({ $0 != .linuxClient }) {
             progress(step)
             do {
-                try undo(step, state: state, env, sudoPassword: sudoPassword)
+                if step == .linuxClient {
+                    try removeComputers(&state, env, report: &report)
+                } else {
+                    try undo(step, state: state, env, sudoPassword: sudoPassword)
+                }
                 state.steps.removeAll { $0 == step }
                 report.undone.append(step)
                 try state.save(env.paths)
@@ -70,6 +77,25 @@ public enum PoolTeardown {
         return first ?? CommandResult()
     }
 
+    private static func removeComputers(_ state: inout PoolState, _ env: PoolEnvironment, report: inout PoolTeardownReport) throws {
+        let routes = [state.tailscale, state.ssh].compactMap { $0 }
+        var reasons: [String] = []
+        for client in state.linuxClients {
+            let removal: PoolClientRemoval
+            do {
+                removal = try PoolJoin.removeLinuxClient(client, hubRoutes: routes, run: env.run)
+            } catch {
+                report.unreachableComputers.append(client.host)
+                reasons.append(error.localizedDescription)
+                continue
+            }
+            if removal.hubKeyProblem != nil { report.keysLeft.append(client.host) }
+            state.linuxClients.removeAll { $0.host == client.host }
+            try state.save(env.paths)
+        }
+        if !reasons.isEmpty { throw PoolSSHError.failed(reasons.joined(separator: "\n")) }
+    }
+
     static func undo(_ step: PoolStep, state: PoolState, _ env: PoolEnvironment, sudoPassword: String? = nil) throws {
         let paths = env.paths
         switch step {
@@ -95,9 +121,7 @@ public enum PoolTeardown {
                 if result.status == PoolRemote.needsPasswordStatus { throw PoolKeepOnError.needsPassword(host) }
                 throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: host))
             }
-        case .linuxClient:
-            let routes = [state.tailscale, state.ssh].compactMap { $0 }
-            for client in state.linuxClients { try PoolJoin.removeLinuxClient(client, hubRoutes: routes, run: env.run) }
+        case .linuxClient: break
         case .hubFolders:
             for name in state.hubFolders {
                 let folder = paths.home.appendingPathComponent(name)

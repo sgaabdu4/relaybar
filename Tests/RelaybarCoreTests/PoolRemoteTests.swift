@@ -490,11 +490,15 @@ struct PoolJoinTests {
             command.arguments.contains("homebox") ? CommandResult(status: 255, error: "Connection refused") : CommandResult()
         }
         let seen = recorder.commands.count
-        #expect(throws: PoolSSHError.self) { try PoolJoin.removeLinuxClient(kept, hubRoutes: ["homebox"], run: recorder.runner) }
+        let hubDown = try PoolJoin.removeLinuxClient(kept, hubRoutes: ["homebox"], run: recorder.runner)
+        #expect(hubDown.hubKeyProblem?.contains("refused the connection") == true)
         #expect(recorder.commands.dropFirst(seen).contains { $0.arguments.contains("laptop") })
         recorder.respond = { _ in CommandResult(status: 255, error: "Connection refused") }
         #expect(throws: PoolSSHError.self) { try PoolJoin.removeLinuxClient(PoolLinuxClient(host: "laptop"), run: recorder.runner) }
         #expect(throws: PoolSSHError.self) { try PoolJoin.removeLinuxClient(plain, run: recorder.runner) }
+        recorder.respond = { _ in CommandResult() }
+        let noRoute = try PoolJoin.removeLinuxClient(plain, run: recorder.runner)
+        #expect(noRoute.hubKeyProblem?.contains("does not know how to reach the home computer") == true)
     }
 
     @Test func linuxClientStopsWithTheHub() async throws {

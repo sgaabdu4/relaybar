@@ -154,9 +154,27 @@ public struct PoolSetup: Sendable {
         return client
     }
 
-    public func removeComputer(host: String) throws {
-        guard var state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else { return }
-        try PoolJoin.removeLinuxClient(client, hubRoutes: hubRoutes(state), run: env.run)
+    @discardableResult
+    public func removeComputer(host: String) throws -> PoolClientRemoval {
+        guard let state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else {
+            return PoolClientRemoval()
+        }
+        let removal = try PoolJoin.removeLinuxClient(client, hubRoutes: hubRoutes(state), run: env.run)
+        try dropComputer(host: host)
+        return removal
+    }
+
+    public func forgetComputer(host: String) throws -> PoolClientRemoval {
+        guard let state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else {
+            return PoolClientRemoval()
+        }
+        let removal = PoolJoin.forgetLinuxClient(client, hubRoutes: hubRoutes(state), run: env.run)
+        try dropComputer(host: host)
+        return removal
+    }
+
+    private func dropComputer(host: String) throws {
+        guard var state = PoolState.load(env.paths) else { return }
         state.linuxClients.removeAll { $0.host == host }
         if state.linuxClients.isEmpty { state.steps.removeAll { $0 == .linuxClient } }
         try state.save(env.paths)
