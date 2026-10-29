@@ -134,7 +134,7 @@ extension PoolController {
         let offer = host != nil && state?.needsTailscale == true
         var note = note
         if state?.defaultKept == true, T3Code.isInstalled {
-            let text = "T3 Code still starts new chats with its own default. Pick Claude, all accounts in its model menu."
+            let text = "T3 Code still starts new chats with its own default. Pick Claude+ in its model menu."
             note = [note, text].compactMap { $0 }.joined(separator: "\n\n")
         }
         switch PoolDialogs.done(host: host, t3: T3Code.isInstalled, note: note, tailscale: offer) {
@@ -472,8 +472,8 @@ extension PoolController {
         case .remoteHelper: "Removing the helper from the home computer"
         case .keepOn: "Turning sleep back on at the home computer"
         case .linuxClient: "Removing the setup from the other computers"
-        case .hubFolders: "Moving the all accounts folders to the Trash"
-        case .terminalCommands: "Removing claude-all and codex-all"
+        case .hubFolders: "Moving the old all accounts folders to the Trash"
+        case .terminalCommands: "Removing claude+ and codex+"
         case .t3Entries: "Removing the entries from T3 Code"
         case .t3UsageSource: "Removing the usage source from T3 Code"
         case .t3Default: "Putting back your T3 Code default"

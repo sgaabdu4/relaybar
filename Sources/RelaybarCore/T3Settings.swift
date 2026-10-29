@@ -108,7 +108,7 @@ public struct T3Settings {
     private static let tokenVariable = "ANTHROPIC_AUTH_TOKEN"
 
     public func addPoolEntries(
-        accessKey: String, claudeHome: String, codexHome: String, hex: String, claudeBinary: String? = nil, codexBinary: String? = nil
+        accessKey: String, hex: String, claudeBinary: String? = nil, codexBinary: String? = nil
     ) throws {
         var root = try read()
         try writeSecret(
@@ -116,7 +116,7 @@ public struct T3Settings {
         var instances = instances(in: root)
         instances[Self.claudePoolID] = [
             "driver": "claudeAgent", "displayName": Pool.claudeName, "accentColor": hex, "enabled": true,
-            "config": Self.config(homePath: claudeHome, binaryPath: claudeBinary),
+            "config": Self.config(binaryPath: claudeBinary),
             "environment": [
                 ["name": "ANTHROPIC_BASE_URL", "value": Pool.base.absoluteString, "sensitive": false],
                 ["name": Self.tokenVariable, "value": "", "sensitive": true, "valueRedacted": true],
@@ -124,17 +124,14 @@ public struct T3Settings {
         ]
         instances[Self.codexPoolID] = [
             "driver": "codex", "displayName": Pool.codexName, "accentColor": hex, "enabled": true,
-            "config": Self.config(homePath: codexHome, binaryPath: codexBinary, setupMode: "existing"),
+            "config": Self.config(binaryPath: codexBinary),
         ]
         root["providerInstances"] = instances
         try write(root)
     }
 
-    private static func config(homePath: String, binaryPath: String?, setupMode: String? = nil) -> [String: String] {
-        var config = ["homePath": homePath]
-        if let binaryPath { config["binaryPath"] = binaryPath }
-        if let setupMode { config["setupMode"] = setupMode }
-        return config
+    private static func config(binaryPath: String?) -> [String: String] {
+        binaryPath.map { ["binaryPath": $0] } ?? [:]
     }
 
     public func removePoolEntries() throws {

@@ -259,6 +259,7 @@ extension PoolJoin {
             report(.letIn, .done)
 
             var local = Set(["claude", "codex"].filter(found.inLocalBin))
+            func binary(_ tool: String) -> String? { local.contains(tool) ? "$HOME/.local/bin/\(tool)" : elsewhere[tool] }
             var elsewhere = Dictionary(
                 uniqueKeysWithValues: ["claude", "codex"].compactMap { tool in found.fullPath(tool).map { (tool, $0) } })
             if !found.missing.isEmpty {
@@ -301,21 +302,17 @@ extension PoolJoin {
             report(.route, .done)
 
             report(.commands, .working)
-            progress("Setting up claude-all and codex-all on \(host)")
+            progress("Setting up claude+ and codex+ on \(host)")
             let keyFile = "\(clientConfig)/access-key"
             try remote.execute("umask 077; cat > \"\(keyFile)\"", stdin: Data(accessKey.utf8))
-            try remote.execute("mkdir -p \"$HOME/.claude-hub\" \"$HOME/.codex-hub\" \"$HOME/.local/bin\"")
-            let config = PoolConfig.codexHubConfig(keyCommand: ["/bin/cat", home + "/.config/relaybar/access-key"])
-            try remote.execute("cat > \"$HOME/.codex-hub/config.toml\"", stdin: Data(config.utf8))
-            let read = "cat \"\(keyFile)\""
-            for (name, claude) in [("claude-all", true), ("codex-all", false)] {
-                let tool = claude ? "claude" : "codex"
+            try remote.execute("mkdir -p \"$HOME/.local/bin\"")
+            let launchers = [
+                ("claude+", PoolConfig.claudePlus(keyCommand: "cat \"\(keyFile)\"", binary: binary("claude"))),
+                ("codex+", PoolConfig.codexPlus(keyCommand: ["/bin/cat", home + "/.config/relaybar/access-key"], binary: binary("codex"))),
+            ]
+            for (name, text) in launchers {
                 try remote.execute(
-                    "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"",
-                    stdin: Data(
-                        PoolConfig.terminalCommand(
-                            claude: claude, keyCommand: read, binary: local.contains(tool) ? "$HOME/.local/bin/\(tool)" : elsewhere[tool]
-                        ).utf8))
+                    "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"", stdin: Data(text.utf8))
             }
             let unit = try PoolTunnel.linuxUnit(
                 user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port,
@@ -368,7 +365,7 @@ extension PoolJoin {
                 try addT3Entries(
                     remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint,
                     claudeBinary: local.contains("claude") ? home + "/.local/bin/claude" : elsewhere["claude"],
-                    codexBinary: local.contains("codex") ? home + "/.local/bin/codex" : elsewhere["codex"], orEmpty: installT3,
+                    codexBinary: home + "/.local/bin/codex+", orEmpty: installT3,
                     model: options.t3Model)
             }
             if installT3 {
@@ -523,8 +520,7 @@ extension PoolJoin {
             client.t3Entries = true
             checkpoint(client)
             try t3.addPoolEntries(
-                accessKey: accessKey, claudeHome: home + "/.claude-hub", codexHome: home + "/.codex-hub", hex: PoolSetup.combinedColor,
-                claudeBinary: claudeBinary, codexBinary: codexBinary)
+                accessKey: accessKey, hex: PoolSetup.combinedColor, claudeBinary: claudeBinary, codexBinary: codexBinary)
             if case .set(let previous) = try t3.setPoolDefault(fallbackModel: model) {
                 client.t3DefaultSet = true
                 client.previousSelection = previous
@@ -598,12 +594,13 @@ extension PoolJoin {
         let config = clientConfig
         var steps = [
             "systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1",
-            "rm -f \"$HOME/.config/systemd/user/relaybar-tunnel.service\" \"\(config)/access-key\" \"\(config)/hub_key\" \"\(config)/hub_key.pub\" \"\(config)/known_hosts\" \"$HOME/.codex-hub/config.toml\"",
-            "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; grep -q '\(PoolFile.marker)' \"$p\" 2>/dev/null && rm -f \"$p\"; done",
+            "rm -f \"$HOME/.config/systemd/user/relaybar-tunnel.service\" \"\(config)/access-key\" \"\(config)/hub_key\" \"\(config)/hub_key.pub\" \"\(config)/known_hosts\"",
+            "f=\"$HOME/.codex-hub/config.toml\"; grep -q '\(PoolFile.marker)' \"$f\" 2>/dev/null && rm -f \"$f\"",
+            "for f in \((clientCommands + legacyClientCommands).joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; grep -q '\(PoolFile.marker)' \"$p\" 2>/dev/null && rm -f \"$p\"; done",
             "systemctl --user daemon-reload >/dev/null 2>&1",
         ]
         steps += removeInstalls(client)
-        for folder in client.folders where clientFolders.contains(folder) {
+        for folder in client.folders where (clientFolders + legacyClientFolders).contains(folder) {
             steps.append("rmdir \"$HOME/\(folder)\" 2>/dev/null")
         }
         if client.linger {

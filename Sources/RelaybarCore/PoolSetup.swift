@@ -300,26 +300,19 @@ public struct PoolSetup: Sendable {
 
     private func finishLocal(secrets: PoolSecrets, state: inout PoolState, progress: @Sendable (String) -> Void) async throws {
         let paths = env.paths
-        progress("Making the \"all accounts\" folders")
-        for folder in [paths.claudeHub, paths.codexHub] where !FileManager.default.fileExists(atPath: folder.path) {
-            try PoolFile.makeFolder(folder)
-            state.hubFolders.append(folder.lastPathComponent)
-            state.record(.hubFolders)
-            try state.save(paths)
-        }
-        try PoolFile.writeOwned(PoolConfig.codexHubConfig(), to: paths.codexConfig)
-        try PoolFile.writeOwned(PoolConfig.terminalCommand(claude: true), to: paths.claudeAll, executable: true)
-        try PoolFile.writeOwned(PoolConfig.terminalCommand(claude: false), to: paths.codexAll, executable: true)
+        progress("Setting up claude+ and codex+")
+        try PoolFile.writeOwned(PoolConfig.claudePlus(), to: paths.claudePlus, executable: true)
+        try PoolFile.writeOwned(PoolConfig.codexPlus(), to: paths.codexPlus, executable: true)
         state.record(.terminalCommands)
         try state.save(paths)
         guard env.t3Installed else { return }
-        progress("Adding the \"all accounts\" entries to T3 Code")
+        progress("Adding Claude+ and Codex+ to T3 Code")
         let t3 = env.t3
         try t3.validate()
         state.record(.t3Entries)
         try state.save(paths)
         try t3.addPoolEntries(
-            accessKey: secrets.accessKey, claudeHome: paths.claudeHub.path, codexHome: paths.codexHub.path, hex: Self.combinedColor)
+            accessKey: secrets.accessKey, hex: Self.combinedColor, codexBinary: paths.codexPlus.path)
         switch try t3.setPoolDefault() {
         case .set(let previous):
             state.previousSelection = previous
@@ -369,6 +362,8 @@ public enum PoolJoin {
         return PoolSecrets(accessKey: access, managementSecret: management)
     }
 
-    static let clientFolders = [".claude-hub", ".codex-hub", ".config/relaybar"]
-    static let clientCommands = ["claude-all", "codex-all"]
+    static let clientFolders = [".config/relaybar"]
+    static let legacyClientFolders = [".claude-hub", ".codex-hub"]
+    static let clientCommands = ["claude+", "codex+"]
+    static let legacyClientCommands = ["claude-all", "codex-all"]
 }

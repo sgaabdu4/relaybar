@@ -10,8 +10,8 @@ public enum Pool {
     public static let helperLabel = "com.relaybar.helper"
     public static let updateLabel = "com.relaybar.helper-update"
     public static let tunnelLabel = "com.relaybar.helper-tunnel"
-    public static let claudeName = "Claude, all accounts"
-    public static let codexName = "Codex, all accounts"
+    public static let claudeName = "Claude+"
+    public static let codexName = "Codex+"
     public static let usageSourceLabel = "All accounts"
     public static func overriddenURL(_ variable: String) -> String? {
         guard let value = ProcessInfo.processInfo.environment[variable], value.hasPrefix("https://") || value.hasPrefix("file:///"),
@@ -45,11 +45,10 @@ public struct PoolPaths: Sendable {
     public var updateScript: URL { appSupport.appendingPathComponent("relaybar-helper.sh") }
     public var state: URL { appSupport.appendingPathComponent("pool.json") }
     public var agents: URL { home.appendingPathComponent("Library/LaunchAgents") }
-    public var claudeHub: URL { home.appendingPathComponent(".claude-hub") }
-    public var codexHub: URL { home.appendingPathComponent(".codex-hub") }
-    public var codexConfig: URL { codexHub.appendingPathComponent("config.toml") }
-    public var claudeAll: URL { home.appendingPathComponent(".local/bin/claude-all") }
-    public var codexAll: URL { home.appendingPathComponent(".local/bin/codex-all") }
+    public var claudePlus: URL { home.appendingPathComponent(".local/bin/claude+") }
+    public var codexPlus: URL { home.appendingPathComponent(".local/bin/codex+") }
+    var claudeAll: URL { home.appendingPathComponent(".local/bin/claude-all") }
+    var codexAll: URL { home.appendingPathComponent(".local/bin/codex-all") }
 
     public func agent(_ label: String) -> URL { agents.appendingPathComponent(label + ".plist") }
 }
