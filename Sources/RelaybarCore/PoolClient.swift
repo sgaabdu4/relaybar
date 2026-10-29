@@ -145,12 +145,13 @@ extension PoolJoin {
     }
 
     public static func linuxClient(
-        host: String, hub: String, accessKey: String, run: @escaping CommandRunner, progress: (String) -> Void = { _ in },
-        checkpoint: (PoolLinuxClient?) -> Void = { _ in }
+        host: String, hub: String, hubLabel: String? = nil, accessKey: String, run: @escaping CommandRunner,
+        progress: (String) -> Void = { _ in }, checkpoint: (PoolLinuxClient?) -> Void = { _ in }
     ) throws -> PoolLinuxClient {
         let remote = PoolRemote(host: host, run: run)
         let hubName = try PoolHubPicker.validate(hub)
         let hubRemote = PoolRemote(host: hubName, run: run)
+        let label = hubLabel ?? hubName
         let system = try operatingSystem(remote)
         if system == "Darwin" { throw PoolClientError.mac(host) }
         guard system == "Linux" else { throw PoolClientError.notLinux(host) }
@@ -197,7 +198,7 @@ extension PoolJoin {
                 publicKey.dropFirst(12).allSatisfy({ $0.isLetter || $0.isNumber || "+/=".contains($0) })
             else { throw PoolClientError.noKeyTool(host) }
 
-            progress("Letting \(host) in on \(hubName)")
+            progress("Letting \(host) in on \(label)")
             client.hubKey = true
             checkpoint(client)
             let created = try hubRemote.execute(
@@ -209,7 +210,7 @@ extension PoolJoin {
                     + "r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
                     + "else : > \"$f\" && chmod 600 \"$f\" && echo created:keys || exit 1; fi; cat >> \"$f\"",
                 stdin: Data((hubKeyLine(publicKey: publicKey, host: host) + "\n").utf8))
-            if created.split(whereSeparator: \.isNewline).contains("link") { throw PoolFileError.link("\(hubName):.ssh/authorized_keys") }
+            if created.split(whereSeparator: \.isNewline).contains("link") { throw PoolFileError.link("\(label):.ssh/authorized_keys") }
             client.hubCreated = created.split(whereSeparator: \.isNewline).map(String.init).filter { $0.hasPrefix("created:") }.map {
                 String($0.dropFirst(8))
             }
@@ -217,8 +218,8 @@ extension PoolJoin {
 
             try remote.execute(
                 "umask 077; cat > \"\(clientConfig)/known_hosts\"", stdin: Data(facts.knownHosts().utf8))
-            progress("Finding the way from \(host) to \(hubName)")
-            let address = try chooseAddress(remote, hub: hubName, facts: facts, key: key, knownHosts: knownHosts)
+            progress("Finding the way from \(host) to \(label)")
+            let address = try chooseAddress(remote, hub: label, facts: facts, key: key, knownHosts: knownHosts)
 
             progress("Setting up claude-all and codex-all on \(host)")
             let keyFile = "\(clientConfig)/access-key"
@@ -253,7 +254,7 @@ extension PoolJoin {
                     + "sleep 1; i=$((i+1)); done; echo down")
             guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "up" else {
                 throw PoolSSHError.failed(
-                    "\(host) reached \(hubName), but the helper did not answer there. Check that the helper is running, then try again.")
+                    "\(host) reached \(label), but the helper did not answer there. Check that the helper is running, then try again.")
             }
             if hasT3 {
                 progress("Adding the entries to T3 Code on \(host)")

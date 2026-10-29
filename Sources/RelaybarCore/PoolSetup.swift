@@ -154,7 +154,7 @@ public struct PoolSetup: Sendable {
         }
         let paths = env.paths
         let client = try PoolJoin.linuxClient(
-            host: host, hub: hub, accessKey: access, run: env.run, progress: progress,
+            host: host, hub: hub, hubLabel: state.ssh, accessKey: access, run: env.run, progress: progress,
             checkpoint: { partial in
                 state.linuxClients.removeAll { $0.host == host }
                 if let partial {
