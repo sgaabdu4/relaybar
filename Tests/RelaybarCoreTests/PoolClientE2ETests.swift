@@ -25,7 +25,7 @@ struct PoolClientE2ETests {
         let key = try String(contentsOfFile: ClientE2E.environment["RELAYBAR_E2E_ACCESS_KEY_FILE"] ?? "", encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let client = try await PoolJoin.linuxClient(host: "e2e-client", hub: "e2e-hub", accessKey: key, run: ClientE2E.run)
-        try JSONEncoder().encode(client).write(to: ClientE2E.clientFile)
+        try JSONEncoder().encode(client.client).write(to: ClientE2E.clientFile)
     }
 
     @Test(.enabled(if: ClientE2E.step == "addInstalls"))
@@ -39,7 +39,7 @@ struct PoolClientE2ETests {
         let client = try await PoolJoin.linuxClient(
             host: "e2e-client", hub: "e2e-hub", accessKey: key, options: PoolAddOptions(t3Channel: .nightly), hooks: hooks,
             run: ClientE2E.run)
-        try JSONEncoder().encode(client).write(to: ClientE2E.clientFile)
+        try JSONEncoder().encode(client.client).write(to: ClientE2E.clientFile)
     }
 
     @Test(.enabled(if: ClientE2E.step == "remove"))

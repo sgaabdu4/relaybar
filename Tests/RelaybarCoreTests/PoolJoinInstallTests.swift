@@ -185,6 +185,47 @@ extension PoolJoinTests {
         #expect(order < needs)
     }
 
+    private func outcome(
+        _ host: FakeClientHost, options: PoolAddOptions, hooks: PoolAddHooks = .none, tailscaleUp: Bool = false
+    ) async throws -> PoolAddResult {
+        let up = "RB-IP\n100.64.0.9\nRB-STATUS\n" + tailscaleStatus("Running") + "\n"
+        let recorder = Recorder()
+        recorder.respond = { command in
+            if tailscaleUp, command.executable == "/usr/bin/ssh", remoteScript(command).hasPrefix("if ! command -v tailscale") {
+                return CommandResult(output: up)
+            }
+            return host.answer(command) ?? CommandResult()
+        }
+        return try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: options, hooks: hooks, run: recorder.runner)
+    }
+
+    @Test func saysWhatTheSetupDid() async throws {
+        let both = PoolAddOptions(t3Channel: .nightly, tailscale: true)
+        let linked = try await outcome(FakeClientHost(), options: both, tailscaleUp: true)
+        #expect(linked.link == .linked && linked.listening == .tailscale && linked.notes.isEmpty)
+
+        let homeOnly = try await outcome(FakeClientHost(reachable: false), options: both, tailscaleUp: true)
+        #expect(homeOnly.link == .linked && homeOnly.listening == .homeNetwork && homeOnly.notes == [.tailscaleUnreachable])
+
+        let declined = try await outcome(
+            FakeClientHost(pair: "no link\n"), options: PoolAddOptions(t3Channel: .nightly), hooks: PoolAddHooks(linkFailed: { _ in false })
+        )
+        #expect(declined.link == .notLinked && declined.client.t3LinkMissing)
+
+        let quiet = try await outcome(FakeClientHost(), options: PoolAddOptions())
+        #expect(quiet.link == .notTried && quiet.listening == .unchanged && quiet.notes.isEmpty)
+
+        let running = "\nt3svc:yes\nt3exec:/home/laptop/.t3/runtime/versions/0.1.6/t3"
+        let kept = try await outcome(FakeClientHost(probe: FakeClientHost.probe + running), options: both, tailscaleUp: true)
+        #expect(kept.link == .linked && kept.listening == .unchanged && kept.notes == [.t3Kept])
+
+        let lost = try await outcome(
+            FakeClientHost(probe: FakeClientHost.probe + "\nt3svc:yes"), options: PoolAddOptions(t3Channel: .nightly))
+        #expect(lost.link == .notTried && lost.notes == [.t3NotFound])
+        #expect(!lost.client.t3Installed)
+    }
+
     @Test func leavesAnExistingT3CodeAlone() async throws {
         let running = "\nt3svc:yes\nt3exec:/home/laptop/.t3/runtime/versions/0.1.6/t3"
         let recorder = Recorder()
@@ -308,7 +349,7 @@ extension PoolJoinTests {
         let sent = harness.recorder.commands.map(plainScript)
         #expect(!sent.contains { $0.contains("service uninstall") || $0.contains("rm -f \"$HOME/.local/bin/claude\"") })
         let saved = try #require(PoolState.load(harness.paths)?.linuxClients.first)
-        #expect(saved == client)
+        #expect(saved == client.client)
         #expect(saved.hubKey)
         let log = AddLog()
         let quiet = Recorder()

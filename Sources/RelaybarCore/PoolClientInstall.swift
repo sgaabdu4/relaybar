@@ -38,6 +38,20 @@ public struct PoolAddOptions: Equatable, Sendable {
     }
 }
 
+@dynamicMemberLookup
+public struct PoolAddResult: Equatable, Sendable {
+    public enum Link: Equatable, Sendable { case linked, notLinked, notTried }
+    public enum Listening: Equatable, Sendable { case tailscale, homeNetwork, unchanged }
+    public enum Note: Equatable, Sendable { case tailscaleUnreachable, t3Kept, t3NotFound }
+
+    public var client: PoolLinuxClient
+    public var link = Link.notTried
+    public var listening = Listening.unchanged
+    public var notes: [Note] = []
+
+    public subscript<Value>(dynamicMember path: KeyPath<PoolLinuxClient, Value>) -> Value { client[keyPath: path] }
+}
+
 public enum PoolAddStage: Int, CaseIterable, Sendable {
     case letIn
     case tools
@@ -196,7 +210,9 @@ extension PoolJoin {
     ) async -> Bool {
         let session = PoolPasswordSession(host: host, run: run, ask: ask)
         defer { session.forget() }
-        return (try? await session.run("loginctl disable-linger \"$SUDO_USER\"", why: "stop keeping Relaybar running after you log out", limit: 60)) != nil
+        return
+            (try? await session.run(
+                "loginctl disable-linger \"$SUDO_USER\"", why: "stop keeping Relaybar running after you log out", limit: 60)) != nil
     }
 
     static func removeInstalls(_ client: PoolLinuxClient) -> [String] {
@@ -231,7 +247,8 @@ extension PoolJoin {
             steps.append(
                 "f=\"\(t3Env)\"; if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then t=$(mktemp) && { grep -v '^T3CODE_HOST=' \"$f\" > \"$t\"; "
                     + "if [ -s \"$t\" ]; then cat \"$t\" > \"$f\"; else rm -f \"$f\"; fi; }; rm -f \"$t\"; fi; "
-                    + "f=\"\(t3Retry)\"; d=$(dirname \"$f\"); if [ ! -L \"$d\" ]; then rm -f \"$f\"; rmdir \"$d\" 2>/dev/null; systemctl --user daemon-reload 2>/dev/null; fi;")
+                    + "f=\"\(t3Retry)\"; d=$(dirname \"$f\"); if [ ! -L \"$d\" ]; then rm -f \"$f\"; rmdir \"$d\" 2>/dev/null; systemctl --user daemon-reload 2>/dev/null; fi;"
+            )
         }
         guard !steps.isEmpty else { return }
         try remote.execute(steps.joined(separator: " ") + " true", limit: 300)

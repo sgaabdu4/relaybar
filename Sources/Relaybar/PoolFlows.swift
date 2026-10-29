@@ -372,7 +372,7 @@ extension PoolController {
                 DispatchQueue.main.async { MainActor.assumeIsolated { _ = NSWorkspace.shared.open(link) } }
             },
             linkFailed: { name in await MainActor.run { PoolDialogs.linkFailed(host: name) } })
-        var added: PoolLinuxClient?
+        var added: PoolAddResult?
         let worked = await attempt(host: host, title: "Setting up \(host)", panel: panel) {
             let work = Task.detached { try await setup.useOnLinux(host: host, options: options, hooks: hooks) }
             panel.onCancel = { work.cancel() }
@@ -380,7 +380,7 @@ extension PoolController {
         }
         panel.close()
         guard worked, let added else { return }
-        PoolDialogs.addedComputer(host: host, client: added, options: options)
+        PoolDialogs.addedComputer(host: host, result: added)
     }
 
     @objc func removeComputer(_ sender: NSMenuItem) {

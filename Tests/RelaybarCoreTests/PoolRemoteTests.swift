@@ -296,7 +296,8 @@ struct PoolJoinTests {
         async throws -> PoolLinuxClient
     {
         try await PoolJoin.linuxClient(
-            host: "laptop", hub: hub, accessKey: secrets.accessKey, options: options, hooks: hooks, run: recorder.runner)
+            host: "laptop", hub: hub, accessKey: secrets.accessKey, options: options, hooks: hooks, run: recorder.runner
+        ).client
     }
 
     @Test func linuxClientKeyFileIsPrivate() async throws {
@@ -670,7 +671,7 @@ struct PoolJoinTests {
         let added = try await setup.useOnLinux(host: "laptop")
         let state = try #require(PoolState.load(harness.paths))
         #expect(state.steps.contains(.linuxClient))
-        #expect(state.linuxClients == [added])
+        #expect(state.linuxClients == [added.client])
         #expect(added.folders == [".codex-hub"])
         #expect(added.linger)
         #expect(added.hubKey)
@@ -682,7 +683,7 @@ struct PoolJoinTests {
         let keyWrites = harness.recorder.commands.filter { $0.stdin == Data(access.utf8) }
         #expect(keyWrites.count == 1)
         let again = try await setup.useOnLinux(host: "laptop")
-        #expect(PoolState.load(harness.paths)?.linuxClients == [again])
+        #expect(PoolState.load(harness.paths)?.linuxClients == [again.client])
         let mark = harness.recorder.commands.count
         #expect(setup.stop().finished)
         let sent = Array(harness.recorder.commands.dropFirst(mark)).filter { $0.executable == "/usr/bin/ssh" }.map(remoteScript)
