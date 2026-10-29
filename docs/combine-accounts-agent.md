@@ -20,8 +20,9 @@ Give this file to Claude Code or Codex when Relaybar's **Combine accounts** need
 | Linux services | user units `relaybar-helper.service`, `relaybar-helper-update.service` and `relaybar-helper-update.timer` |
 | Keys | Mac Keychain items "Relaybar access key" and "Relaybar management secret" |
 | Added computer | on the added Linux computer: user unit `relaybar-tunnel.service`, and in `~/.config/relaybar/` the files `hub_key`, `hub_key.pub`, `known_hosts` and `access-key`; on the home computer: one line ending `relaybar-client:<name>` in `~/.ssh/authorized_keys` (backup: `authorized_keys.relaybar-backup`) |
-| Tools | `~/.claude-hub`, `~/.codex-hub/config.toml`, `~/.local/bin/claude-all`, `~/.local/bin/codex-all` |
-| T3 Code | entries "Claude, all accounts" and "Codex, all accounts", and the usage source "All accounts" |
+| Tools | `~/.local/bin/claude+` and `~/.local/bin/codex+` (they set the helper only at launch; nothing in `~/.claude` or `~/.codex` is edited) |
+| Replaced logins | on an added computer where the user chose Replace: `~/.claude/settings.json` (`apiKeyHelper` and `env`), `~/.codex/config.toml` (the `relaybar` provider), and the old logins and settings kept in `~/.config/relaybar/kept/` until Remove puts them back |
+| T3 Code | entries "Claude+" and "Codex+", and the usage source "All accounts" |
 
 The helper always listens on `127.0.0.1:8317` of the computer that runs it. A Mac reaches a home helper through its SSH tunnel on its own `127.0.0.1:8317`.
 
@@ -75,8 +76,8 @@ unset key
 
 ## Use combined accounts from a terminal
 
-- On a Mac with Relaybar: `claude-all` and `codex-all`.
-- On a Linux computer added in Relaybar: the same commands. The key is in a private file there.
+- On a Mac with Relaybar: `claude+` and `codex+`.
+- On a Linux computer added in Relaybar: plain `claude` and `codex` if the user chose Replace, otherwise `claude+` and `codex+`. The key is in a private file there.
 - Anywhere else: do not set this up by hand. Ask the user to use Relaybar: **All accounts**, then **Add a computer…**. A Mac runs Relaybar itself and connects in one click.
 
 ## Stop
