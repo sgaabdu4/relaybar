@@ -65,11 +65,44 @@ In T3 Code, every account shows up in the model picker with its own tag, ready t
 
 Click Relaybar, then **Customize**, the account, then **Remove**. You can hide it, or delete it from your Mac: its folder, desktop app, saved login and T3 Code entry. Deleting asks three times, and files go to the Trash. Your main `~/.claude` and `~/.codex` folders can only be hidden.
 
+## Combine accounts
+
+Optional. T3 Code uses whichever of your accounts has room. When one runs out, the next one takes over, so you stop switching by hand.
+
+> **Combining accounts can get your accounts banned.** Anthropic or OpenAI may treat it as against their terms. Relaybar cannot stop or undo a ban. Two rules:
+> 1. Use your plans only for your own work. Never use them to serve other people.
+> 2. Use Claude plans only for Claude models in Claude Code. Never use them in any other app.
+>
+> Run the helper only on your own computers at home. Never on a cloud server or behind a VPN.
+
+1. Click Relaybar, then **Combine accounts…**.
+2. Check **Runs on**. Relaybar fills in the best computer: a Linux computer at home that is always on, or this Mac.
+3. Tick the box to accept the risk, then click **Combine**.
+4. Sign in once to each account. The browser opens for each one in turn.
+
+New chats in T3 Code now use **Claude, all accounts**. **Codex, all accounts** is there too. Your single-account entries stay. In a terminal, use `claude-all` and `codex-all`.
+
+How it works:
+
+- **The helper:** [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) picks the account. Relaybar installs it, checks the download, and locks it in: it cannot read your home folder or Keychain, or start other programs. It listens only on the computer that runs it.
+- **Your logins:** you sign each account in to the helper again. The helper keeps those new logins on the computer that runs it and renews them. Your normal logins stay as they are.
+- **Where it runs:** this Mac, or a Linux computer at home. Other computers reach it with SSH, by its home network address, its Tailscale address or its SSH name. If SSH asks for a password, **Set Up SSH for Me** makes a key and opens Terminal so you type that computer's password once.
+- **Away from home:** this needs [Tailscale](https://tailscale.com). If both computers already have it, Relaybar uses it by itself. If not, **Set Up Tailscale…** does the steps. You type your Mac password, click Allow once and sign in once.
+- **Order:** new chats use your first account until it has less than 10% left, then the next one. Open chats stay on their account, so their prompt cache is not rewritten. Change it in **All accounts**, then **Change order…**.
+- **Pause:** in **All accounts**, untick an account to pause it. Tick it to use it again.
+- **Other Macs:** Relaybar finds a home computer that already runs the helper and offers **Use combined accounts**.
+- **Updates:** each night, the computer that runs the helper installs a new helper version by itself. It waits until a version is 3 days old, checks the download, tests it, and goes back to the old version if the test fails. Relaybar keeps a [block list](pool/blocked-versions.txt) of bad versions.
+- **Stop:** **All accounts**, then **Stop combining…**. It asks twice, then removes everything it added.
+
+If a bad helper version is ever reported, click **Stop combining…**, then sign out of all sessions on claude.ai and chatgpt.com. That makes the helper's logins useless.
+
+Stuck, or want to do it by hand? Give your coding agent the [agent guide](docs/combine-accounts-agent.md).
+
 ## How live is it?
 
 - **Codex:** updates the moment you send a message, from Codex's own session logs.
 - **Claude:** checks when that account is in use (at most once a minute) and every five minutes otherwise.
-- **Logins:** Relaybar only reads them and never renews them, because renewing would sign the account out of Claude Code.
+- **Logins:** Relaybar only reads them and never renews them, because renewing would sign the account out of Claude Code. When you combine accounts, you sign each account in to CLIProxyAPI again. CLIProxyAPI keeps those new logins on the computer that runs it and renews them. Relaybar itself still never copies or renews a login.
 
 ## Updates
 
@@ -79,6 +112,7 @@ Relaybar updates itself. It checks for a new version every hour and installs it 
 
 - No analytics and no server of its own. Relaybar asks Anthropic and OpenAI for your usage with your own logins.
 - Logins stay in your Keychain and in Claude's and Codex's own files. Relaybar never copies them.
+- When you combine accounts, Relaybar asks ipinfo.io for each computer's public address to check it is at home. Each night, the computer that runs the helper asks GitHub for new helper versions and Relaybar's block list. The helper itself also checks some tool versions online when it starts.
 - Desktop apps are clones of the official Claude and Codex apps on your disk. A clone takes almost no extra space.
 
 ## Requirements

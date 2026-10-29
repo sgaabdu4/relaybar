@@ -5,7 +5,7 @@ app=build/Relaybar.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Info.plist "$app/Contents/"
-cp Resources/*.svg Resources/LOGOS-LICENSE.txt "$app/Contents/Resources/"
+cp Resources/*.svg Resources/LOGOS-LICENSE.txt Resources/relaybar-helper.sh "$app/Contents/Resources/"
 iconset=build/AppIcon.iconset
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
