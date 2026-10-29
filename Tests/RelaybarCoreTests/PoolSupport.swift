@@ -114,3 +114,54 @@ let sampleCredentials: [String: Any] = [
     ],
     "observed_at": "2026-10-29T07:20:19.0148Z",
 ]
+
+func plainScript(_ command: Command) -> String {
+    remoteScript(command).replacingOccurrences(of: "'\\''", with: "'")
+}
+
+struct FakeClientHost: Sendable {
+    static let hubFacts =
+        "user=sam\nid=hubid\nport=22\naddr=192.168.1.20\naddr=172.17.0.1\nts=100.64.0.7\nhostkey=ssh-ed25519 AAAAhubkey root@hub\n"
+    static let probe = "new:.claude-hub\nnew:.codex-hub\nnew:.config/relaybar\nlinger:off\nid=laptopid"
+
+    var system = "Linux\n"
+    var probe = Self.probe
+    var facts = Self.hubFacts
+    var route = "ok:192.168.1.20\n"
+    var tunnel = "up\n"
+    var settings = ""
+    var hubAdds = ""
+
+    func answer(_ command: Command) -> CommandResult? {
+        guard command.executable == "/usr/bin/ssh" else { return nil }
+        let text = remoteScript(command)
+        if text.contains("uname -s") { return CommandResult(output: system) }
+        if text.contains("printf %s \"$HOME\"") { return CommandResult(output: "/home/sam") }
+        if text.contains("for d in") { return CommandResult(output: probe) }
+        if text.contains("hostkey=") { return CommandResult(output: facts) }
+        if text.contains("ssh-keygen") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
+        if text.contains("authorized_keys"), text.contains("cat >> ") { return CommandResult(output: hubAdds) }
+        if text.contains("echo ok:$a") { return CommandResult(output: route) }
+        if text.contains("&& echo changed:linger") { return CommandResult(output: "changed:linger\n") }
+        if text.contains("http_code") { return CommandResult(output: tunnel) }
+        if text.contains("[ -f \"$f\" ] && cat") { return CommandResult(output: settings) }
+        return nil
+    }
+}
+
+extension Harness {
+    func answerHomeAndComputers(_ host: FakeClientHost = FakeClientHost()) {
+        let up = Flag()
+        recorder.respond = { command in
+            let text = command.executable == "/usr/bin/ssh" ? remoteScript(command) : ""
+            if text.contains("join.json\" ]") { return CommandResult(output: "000") }
+            if text.contains("mkdir -m 700") { return CommandResult(output: "claimed") }
+            if command.executable == "/bin/launchctl", command.arguments.first == "bootstrap" { up.on = true }
+            return host.answer(command) ?? CommandResult()
+        }
+        http.handler = { request in
+            guard request.url.path == "/v1/models", up.on else { return nil }
+            return HTTPResponse(status: request.headers["Authorization"] == nil ? 401 : 200)
+        }
+    }
+}

@@ -50,6 +50,31 @@ struct PoolCommandTests {
         #expect(remoteStdin.contains("hunter2-password\n"))
     }
 
+    @Test func computerSecretsNeverInArguments() async throws {
+        let harness = try Harness()
+        try harness.home.write(".t3/userdata/settings.json", #"{"providerInstances": {}}"#)
+        harness.answerHomeAndComputers(
+            FakeClientHost(
+                probe: FakeClientHost.probe + "\nt3:yes\nt3secrets:new",
+                settings: #"{"defaultModelSelection": {"instanceId": "claudeAgent", "model": "m"}, "providerInstances": {}}"#))
+        let setup = PoolSetup(env: harness.env())
+        _ = try await setup.combineOnHome(host: "homebox")
+        let mark = harness.recorder.commands.count
+        let access = try #require(setup.accessKey())
+        let management = try #require(harness.env().keychain.read(service: Pool.managementService))
+        try setup.useOnLinux(host: "laptop")
+        try setup.removeComputer(host: "laptop")
+        let sent = Array(harness.recorder.commands.dropFirst(mark))
+        #expect(sent.contains { remoteScript($0).contains("userdata/secrets/provider-env-") })
+        for command in sent {
+            let joined = ([command.executable] + command.arguments + command.environment.map { $0.key + "=" + $0.value }).joined(
+                separator: " ")
+            for secret in [access, management] { #expect(!joined.contains(secret), "secret in arguments of \(command.executable)") }
+            #expect(command.stdin.map { String(decoding: $0, as: UTF8.self).contains(management) } != true)
+        }
+        #expect(sent.contains { $0.stdin == Data(access.utf8) })
+    }
+
     @Test func theRealRunnerRunsAProgram() {
         let echo = PoolProcess.run(Command("/bin/echo", ["hello"]))
         #expect(echo.succeeded)
