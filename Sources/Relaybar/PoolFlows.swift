@@ -267,6 +267,7 @@ extension PoolController {
         var report = PoolTeardownReport()
         let hub = state?.ssh ?? "the home computer"
         var keysLeft: [String] = []
+        var lingerStays: [String] = []
         var leftAlone: Set<String> = []
         while true {
             let attempt = password
@@ -276,6 +277,7 @@ extension PoolController {
             UserDefaults.standard.removeObject(forKey: knownKey)
             clearCache()
             keysLeft += report.keysLeft
+            lingerStays += report.lingerStays
             if let host = report.needsPassword {
                 panel.close()
                 password = PoolDialogs.restoreSleepPassword(host: host, wrong: wrong)
@@ -319,6 +321,7 @@ extension PoolController {
         generation += 1
         clearCache()
         if joined, !keysLeft.isEmpty { showKeysLeft(hub: hub, names: keysLeft) }
+        await releaseLinger(lingerStays)
         let hubLeft = report.unreachable != nil
         let computersLeft = !report.unreachableComputers.isEmpty
         let others = report.failed.filter { entry in
@@ -408,6 +411,25 @@ extension PoolController {
         }
         panel.close()
         if removal?.hubKeyProblem != nil { showKeysLeft(hub: state?.ssh ?? "the home computer", names: [host]) }
+        if removal?.lingerStays == true { await releaseLinger([host]) }
+    }
+
+    private func releaseLinger(_ hosts: [String]) async {
+        let setup = PoolSetup(env: environment())
+        var stuck: [String] = []
+        for host in hosts {
+            let off = await Task.detached {
+                await setup.releaseLinger(host: host) { wrong, why in
+                    await MainActor.run { PoolDialogs.computerPassword(host: host, wrong: wrong, why: why) }
+                }
+            }.value
+            if !off { stuck.append(host) }
+        }
+        guard !stuck.isEmpty else { return }
+        app.show(
+            "A setting stays on at \(stuck.joined(separator: ", "))",
+            "Relaybar set it to keep programs running after you log out. It could not undo that. To undo it, run this on the computer: sudo loginctl disable-linger $(id -un)"
+        )
     }
 
     private func showKeysLeft(hub: String, names: [String]) {

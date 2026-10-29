@@ -181,6 +181,10 @@ public struct PoolSetup: Sendable {
         return removal
     }
 
+    public func releaseLinger(host: String, ask: @escaping @Sendable (Bool, String) async -> String?) async -> Bool {
+        await PoolJoin.releaseLinger(host: host, ask: ask, run: env.run)
+    }
+
     public func forgetComputer(host: String) throws -> PoolClientRemoval {
         guard let state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else {
             return PoolClientRemoval()

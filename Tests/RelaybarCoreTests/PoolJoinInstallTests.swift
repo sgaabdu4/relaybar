@@ -499,6 +499,43 @@ extension PoolJoinTests {
         #expect(!text.contains("rmdir \"$HOME/.codex\"") && !text.contains("Codex installer") && !text.contains("local/share/claude"))
     }
 
+    @Test func removesLingerWithThePassword() async throws {
+        let secret = "hunter2-removed"
+        var client = PoolLinuxClient(host: "laptop", linger: true)
+        client.t3Installed = true
+        let recorder = Recorder()
+        let host = FakeClientHost(password: secret)
+        recorder.respond = { command in
+            if command.executable == "/usr/bin/ssh", remoteScript(command).contains("echo linger:stays") {
+                return CommandResult(output: "linger:stays\n")
+            }
+            return host.answer(command) ?? CommandResult()
+        }
+        let removal = try PoolJoin.removeLinuxClient(client, hubRoutes: [], run: recorder.runner)
+        #expect(removal.lingerStays)
+        let steps = try #require(onLaptop(recorder).map(plainScript).last { $0.contains("disable-linger") })
+        #expect(steps.contains("loginctl show-user \"$u\" -p Linger --value"))
+
+        let asked = Asked()
+        let off = await PoolJoin.releaseLinger(
+            host: "laptop", ask: { wrong, why in asked.add(wrong, why); return secret }, run: recorder.runner)
+        #expect(off)
+        #expect(asked.calls.count == 1)
+        let sudo = try #require(recorder.commands.last { plainScript($0).hasPrefix("sudo -S -p '' sh -c ") })
+        #expect(plainScript(sudo).contains("loginctl disable-linger \"$SUDO_USER\""))
+        #expect(sudo.stdin == Data((secret + "\n").utf8))
+        for command in recorder.commands { #expect(!([command.executable] + command.arguments).joined(separator: " ").contains(secret)) }
+
+        let refused = await PoolJoin.releaseLinger(host: "laptop", ask: { _, _ in nil }, run: recorder.runner)
+        #expect(!refused)
+
+        let quiet = Recorder()
+        quiet.respond = { command in
+            remoteScript(command).contains("echo linger:stays") ? CommandResult() : (host.answer(command) ?? CommandResult())
+        }
+        #expect(try !PoolJoin.removeLinuxClient(client, hubRoutes: [], run: quiet.runner).lingerStays)
+    }
+
     @Test func neverRemovesTailscale() async throws {
         var client = PoolLinuxClient(host: "laptop")
         client.tailscaleInstalled = true
