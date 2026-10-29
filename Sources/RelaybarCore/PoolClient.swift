@@ -106,7 +106,8 @@ struct PoolHubFacts: Equatable {
 }
 
 extension PoolJoin {
-    static let hubKeyOptions = "restrict,port-forwarding,permitopen=\"127.0.0.1:\(Pool.port)\",command=\"/bin/false\""
+    static let hubKeyOptions =
+        "restrict,port-forwarding,permitopen=\"127.0.0.1:\(Pool.port)\",permitlisten=\"127.0.0.1:1\",command=\"/bin/false\""
     static let clientConfig = "$HOME/.config/relaybar"
     static let t3Settings = "$HOME/.t3/userdata/settings.json"
 

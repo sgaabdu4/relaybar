@@ -853,7 +853,7 @@ swiftStep() {
 clientConnects() {
   newCase
   umask 077
-  local hubIp keysBefore out
+  local hubIp keysBefore out unixForward
   [ -n "${remoteError:-}" ] && fail "$remoteError"
   clientPort="$(freePort)"; launchBox "$clientName" "$clientPort" || fail "$boxError"
   docker exec "$clientName" loginctl enable-linger homeuser || fail "cannot turn on lingering on the client"
@@ -884,15 +884,11 @@ EOF
 
   swiftStep add e2eAddsTheClient
 
-  cat > "$work/probe-hub.sh" <<EOF
-k="\$HOME/.config/relaybar/hub_key"
-ssh -i "\$k" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="\$HOME/.config/relaybar/known_hosts" -o StrictHostKeyChecking=yes -o ConnectTimeout=5 homeuser@$hubIp id 2> /dev/null < /dev/null
-echo "rc=\$?"
-ssh -i "\$k" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="\$HOME/.config/relaybar/known_hosts" -o StrictHostKeyChecking=yes -o ConnectTimeout=5 -W 127.0.0.1:22 homeuser@$hubIp 2> /dev/null < /dev/null | head -c 20
-true
-EOF
+  writeKeyProbes "$work/probe-hub.sh" "$hubIp"
   out="$(clientRemote sh -s < "$work/probe-hub.sh")" || fail "cannot run the key checks on the client"
-  [ "$out" = "rc=1" ] || fail "the client key was not refused a command and another port on the hub (got '$out')"
+  unixForward="$(printf '%s\n' "$out" | sed -n 's/^unix=//p')"
+  [ "$(printf '%s\n' "$out" | grep -v '^unix=')" = "$(printf 'rc=1\nremote=255\nlocal=401')" ] ||
+    fail "the client key was not limited to the helper port on the hub (got '$out')"
   cat > "$work/query.sh" <<'EOF'
 umask 077
 H=$(mktemp)
@@ -905,7 +901,7 @@ EOF
   out="$(clientRemote sh -s < "$work/query.sh")" || fail "cannot query the helper from the client"
   [ "$out" = "401 200" ] || fail "through the client tunnel models answered '$out' (without key, with key), expected '401 200'"
   [ "$(remote "grep -c ' relaybar-client:e2e-client\$' $homeDir/.ssh/authorized_keys")" = 1 ] || fail "the hub does not hold exactly one tagged key line"
-  remote "grep ' relaybar-client:e2e-client\$' $homeDir/.ssh/authorized_keys" | grep -q '^restrict,port-forwarding,permitopen="127.0.0.1:8317",command="/bin/false" ssh-ed25519 ' || fail "the tagged key line does not carry the helper-port-only options"
+  remote "grep ' relaybar-client:e2e-client\$' $homeDir/.ssh/authorized_keys" | grep -q '^restrict,port-forwarding,permitopen="127.0.0.1:8317",permitlisten="127.0.0.1:1",command="/bin/false" ssh-ed25519 ' || fail "the tagged key line does not carry the helper-port-only options"
   [ "$(remote "cat $homeDir/.ssh/authorized_keys.relaybar-backup")" = "$keysBefore" ] || fail "the authorized_keys backup is not the file as it was"
   clientRemote "cat $homeDir/.t3/userdata/settings.json" > "$work/settings-after.json" || fail "cannot read the T3 Code settings on the client"
   python3 -I -c '
@@ -935,7 +931,7 @@ sys.exit(0 if json.load(open(sys.argv[1])) == json.load(open(sys.argv[2])) else 
 ' "$work/settings-restored.json" "$work/settings-before.json" || fail "the client T3 Code settings were not put back"
   [ "$(clientRemote 'curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8317/v1/models; true')" = 000 ] || fail "port 8317 still answers on the client"
   [ "$(remote "cat $homeDir/.ssh/authorized_keys")" = "$keysBefore" ] || fail "the hub authorized_keys is not as it was before the computer was added"
-  echo "  the client key was refused a command and another port, the client tunnel answered 401 then 200, T3 Code got both entries and no usage source, and removal left no trace"
+  echo "  the client key was refused a command, another port and a listening port (Unix socket listener result ${unixForward:-unknown}: 124 means OpenSSH allows it), the client tunnel answered 401 then 200, T3 Code got both entries and no usage source, and removal left no trace"
 }
 
 tunnelLoop() {
