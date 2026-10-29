@@ -202,18 +202,92 @@ extension PoolJoin {
         url.scheme == "t3code" && url.host == "pair"
     }
 
-    static func pair(_ remote: PoolRemote, t3: String, hooks: PoolAddHooks) async throws -> Bool {
+    enum PairOutcome: Equatable {
+        case linked(session: String?)
+        case notLinked
+    }
+
+    static let pairPolls = 150
+    static let pairPause: TimeInterval = 2
+    static let pairLabel = "Relaybar"
+
+    private static func t3List(_ remote: PoolRemote, t3: String, what: String) -> [[String: Any]]? {
+        let result = remote.run(PoolSSH.command(host: remote.host, script: "\"\(t3)\" auth \(what) list --json </dev/null", limit: 30))
+        guard result.succeeded, let list = try? JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [[String: Any]] else {
+            return nil
+        }
+        return list
+    }
+
+    private static func t3Sessions(_ remote: PoolRemote, t3: String) -> [String: String]? {
+        guard let list = t3List(remote, t3: t3, what: "session") else { return nil }
+        var sessions: [String: String] = [:]
+        for item in list {
+            guard let id = item["sessionId"] as? String else { continue }
+            sessions[id] = (item["client"] as? [String: Any])?["label"] as? String ?? ""
+        }
+        return sessions
+    }
+
+    private static func t3Pairings(_ remote: PoolRemote, t3: String) -> [String: String]? {
+        guard let list = t3List(remote, t3: t3, what: "pairing") else { return nil }
+        var pairings: [String: String] = [:]
+        for item in list {
+            guard let id = item["id"] as? String else { continue }
+            pairings[id] = item["label"] as? String ?? ""
+        }
+        return pairings
+    }
+
+    private static func confirmedSession(
+        _ remote: PoolRemote, t3: String, knownSessions: [String: String], knownPairings: [String: String]?, hooks: PoolAddHooks
+    ) async throws -> String? {
+        func fresh() -> String? {
+            t3Sessions(remote, t3: t3)?.first { knownSessions[$0.key] == nil && $0.value == pairLabel }?.key
+        }
+        for _ in 0..<pairPolls {
+            await hooks.pause(pairPause)
+            try Task.checkCancellation()
+            if let id = fresh() { return id }
+            if let known = knownPairings, let now = t3Pairings(remote, t3: t3),
+                !now.contains(where: { known[$0.key] == nil && $0.value == pairLabel })
+            {
+                return fresh()
+            }
+        }
+        return nil
+    }
+
+    static func pair(_ remote: PoolRemote, t3: String, hooks: PoolAddHooks) async throws -> PairOutcome {
         while true {
+            let knownSessions = t3Sessions(remote, t3: t3)
+            let knownPairings = t3Pairings(remote, t3: t3)
             let result = remote.run(PoolSSH.command(host: remote.host, script: "\"\(t3)\" pair --label Relaybar </dev/null", limit: 60))
             if [255, CommandResult.timedOut].contains(result.status) {
                 throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: remote.host))
             }
             if result.succeeded, let url = pairLink(in: result.output) {
                 hooks.pair(url)
-                return true
+                guard let knownSessions else { return .linked(session: nil) }
+                hooks.report(.link, .yourTurn)
+                if let id = try await confirmedSession(
+                    remote, t3: t3, knownSessions: knownSessions, knownPairings: knownPairings, hooks: hooks)
+                {
+                    return .linked(session: id)
+                }
             }
-            guard await hooks.linkFailed(remote.host) else { return false }
+            guard await hooks.linkFailed(remote.host) else { return .notLinked }
+            hooks.report(.link, .working)
         }
+    }
+
+    static func revokeT3Link(_ remote: PoolRemote, client: PoolLinuxClient) -> Bool {
+        guard let id = client.t3Session else { return true }
+        let safe = id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) }
+        let binary = client.t3Binary.map { Shell.quote($0) } ?? "\"$HOME/.local/bin/t3\""
+        guard safe else { return false }
+        let script = "t3=\(binary); if [ -x \"$t3\" ]; then \"$t3\" auth session revoke \(Shell.quote(id)) </dev/null; fi"
+        return remote.run(PoolSSH.command(host: remote.host, script: script, limit: 60)).succeeded
     }
 
     static func releaseLinger(

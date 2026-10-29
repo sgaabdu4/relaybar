@@ -67,10 +67,12 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
 public struct PoolClientRemoval: Equatable, Sendable {
     public var hubKeyProblem: String?
     public var lingerStays = false
+    public var t3LinkStays = false
 
-    public init(hubKeyProblem: String? = nil, lingerStays: Bool = false) {
+    public init(hubKeyProblem: String? = nil, lingerStays: Bool = false, t3LinkStays: Bool = false) {
         self.hubKeyProblem = hubKeyProblem
         self.lingerStays = lingerStays
+        self.t3LinkStays = t3LinkStays
     }
 }
 
@@ -398,10 +400,16 @@ extension PoolJoin {
             if pairable, let t3 {
                 report(.link, .working)
                 progress("Linking T3 Code on \(host) to this Mac")
-                if try await pair(remote, t3: t3, hooks: hooks) {
+                switch try await pair(remote, t3: t3, hooks: hooks) {
+                case .linked(let session):
                     result.link = .linked
+                    if let session {
+                        client.t3Session = session
+                        client.t3Binary = installT3 ? nil : t3
+                        checkpoint(client)
+                    }
                     report(.link, .done)
-                } else {
+                case .notLinked:
                     result.link = .notLinked
                     report(.link, .problem("Not linked"))
                 }
@@ -578,12 +586,13 @@ extension PoolJoin {
     public static func removeLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String] = [], run: @escaping CommandRunner) throws
         -> PoolClientRemoval
     {
-        let removal = forgetLinuxClient(client, hubRoutes: hubRoutes, run: run)
+        var removal = forgetLinuxClient(client, hubRoutes: hubRoutes, run: run)
         var problem: Error?
         let remote = PoolRemote(host: client.host, run: run)
         if client.t3Entries {
             do { try removeT3Entries(remote, client: client) } catch { problem = error }
         }
+        removal.t3LinkStays = !revokeT3Link(remote, client: client)
         do { try removeT3(remote, client: client) } catch { problem = problem ?? error }
         let config = clientConfig
         var steps = [
@@ -604,9 +613,8 @@ extension PoolJoin {
         let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; true"))
         if !result.succeeded { problem = problem ?? PoolSSHError.failed(PoolHubPicker.explain(result.error, host: client.host)) }
         if let problem { throw problem }
-        var done = removal
-        done.lingerStays = result.output.contains("linger:stays")
-        return done
+        removal.lingerStays = result.output.contains("linger:stays")
+        return removal
     }
 
     public static func forgetLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String], run: @escaping CommandRunner)

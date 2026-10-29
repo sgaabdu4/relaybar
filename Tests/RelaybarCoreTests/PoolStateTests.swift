@@ -31,7 +31,9 @@ struct PoolStateTests {
         #expect(!client.t3Entries)
         #expect(client.previousSelection == nil)
         #expect(!client.claudeInstalled && !client.codexInstalled && !client.codexProfile && !client.codexFolder)
-        #expect(!client.t3Installed && !client.t3Service && client.t3Host == nil && !client.tailscaleInstalled)
+        #expect(
+            !client.t3Installed && !client.t3Service && client.t3Host == nil && !client.tailscaleInstalled && client.t3Session == nil
+                && client.t3Binary == nil)
         var newer = state
         newer.linuxClients[0].hubKey = true
         newer.linuxClients[0].t3Secrets = ["provider-env-x"]
