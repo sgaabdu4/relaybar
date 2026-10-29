@@ -472,9 +472,11 @@ extension PoolJoinTests {
         #expect(quiet.commands.contains { remoteScript($0).contains("pair --label") })
     }
 
-    @Test func asksForThePasswordOnce() async throws {
+    @Test(arguments: [
+        ("RB-MISSING\n", "install Tailscale"), ("RB-STATUS\n" + tailscaleStatus("NeedsLogin", own: []) + "\n", "start Tailscale"),
+    ])
+    func asksForThePasswordOnce(signedOut: String, why: String) async throws {
         let secret = "hunter2-added"
-        let signedOut = "RB-MISSING\n"
         let installed = Flag()
         let recorder = Recorder()
         let host = FakeClientHost(password: secret)
@@ -503,15 +505,15 @@ extension PoolJoinTests {
         let client = try await add(recorder, options: PoolAddOptions(t3Channel: .nightly, tailscale: true), hooks: hooks)
         #expect(asked.calls.count == 1)
         #expect(asked.calls.first?.wrong == false)
-        #expect(asked.calls.first?.why == "install Tailscale")
+        #expect(asked.calls.first?.why == why)
         #expect(opened.urls.map(\.absoluteString) == ["https://login.tailscale.com/a/1a2b3c4d5e6f"])
         let withPassword = recorder.commands.filter { $0.stdin == Data((secret + "\n").utf8) }
-        #expect(withPassword.count >= 2)
+        #expect(withPassword.count >= (why == "install Tailscale" ? 2 : 1))
         for command in recorder.commands {
             #expect(!([command.executable] + command.arguments).joined(separator: " ").contains(secret))
             if command.stdin == Data((secret + "\n").utf8) { #expect(plainScript(command).hasPrefix("sudo -S -p '' sh -c ")) }
         }
-        #expect(client.tailscaleInstalled)
+        #expect(client.tailscaleInstalled == (why == "install Tailscale"))
 
         let wrong = Recorder()
         let strict = FakeClientHost(password: secret)
@@ -538,10 +540,10 @@ extension PoolJoinTests {
         let refusal = await #expect(throws: PoolClientError.self) {
             _ = try await add(declined, options: PoolAddOptions(tailscale: true), hooks: declining)
         }
-        #expect(refusal == .needsPassword(host: "laptop", why: "install Tailscale"))
+        #expect(refusal == .needsPassword(host: "laptop", why: why))
         #expect(
             refusal?.errorDescription
-                == "Relaybar needs the password for laptop to install Tailscale. It did not get it, so it removed what it had set up. Try again when you have it."
+                == "Relaybar needs the password for laptop to \(why). It did not get it, so it removed what it had set up. Try again when you have it."
         )
     }
 
