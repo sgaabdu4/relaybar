@@ -204,7 +204,7 @@ public struct T3Settings {
         var root = try read()
         if var sources = root["usageLimitSources"] as? [String: Any], sources[Self.usageSourceID] != nil {
             sources[Self.usageSourceID] = nil
-            root["usageLimitSources"] = sources
+            root["usageLimitSources"] = sources.isEmpty ? nil : sources
             try write(root)
         }
         try? FileManager.default.removeItem(at: secretFile("usage-limit-source-\(Self.encode(Self.usageSourceID))"))

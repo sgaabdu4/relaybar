@@ -262,14 +262,14 @@ extension T3SettingsTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == "s1")
         try settings.removeUsageSource()
         #expect(try !settings.addUsageSource(url: "http://127.0.0.1:8317", managementSecret: "s3", alreadyAdded: true))
-        #expect((try home.json(settingsPath)["usageLimitSources"] as? [String: Any])?.isEmpty == true)
+        #expect(try home.json(settingsPath)["usageLimitSources"] == nil)
     }
 
     @Test func stopRemovesTheUsageSource() throws {
         let (home, settings) = try seeded()
         _ = try settings.addUsageSource(url: "http://127.0.0.1:8317", managementSecret: "s1", alreadyAdded: false)
         try settings.removeUsageSource()
-        #expect((try home.json(settingsPath)["usageLimitSources"] as? [String: Any])?.isEmpty == true)
+        #expect(try home.json(settingsPath)["usageLimitSources"] == nil)
         #expect(secretNames(home).isEmpty)
         try settings.removeUsageSource()
     }
