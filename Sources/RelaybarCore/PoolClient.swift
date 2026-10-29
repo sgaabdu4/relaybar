@@ -257,6 +257,8 @@ extension PoolJoin {
             report(.letIn, .done)
 
             var local = Set(["claude", "codex"].filter(found.inLocalBin))
+            var elsewhere = Dictionary(
+                uniqueKeysWithValues: ["claude", "codex"].compactMap { tool in found.fullPath(tool).map { (tool, $0) } })
             if !found.missing.isEmpty {
                 report(.tools, .working)
                 for tool in found.missing {
@@ -275,6 +277,7 @@ extension PoolJoin {
                             remote, site: .codex, interpreter: "sh", variable: "CODEX_NON_INTERACTIVE=1", tool: "codex", name: "Codex")
                     }
                     local.insert(tool)
+                    elsewhere[tool] = nil
                 }
                 report(.tools, .done)
             }
@@ -309,7 +312,7 @@ extension PoolJoin {
                     "cat > \"$HOME/.local/bin/\(name)\"; chmod 755 \"$HOME/.local/bin/\(name)\"",
                     stdin: Data(
                         PoolConfig.terminalCommand(
-                            claude: claude, keyCommand: read, binary: local.contains(tool) ? "$HOME/.local/bin/\(tool)" : nil
+                            claude: claude, keyCommand: read, binary: local.contains(tool) ? "$HOME/.local/bin/\(tool)" : elsewhere[tool]
                         ).utf8))
             }
             let unit = try PoolTunnel.linuxUnit(
@@ -362,8 +365,8 @@ extension PoolJoin {
                 progress("Adding the entries to T3 Code on \(host)")
                 try addT3Entries(
                     remote, home: home, accessKey: accessKey, client: &client, checkpoint: checkpoint,
-                    claudeBinary: local.contains("claude") ? home + "/.local/bin/claude" : nil,
-                    codexBinary: local.contains("codex") ? home + "/.local/bin/codex" : nil, orEmpty: installT3)
+                    claudeBinary: local.contains("claude") ? home + "/.local/bin/claude" : elsewhere["claude"],
+                    codexBinary: local.contains("codex") ? home + "/.local/bin/codex" : elsewhere["codex"], orEmpty: installT3)
             }
             if installT3 {
                 let computer = PoolTailscaleComputer(host: host, run: run, pause: hooks.pause)

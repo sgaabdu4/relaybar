@@ -108,6 +108,8 @@ struct PoolClientProbe {
 
     func inLocalBin(_ tool: String) -> Bool { has("bin:\(tool)") }
 
+    func fullPath(_ tool: String) -> String? { path(after: "path:\(tool):") }
+
     var t3Path: String? { path(after: "t3path:") ?? path(after: "t3exec:") }
 
     var t3Running: Bool { has("t3svc:yes") }
@@ -124,8 +126,10 @@ extension PoolJoin {
     static let probeTools =
         "for t in claude codex; do p=$(PATH=\"$HOME/.local/bin:$PATH\" command -v $t 2>/dev/null); "
         + "[ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v $t\" </dev/null 2>/dev/null | grep '^/' | tail -n 1); "
-        + "if [ -z \"$p\" ]; then echo need:$t; elif [ \"$p\" = \"$HOME/.local/bin/$t\" ]; then echo bin:$t; fi; done; "
-        + "p=$(PATH=\"$HOME/.local/bin:$PATH\" command -v t3 2>/dev/null); [ -n \"$p\" ] && echo t3path:$p; "
+        + "if [ -z \"$p\" ]; then echo need:$t; elif [ \"$p\" = \"$HOME/.local/bin/$t\" ]; then echo bin:$t; elif [ -x \"$p\" ]; then echo path:$t:$p; fi; done; "
+        + "p=$(PATH=\"$HOME/.local/bin:$PATH\" command -v t3 2>/dev/null); "
+        + "[ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v t3\" </dev/null 2>/dev/null | grep '^/' | tail -n 1); "
+        + "[ -x \"$p\" ] && echo t3path:$p; "
         + "systemctl --user is-active --quiet t3code.service 2>/dev/null && echo t3svc:yes; "
         + "systemctl --user show t3code.service -p ExecStart 2>/dev/null | sed -n 's/^ExecStart={ path=\\([^ ;]*\\) ;.*/t3exec:\\1/p'; "
         + "for f in .profile .bashrc .zshrc .zprofile; do grep -q '>>> Codex installer >>>' \"$HOME/$f\" 2>/dev/null && echo profile:codex; done; "
