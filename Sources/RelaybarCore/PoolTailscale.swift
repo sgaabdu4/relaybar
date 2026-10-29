@@ -404,7 +404,7 @@ public struct PoolTailscaleComputer: Sendable {
     ) async throws -> (address: String, installed: Bool) {
         var installed = false
         if !found.installed {
-            _ = try await privileged("curl -fsSL \(Self.installURL) | sh", 600)
+            _ = try await privileged("curl -fsSL \(Shell.quote(Self.installURL)) | sh", 600)
             installed = true
         }
         let output = try await privileged(signInCommand, 180)

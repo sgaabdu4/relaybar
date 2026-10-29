@@ -15,7 +15,9 @@ public enum Pool {
     public static let usageSourceLabel = "All accounts"
     public static func overriddenURL(_ variable: String) -> String? {
         guard let value = ProcessInfo.processInfo.environment[variable], value.hasPrefix("https://") || value.hasPrefix("file:///"),
-            !value.contains(where: { $0.isWhitespace || "'\"$`\\".contains($0) })
+            !value.contains(where: {
+                $0.isWhitespace || "'\"$`\\;|&<>()".contains($0) || ($0.asciiValue.map { $0 < 32 || $0 == 127 } ?? false)
+            })
         else { return nil }
         return value
     }

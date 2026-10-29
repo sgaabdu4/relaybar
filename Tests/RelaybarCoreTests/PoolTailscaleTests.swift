@@ -210,7 +210,7 @@ struct PoolTailscaleTests {
                 return ""
             }, onLink: { opened.add($0) })
         #expect(fresh.address == "100.64.0.9" && fresh.installed)
-        #expect(ran.first == "curl -fsSL https://tailscale.com/install.sh | sh")
+        #expect(ran.first == "curl -fsSL 'https://tailscale.com/install.sh' | sh")
         #expect(ran.count == 2 && ran[1].contains("nohup tailscale up"))
         for flag in ["--ssh", "--reset", "--exit-node", "--advertise", "--authkey", "--accept-routes", "--force"] {
             #expect(!ran.joined().contains(flag))
