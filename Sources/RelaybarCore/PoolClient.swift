@@ -63,9 +63,11 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
 
 public struct PoolClientRemoval: Equatable, Sendable {
     public var hubKeyProblem: String?
+    public var lingerStays = false
 
-    public init(hubKeyProblem: String? = nil) {
+    public init(hubKeyProblem: String? = nil, lingerStays: Bool = false) {
         self.hubKeyProblem = hubKeyProblem
+        self.lingerStays = lingerStays
     }
 }
 
@@ -573,12 +575,16 @@ extension PoolJoin {
             steps.append("rmdir \"$HOME/\(folder)\" 2>/dev/null")
         }
         if client.linger {
-            steps.append("u=$(id -un); loginctl disable-linger \"$u\" 2>/dev/null || sudo -n loginctl disable-linger \"$u\" 2>/dev/null")
+            steps.append(
+                "u=$(id -un); { loginctl disable-linger \"$u\" 2>/dev/null || sudo -n loginctl disable-linger \"$u\" 2>/dev/null; }; "
+                    + "[ \"$(loginctl show-user \"$u\" -p Linger --value 2>/dev/null)\" = yes ] && echo linger:stays")
         }
         let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; true"))
         if !result.succeeded { problem = problem ?? PoolSSHError.failed(PoolHubPicker.explain(result.error, host: client.host)) }
         if let problem { throw problem }
-        return removal
+        var done = removal
+        done.lingerStays = result.output.contains("linger:stays")
+        return done
     }
 
     public static func forgetLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String], run: @escaping CommandRunner)

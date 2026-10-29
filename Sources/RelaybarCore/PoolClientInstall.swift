@@ -191,6 +191,14 @@ extension PoolJoin {
         }
     }
 
+    static func releaseLinger(
+        host: String, ask: @escaping @Sendable (Bool, String) async -> String?, run: @escaping CommandRunner
+    ) async -> Bool {
+        let session = PoolPasswordSession(host: host, run: run, ask: ask)
+        defer { session.forget() }
+        return (try? await session.run("loginctl disable-linger \"$SUDO_USER\"", why: "stop keeping Relaybar running after you log out", limit: 60)) != nil
+    }
+
     static func removeInstalls(_ client: PoolLinuxClient) -> [String] {
         var steps: [String] = []
         if client.claudeInstalled {
