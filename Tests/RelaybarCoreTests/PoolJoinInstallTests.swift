@@ -178,7 +178,8 @@ extension PoolJoinTests {
         clientHost(recorder)
         _ = try await add(recorder)
         let probe = try #require(onLaptop(recorder).map(plainScript).first { $0.contains("for d in") })
-        #expect(probe.contains("[ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v $t\" </dev/null 2>/dev/null | grep '^/' | tail -n 1)"))
+        #expect(
+            probe.contains("[ -n \"$p\" ] || p=$(\"${SHELL:-sh}\" -lc \"command -v $t\" </dev/null 2>/dev/null | grep '^/' | tail -n 1)"))
         let order = try #require(probe.range(of: "-lc")).lowerBound
         let needs = try #require(probe.range(of: "echo need:$t")).lowerBound
         #expect(order < needs)
@@ -462,12 +463,16 @@ extension PoolJoinTests {
         }
         let network = "curl: (6) Could not resolve host: pkgs.example.com\n"
         let failed = await run(network)
-        #expect(failed == .rootStepFailed(host: "laptop", why: "install Tailscale", reason: "curl: (6) Could not resolve host: pkgs.example.com"))
+        #expect(
+            failed
+                == .rootStepFailed(host: "laptop", why: "install Tailscale", reason: "curl: (6) Could not resolve host: pkgs.example.com"))
         let text = try #require(failed?.errorDescription)
         #expect(text.hasPrefix("Relaybar could not install Tailscale on laptop: curl: (6)"))
         #expect(!text.contains("administrator") && !text.contains("sudo"))
 
-        for refusal in ["sam is not in the sudoers file.  This incident will be reported.\n", "Sorry, user sam may not run sudo on laptop.\n"] {
+        for refusal in [
+            "sam is not in the sudoers file.  This incident will be reported.\n", "Sorry, user sam may not run sudo on laptop.\n",
+        ] {
             let denied = await run(refusal)
             #expect(denied?.errorDescription?.contains("administrator rights (sudo)") == true)
         }
@@ -538,7 +543,11 @@ extension PoolJoinTests {
 
         let asked = Asked()
         let off = await PoolJoin.releaseLinger(
-            host: "laptop", ask: { wrong, why in asked.add(wrong, why); return secret }, run: recorder.runner)
+            host: "laptop",
+            ask: { wrong, why in
+                asked.add(wrong, why)
+                return secret
+            }, run: recorder.runner)
         #expect(off)
         #expect(asked.calls.count == 1)
         let sudo = try #require(recorder.commands.last { plainScript($0).hasPrefix("sudo -S -p '' sh -c ") })
@@ -580,7 +589,9 @@ extension PoolJoinTests {
             ("https://example.com/install.sh", "https://example.com/install.sh"),
             ("file:///tmp/e2e/install.sh", "file:///tmp/e2e/install.sh"),
             ("http://example.com/install.sh", nil), ("https://example.com/a b", nil), ("https://example.com/'x", nil),
-            ("https://example.com/$(x)", nil), ("ftp://example.com/x", nil),
+            ("https://example.com/$(x)", nil), ("ftp://example.com/x", nil), ("https://example.com/a;rm", nil),
+            ("https://example.com/a|sh", nil), ("https://example.com/a&b", nil), ("https://example.com/<x", nil),
+            ("https://example.com/x>", nil), ("https://example.com/(x)", nil), ("https://example.com/a\u{7}b", nil),
         ] as [(String, String?)] {
             setenv(name, value, 1)
             #expect(Pool.overriddenURL(name) == expected, "\(value)")
