@@ -248,7 +248,7 @@ extension PoolController {
     }
 
     @objc func stopCombining() {
-        guard !busy, PoolDialogs.stopFirst(joined: state?.joined ?? false), PoolDialogs.stopSecond() else { return }
+        guard !busy, PoolDialogs.stopFirst(joined: state?.joined ?? false, host: state?.ssh), PoolDialogs.stopSecond() else { return }
         Task { await performStop(joined: state?.joined ?? false) }
     }
 

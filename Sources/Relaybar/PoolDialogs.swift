@@ -50,12 +50,14 @@ enum PoolDialogs {
         return run(alert) == .alertFirstButtonReturn
     }
 
-    static func stopFirst(joined: Bool) -> Bool {
-        stopAlert(
+    static func stopFirst(joined: Bool, host: String?) -> Bool {
+        let others = host.map { " Other Macs and computers that use your accounts through \($0) stop working too." } ?? ""
+        return stopAlert(
             "Stop combining?",
             joined
                 ? "Relaybar removes Claude and Codex, all accounts, from T3 Code on this Mac. The home computer keeps the helper for your other computers."
-                : "Relaybar removes Claude and Codex, all accounts, from T3 Code and signs every account out of the helper. Your own accounts do not change.",
+                : "Relaybar removes Claude and Codex, all accounts, from T3 Code and signs every account out of the helper. Your own accounts do not change."
+                    + others,
             go: "Continue…", destructive: false)
     }
 
