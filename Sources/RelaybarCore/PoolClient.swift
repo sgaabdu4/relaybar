@@ -14,6 +14,7 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
     case installFailed(host: String, tool: String, reason: String)
     case needsPassword(host: String, why: String)
     case sudoFailed(host: String, reason: String)
+    case rootStepFailed(host: String, why: String, reason: String)
     case t3NotReady(String)
 
     public var offersRetry: Bool {
@@ -54,6 +55,8 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
         case .sudoFailed(let host, let reason):
             return
                 "\(host) did not allow that: \(reason) The user on \(host) needs administrator rights (sudo) for this step. Give it sudo, or untick the box, then try again."
+        case .rootStepFailed(let host, let why, let reason):
+            return "Relaybar could not \(why) on \(host): \(reason) Fix that, or untick the box, then try again."
         case .t3NotReady(let host):
             return
                 "T3 Code was installed on \(host), but it did not start in time. Run systemctl --user status t3code on \(host) to see why, then try again."

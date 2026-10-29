@@ -250,7 +250,7 @@ public struct PoolTailscale: Sendable {
         while true {
             switch PoolSudo.attempt(host: host, command: command, password: password, limit: limit, run: env.run) {
             case .done(let output): return output
-            case .failed(let reason): throw PoolTailscaleError.homeFailed(reason)
+            case .denied(let reason), .failed(let reason): throw PoolTailscaleError.homeFailed(reason)
             case .needsPassword:
                 guard let typed = await hooks.password(wrong), !typed.isEmpty else { throw PoolTailscaleError.needsPassword }
                 password = typed

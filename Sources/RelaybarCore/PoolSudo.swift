@@ -3,6 +3,7 @@ import Foundation
 enum PoolPrivileged {
     case done(String)
     case needsPassword
+    case denied(String)
     case failed(String)
 }
 
@@ -16,7 +17,9 @@ enum PoolSudo {
         if text.contains("password is required") || text.contains("try again") || text.contains("incorrect password") {
             return .needsPassword
         }
-        return .failed(result.error.split(whereSeparator: \.isNewline).last.map(String.init) ?? "no reason given")
+        let reason = result.error.split(whereSeparator: \.isNewline).last.map(String.init) ?? "no reason given"
+        let refusals = ["not in the sudoers", "may not run sudo", "is not allowed to", "sudo: command not found", "sudo: not found"]
+        return refusals.contains { text.contains($0) } ? .denied(reason) : .failed(reason)
     }
 }
 
@@ -38,7 +41,8 @@ final class PoolPasswordSession: @unchecked Sendable {
             let known = lock.withLock { password }
             switch PoolSudo.attempt(host: host, command: command, password: known, limit: limit, run: runner) {
             case .done(let output): return output
-            case .failed(let reason): throw PoolClientError.sudoFailed(host: host, reason: reason)
+            case .denied(let reason): throw PoolClientError.sudoFailed(host: host, reason: reason)
+            case .failed(let reason): throw PoolClientError.rootStepFailed(host: host, why: why, reason: reason)
             case .needsPassword:
                 guard let typed = await ask(known != nil, why), !typed.isEmpty else {
                     throw PoolClientError.needsPassword(host: host, why: why)

@@ -453,6 +453,26 @@ extension PoolJoinTests {
         )
     }
 
+    @Test func namesTheRealReasonWhenARootStepFails() async throws {
+        func run(_ error: String) async -> PoolClientError? {
+            let recorder = Recorder()
+            recorder.respond = { _ in CommandResult(status: 1, error: error) }
+            let session = PoolPasswordSession(host: "laptop", run: recorder.runner, ask: { _, _ in nil })
+            return await #expect(throws: PoolClientError.self) { _ = try await session.run("true", why: "install Tailscale") }
+        }
+        let network = "curl: (6) Could not resolve host: pkgs.example.com\n"
+        let failed = await run(network)
+        #expect(failed == .rootStepFailed(host: "laptop", why: "install Tailscale", reason: "curl: (6) Could not resolve host: pkgs.example.com"))
+        let text = try #require(failed?.errorDescription)
+        #expect(text.hasPrefix("Relaybar could not install Tailscale on laptop: curl: (6)"))
+        #expect(!text.contains("administrator") && !text.contains("sudo"))
+
+        for refusal in ["sam is not in the sudoers file.  This incident will be reported.\n", "Sorry, user sam may not run sudo on laptop.\n"] {
+            let denied = await run(refusal)
+            #expect(denied?.errorDescription?.contains("administrator rights (sudo)") == true)
+        }
+    }
+
     @Test func removesOnlyWhatItInstalled() async throws {
         var client = PoolLinuxClient(host: "laptop", folders: [".codex-hub"], linger: true)
         client.claudeInstalled = true
