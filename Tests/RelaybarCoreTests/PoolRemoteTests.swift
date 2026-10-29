@@ -185,6 +185,22 @@ struct PoolJoinTests {
         #expect(offers == [PoolJoinOffer(host: "homebox")])
     }
 
+    @Test func neverProbesAHostThatIsNotAtHome() async throws {
+        let harness = try Harness()
+        harness.recorder.respond = { command in
+            if command.arguments.first == "-G" {
+                return CommandResult(
+                    output: command.arguments.last == "faraway" ? "user sam\nhostname 203.0.113.9\n" : "hostname 192.168.1.20\n")
+            }
+            return CommandResult(output: "pool\n")
+        }
+        let offers = await PoolJoin.findPools(hosts: ["faraway", "homebox"], env: harness.env())
+        #expect(offers == [PoolJoinOffer(host: "homebox")])
+        let probed = harness.recorder.commands.filter { $0.arguments.first != "-G" }.map { $0.arguments.joined(separator: " ") }
+        #expect(probed.count == 1)
+        #expect(probed.allSatisfy { !$0.contains("faraway") })
+    }
+
     @Test func joinsByTypedAddress() async throws {
         let harness = try Harness()
         try harness.home.write(
