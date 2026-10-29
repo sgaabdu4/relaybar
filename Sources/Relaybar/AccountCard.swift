@@ -47,8 +47,7 @@ final class AccountCard: NSView {
         Render.tint(logo, account.tint.color).draw(
             in: NSRect(x: inset, y: 7, width: 14, height: 14), from: .zero,
             operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        let name = account.tag.isEmpty ? (account.isClaude ? "Claude" : "Codex") : account.tag
-        Self.draw(name, font: Self.nameFont, color: .labelColor, at: NSPoint(x: inset + 21, y: 5), maxWidth: 160)
+        Self.draw(account.menuName, font: Self.nameFont, color: .labelColor, at: NSPoint(x: inset + 21, y: 5), maxWidth: 160)
         drawStatus()
 
         var y: CGFloat = 28

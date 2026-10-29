@@ -99,20 +99,19 @@ extension PoolController {
         guard worked else { return false }
         var note: String?
         if sleep == .needsPassword, let host { note = await keepOn(host: host, setup: setup) }
-        stopRequested = false
-        let problems = await signInAll(panel: panel, setup: setup)
+        let ended = await signInAll(panel: panel, setup: setup)
         panel.close()
-        if stopRequested {
-            stopRequested = false
+        if ended.stopped {
             await performStop(joined: false)
             return false
         }
         markKnown()
         await fetch()
         await checkTailscale(host: host, panel: panel, title: title)
-        if !problems.isEmpty {
+        if !ended.unsigned.isEmpty {
             let text =
-                "These accounts are not signed in yet: " + problems.joined(separator: ", ") + ". Tick them in All accounts to try again."
+                "These accounts are not signed in yet: " + ended.unsigned.joined(separator: ", ")
+                + ". Click them in All accounts to sign in."
             note = [note, text].compactMap { $0 }.joined(separator: "\n\n")
         }
         return finish(host: host, note: note)
@@ -150,52 +149,14 @@ extension PoolController {
         panel.close()
     }
 
-    private func signInAll(panel: PoolProgressPanel, setup: PoolSetup) async -> [String] {
-        let list = app.accounts
-        panel.showSignIn(
-            list.map {
-                SignInEntry(
-                    name: $0.tag.isEmpty ? $0.label : $0.tag, logo: app.logo(for: $0),
-                    color: $0.tint == .plain ? .labelColor : $0.tint.color)
-            })
-        panel.onStop = { [weak self] in
-            self?.stopRequested = true
-            self?.signInTask?.cancel()
+    private func signInAll(panel: PoolProgressPanel, setup: PoolSetup) async -> SignInEnd {
+        guard let management = await Task.detached(operation: { setup.management }).value else {
+            return SignInEnd(stopped: false, unsigned: app.accounts.map(\.menuName))
         }
-        panel.onSkip = { [weak self] in
-            self?.skipRequested = true
-            self?.signInTask?.cancel()
-        }
-        guard let management = await Task.detached(operation: { setup.management }).value else { return list.map(\.label) }
-        var problems: [String] = []
-        for (index, account) in list.enumerated() {
-            if stopRequested { break }
-            panel.set(index, .waiting)
-            skipRequested = false
-            let signIn = PoolSignIn(management: management, open: { _ = NSWorkspace.shared.open($0) })
-            let kind = kind(of: account)
-            let task = Task { await signIn.signIn(kind: kind) }
-            signInTask = task
-            let outcome = await task.value
-            signInTask = nil
-            if stopRequested { break }
-            let state = Self.rowState(outcome, expected: account.label, skipped: skipRequested)
-            panel.set(index, state)
-            if state != .done { problems.append(account.tag.isEmpty ? account.label : account.tag) }
-        }
-        return problems
-    }
-
-    private static func rowState(_ outcome: SignInOutcome, expected: String, skipped: Bool) -> SignInState {
-        if skipped { return .problem("Skipped") }
-        switch outcome {
-        case .signedIn(let email):
-            return email.lowercased() == expected.lowercased() ? .done : .problem("Signed in as \(email)")
-        case .sameAccount: return .problem("Use a different account")
-        case .portBusy: return .problem("Port in use")
-        case .timedOut: return .problem("Took too long")
-        case .failed: return .problem("Did not finish")
-        }
+        let current = SignInSession(pool: self, panel: panel, management: management)
+        session = current
+        defer { session = nil }
+        return await current.run()
     }
 
     @objc func useOffer(_ sender: NSMenuItem) {
@@ -228,7 +189,7 @@ extension PoolController {
         else { return }
         switch PoolAccounts.toggle(row) {
         case .blocked(let message): app.show("It cannot be paused", message)
-        case .signIn: Task { await signIn(row.account, resigning: row.state == .signedOut) }
+        case .signIn: Task { await signIn(row.account) }
         case let action:
             let setup = PoolSetup(env: environment())
             Task {
@@ -243,7 +204,7 @@ extension PoolController {
         }
     }
 
-    func signIn(_ account: PoolAccountInput, resigning: Bool) async {
+    func signIn(_ account: PoolAccountInput) async {
         guard !signing else {
             return app.show("A sign-in is already open", "Finish it in the browser, then try again.")
         }
@@ -253,16 +214,26 @@ extension PoolController {
         guard let management = await Task.detached(operation: { setup.management }).value else {
             return app.show("Relaybar cannot reach the helper", PoolError.unreachable.localizedDescription)
         }
-        let outcome = await PoolSignIn(management: management, open: { _ = NSWorkspace.shared.open($0) }).signIn(kind: account.kind)
-        switch outcome {
-        case .signedIn(let email):
-            if let expected = account.email, expected.lowercased() != email.lowercased() {
-                app.show("Signed in as \(email)", "That is not \(expected). Click \(account.name) in All accounts to add it.")
-            }
-        case .sameAccount(let email) where resigning && email.lowercased() == account.email?.lowercased(): break
-        default: app.show("The sign-in did not finish", outcome.message)
+        let tool = PoolSignIn(management: management, open: { _ = NSWorkspace.shared.open($0) })
+        let outcome = await tool.signIn(kind: account.kind)
+        let list = inputs()
+        let row = list.first { $0.id == account.id } ?? account
+        switch await tool.settle(outcome, for: row, in: list, done: []) {
+        case .credited: break
+        case .wrong(let email):
+            app.show(
+                "That was \(email)", "Sign in as \(account.email ?? account.name). Click \(account.name) in All accounts to try again.")
+        case .unfinished(let unfinished): app.show("The sign-in did not finish", unfinished.message)
         }
         await fetch()
+    }
+
+    @objc func addAnAccount() {
+        app.chooseAndAddAccount()
+    }
+
+    func accountAppeared() {
+        if let session, session.active { session.accountsChanged() } else { accountsAdded() }
     }
 
     @objc func changeOrder() {
@@ -404,7 +375,7 @@ extension PoolController {
             let missing = Set(PoolAccounts.rows(accounts: current, members: members).filter { $0.state == .notInHelper }.map(\.account.id))
             let offers = PoolAccounts.offers(known: Set(saved), current: current).filter { missing.contains($0.account.id) }
             markKnown()
-            for offer in offers where PoolDialogs.offer(offer) { await signIn(offer.account, resigning: false) }
+            for offer in offers where PoolDialogs.offer(offer) { await signIn(offer.account) }
         }
     }
 }
