@@ -67,7 +67,7 @@ extension PoolController {
             } catch {
                 panel.close()
                 let message = error.localizedDescription
-                guard let host, error is PoolSSHError else {
+                guard let host, error is PoolSSHError || (error as? PoolClientError)?.offersRetry == true else {
                     app.show("Relaybar could not finish", message)
                     return false
                 }
@@ -331,7 +331,9 @@ extension PoolController {
         let config = paths.home.appendingPathComponent(".ssh/config")
         let names = PoolHubPicker.parseSSHConfig((try? String(contentsOf: config, encoding: .utf8)) ?? "")
         let skip = [state.ssh, state.tailscale].compactMap { $0 } + state.linuxClients.map(\.host)
+        busy = true
         Task {
+            defer { busy = false }
             let hosts = await Task.detached { PoolHubPicker.addable(hosts: names, excluding: skip, run: PoolProcess.run) }.value
             guard let host = AddComputerDialog(hosts: hosts).run() else { return }
             await setUpLinux(host)
@@ -339,8 +341,6 @@ extension PoolController {
     }
 
     private func setUpLinux(_ host: String) async {
-        busy = true
-        defer { busy = false }
         let title = "Setting up \(host)"
         let panel = PoolProgressPanel()
         panel.showSetup(title: title, message: "Starting")

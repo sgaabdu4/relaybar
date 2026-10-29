@@ -5,10 +5,17 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
     case notLinux(String)
     case isTheHub(String)
     case hubIdentity(String)
-    case noRoute(host: String, tried: [String])
+    case noRoute(host: String, tried: [String], reason: String?)
     case t3Unreadable(String)
     case noKeyTool(String)
     case unsafeTunnel
+    case missingTool(host: String, tool: String)
+    case alreadyUsed(String)
+
+    public var offersRetry: Bool {
+        if case .noRoute = self { return true }
+        return false
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -17,15 +24,21 @@ public enum PoolClientError: Error, Equatable, LocalizedError {
         case .isTheHub(let host): return "\(host) is the computer that runs the helper. It already has your accounts."
         case .hubIdentity(let hub):
             return "Relaybar could not read the SSH identity of \(hub), so it cannot let another computer connect to it safely."
-        case .noRoute(let host, let tried):
+        case .noRoute(let host, let tried, let reason):
             let list =
                 tried.isEmpty ? "The helper computer gave no home address to try." : "Relaybar tried " + tried.joined(separator: ", ") + "."
-            return
-                "\(host) could not reach the helper computer. \(list) Put both computers on the same network or on Tailscale, then try again."
+            guard let reason else {
+                return
+                    "\(host) could not reach the helper computer. \(list) Put both computers on the same network or on Tailscale, then try again."
+            }
+            return "\(host) could not reach the helper computer. \(list) \(reason)"
         case .t3Unreadable(let host):
             return
                 "T3 Code's settings file on \(host) could not be read, so Relaybar did not change anything there. Fix or move ~/.t3/userdata/settings.json on \(host), then try again."
         case .noKeyTool(let host): return "\(host) cannot make an SSH key. Install the OpenSSH client there, then try again."
+        case .missingTool(let host, let tool): return "\(host) needs \(tool). Install it, then try again."
+        case .alreadyUsed(let host):
+            return "\(host) already uses your accounts, set up from another Mac or under another name. Remove it there first."
         case .unsafeTunnel:
             return "A name or folder for the tunnel holds characters Relaybar cannot use safely, so it did not set up the tunnel."
         }
@@ -138,7 +151,7 @@ extension PoolJoin {
         let remote = PoolRemote(host: host, run: run)
         let hubName = try PoolHubPicker.validate(hub)
         let hubRemote = PoolRemote(host: hubName, run: run)
-        let system = try remote.execute("uname -s").trimmingCharacters(in: .whitespacesAndNewlines)
+        let system = try operatingSystem(remote)
         if system == "Darwin" { throw PoolClientError.mac(host) }
         guard system == "Linux" else { throw PoolClientError.notLinux(host) }
         let home = try remote.remoteHome()
@@ -148,7 +161,8 @@ extension PoolJoin {
                 + "for f in \(clientCommands.joined(separator: " ")); do p=\"$HOME/.local/bin/$f\"; "
                 + "if [ -e \"$p\" ] && ! grep -q '\(marker)' \"$p\" 2>/dev/null; then echo foreign:$f; fi; done; "
                 + "[ \"$(loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null)\" = yes ] || echo linger:off; "
-                + "test -e \"\(PoolRemote.joinFile)\" && echo hub:yes; "
+                + "test -e \"\(PoolRemote.joinFile)\" && echo hub:yes; test -e \"\(clientConfig)/hub_key\" && echo key:yes; "
+                + "for t in curl ssh ssh-keygen systemctl; do command -v \"$t\" >/dev/null 2>&1 || echo missing:$t; done; echo \"ssh:$(command -v ssh)\"; "
                 + "c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:\(Pool.port)/v1/models 2>/dev/null); "
                 + "if [ -n \"$c\" ] && [ \"$c\" != 000 ]; then if ! { systemctl --user is-active --quiet relaybar-tunnel.service 2>/dev/null "
                 + "&& grep -q relaybar/hub_key \"$HOME/.config/systemd/user/relaybar-tunnel.service\" 2>/dev/null; }; then echo port:busy; fi; fi; "
@@ -158,6 +172,10 @@ extension PoolJoin {
             throw PoolFileError.notRelaybars("\(host):.local/bin/\(foreign.dropFirst(8))")
         }
         if lines.contains("hub:yes") { throw PoolClientError.isTheHub(host) }
+        if let missing = lines.first(where: { $0.hasPrefix("missing:") }) {
+            throw PoolClientError.missingTool(host: host, tool: String(missing.dropFirst(8)))
+        }
+        if lines.contains("key:yes") { throw PoolClientError.alreadyUsed(host) }
         if lines.contains("port:busy") { throw PoolSetupError.conflict(.portInUse(Pool.port)) }
         let hasT3 = lines.contains("t3:yes")
         let facts = try hubFacts(hubRemote)
@@ -184,12 +202,14 @@ extension PoolJoin {
             checkpoint(client)
             let created = try hubRemote.execute(
                 "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; umask 077; "
+                    + "if [ -L \"$f\" ]; then echo link; exit 0; fi; "
                     + "[ -d \"$d\" ] || { mkdir -m 700 \"$d\" || exit 1; echo created:ssh; }; "
                     + "if [ -e \"$f\" ]; then [ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; "
                     + "tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; \(dropTagged(host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; "
                     + "r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
                     + "else : > \"$f\" && chmod 600 \"$f\" && echo created:keys || exit 1; fi; cat >> \"$f\"",
                 stdin: Data((hubKeyLine(publicKey: publicKey, host: host) + "\n").utf8))
+            if created.split(whereSeparator: \.isNewline).contains("link") { throw PoolFileError.link("\(hubName):.ssh/authorized_keys") }
             client.hubCreated = created.split(whereSeparator: \.isNewline).map(String.init).filter { $0.hasPrefix("created:") }.map {
                 String($0.dropFirst(8))
             }
@@ -198,7 +218,7 @@ extension PoolJoin {
             try remote.execute(
                 "umask 077; cat > \"\(clientConfig)/known_hosts\"", stdin: Data(facts.knownHosts().utf8))
             progress("Finding the way from \(host) to \(hubName)")
-            let address = try chooseAddress(remote, facts: facts, key: key, knownHosts: knownHosts)
+            let address = try chooseAddress(remote, hub: hubName, facts: facts, key: key, knownHosts: knownHosts)
 
             progress("Setting up claude-all and codex-all on \(host)")
             let keyFile = "\(clientConfig)/access-key"
@@ -213,7 +233,8 @@ extension PoolJoin {
                     stdin: Data(PoolConfig.terminalCommand(claude: claude, keyCommand: read).utf8))
             }
             let unit = try PoolTunnel.linuxUnit(
-                user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port)
+                user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port,
+                ssh: sshPath(lines))
             try remote.execute("cat > \"$HOME/.config/systemd/user/relaybar-tunnel.service\"", stdin: Data(unit.utf8))
             if lines.contains("linger:off") {
                 let enabled = try remote.execute(
@@ -252,16 +273,42 @@ extension PoolJoin {
         return facts
     }
 
-    private static func chooseAddress(_ remote: PoolRemote, facts: PoolHubFacts, key: String, knownHosts: String) throws -> String {
+    private static func routeReason(_ error: String, hub: String, client: String) -> String {
+        if error.contains("Permission denied") {
+            return "\(hub) refused the key of \(client). Check that SSH on \(hub) reads ~/.ssh/authorized_keys, then try again."
+        }
+        return PoolHubPicker.explain(error, host: hub)
+    }
+
+    private static func operatingSystem(_ remote: PoolRemote) throws -> String {
+        let result = remote.run(PoolSSH.command(host: remote.host, script: "uname -s"))
+        if [255, CommandResult.timedOut].contains(result.status) {
+            throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: remote.host))
+        }
+        return result.succeeded ? result.output.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+    }
+
+    private static func sshPath(_ lines: [String]) -> String {
+        let found = lines.first(where: { $0.hasPrefix("ssh:") }).map { String($0.dropFirst(4)) } ?? ""
+        return found.hasPrefix("/") ? found : "/usr/bin/ssh"
+    }
+
+    private static func chooseAddress(_ remote: PoolRemote, hub: String, facts: PoolHubFacts, key: String, knownHosts: String) throws
+        -> String
+    {
         let options = PoolTunnel.pinnedOptions(key: key, knownHosts: knownHosts, port: facts.port).map(Shell.quote).joined(separator: " ")
         let answer = try remote.execute(
-            "for a in \(facts.addresses.joined(separator: " ")); do "
-                + "ssh \(options) -o BatchMode=yes -o ConnectTimeout=5 \"\(facts.user)@$a\" true </dev/null >/dev/null 2>&1; "
-                + "[ $? -ne 255 ] && { echo ok:$a; exit 0; }; done; echo none",
+            "e=''; p=''; for a in \(facts.addresses.joined(separator: " ")); do "
+                + "e=$(ssh \(options) -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR \"\(facts.user)@$a\" true </dev/null 2>&1 >/dev/null); "
+                + "r=$?; [ $r -eq 1 ] && { echo ok:$a; exit 0; }; case \"$e\" in *'Permission denied'*) p=$e;; esac; done; "
+                + "[ -n \"$p\" ] && e=$p; echo none; echo \"err:$(printf %s \"$e\" | tail -n 1)\"",
             limit: TimeInterval(facts.addresses.count * 8 + 20))
-        guard let line = answer.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix("ok:") }),
-            facts.addresses.contains(String(line.dropFirst(3)))
-        else { throw PoolClientError.noRoute(host: remote.host, tried: facts.addresses) }
+        let lines = answer.split(whereSeparator: \.isNewline)
+        guard let line = lines.first(where: { $0.hasPrefix("ok:") }), facts.addresses.contains(String(line.dropFirst(3))) else {
+            let last = lines.first(where: { $0.hasPrefix("err:") }).map { String($0.dropFirst(4)) } ?? ""
+            throw PoolClientError.noRoute(
+                host: remote.host, tried: facts.addresses, reason: last.isEmpty ? nil : routeReason(last, hub: hub, client: remote.host))
+        }
         return String(line.dropFirst(3))
     }
 
@@ -338,7 +385,7 @@ extension PoolJoin {
 
     static func removeHubKey(_ client: PoolLinuxClient, routes: [String], run: @escaping CommandRunner) throws {
         let script =
-            "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -e \"$f\" ]; then umask 077; tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; "
+            "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -e \"$f\" ] && [ ! -L \"$f\" ]; then umask 077; tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; "
             + "\(dropTagged(client.host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
             + (client.hubCreated.contains("keys") ? "[ -s \"$f\" ] || rm -f \"$f\"; " : "") + "fi; "
             + (client.hubCreated.contains("ssh") ? "rmdir \"$d\" 2>/dev/null; " : "") + "true"
