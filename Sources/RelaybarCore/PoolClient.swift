@@ -415,7 +415,9 @@ extension PoolJoin {
             if pairable, let t3 {
                 report(.link, .working)
                 progress("Linking T3 Code on \(host) to this Mac")
-                switch try await pair(remote, t3: t3, hooks: hooks) {
+                let outcome: PairOutcome
+                do { outcome = try await pair(remote, t3: t3, hooks: hooks) } catch is CancellationError { outcome = .notLinked }
+                switch outcome {
                 case .linked(let session):
                     result.link = .linked
                     if let session {

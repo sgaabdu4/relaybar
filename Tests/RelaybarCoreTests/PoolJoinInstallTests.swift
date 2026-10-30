@@ -348,14 +348,21 @@ extension PoolJoinTests {
                 }
             })
         let secrets = secrets
+        let checkpoints = Events()
         let task = Task {
             try await PoolJoin.linuxClient(
                 host: "laptop", hub: "homebox", accessKey: secrets.accessKey, options: PoolAddOptions(t3Channel: .nightly), hooks: hooks,
-                run: recorder.runner)
+                run: recorder.runner, checkpoint: { checkpoints.add($0 == nil ? "forgotten" : "saved") })
         }
         box.set { task.cancel() }
-        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        let result = try await task.value
         #expect(events.count("pause") == 2)
+        #expect(result.link == .notLinked && result.client.t3Session == nil && result.client.hubKey && result.client.t3Installed)
+        #expect(checkpoints.count("forgotten") == 0)
+        #expect(
+            !recorder.commands.contains {
+                remoteScript($0).contains("relaybar-tunnel.service") && remoteScript($0).contains("disable --now")
+            })
     }
 
     @Test func removeEndsTheT3CodeLink() async throws {
