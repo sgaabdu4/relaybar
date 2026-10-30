@@ -254,7 +254,7 @@ enum PoolDialogs {
 
     static func replaceLogins(host: String) -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Replace the Claude Code and Codex logins on \(host) with your combined accounts?"
+        alert.messageText = "Claude Code and Codex on \(host) already have their own setup. Replace it with your combined accounts?"
         alert.informativeText =
             "Relaybar keeps the old logins and settings aside and puts them back when you remove \(host). If you keep them, \(host) gets the commands claude+ and codex+ instead."
         alert.addButton(withTitle: "Replace")

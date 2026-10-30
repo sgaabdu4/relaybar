@@ -35,7 +35,7 @@ Same cause: N/A — new feature, not a fix.
 
 Settled by the user, 2026-10-28:
 - Ships in the public app. Tracked files, tests, images and PR text use sample names only: no personal data, host names, tailnet names, real IP addresses or project names. A generic sample such as `192.168.1.20` is allowed in hint text.
-- Pool runs beside per-account mode and uses the normal `~/.claude` and `~/.codex`. On this Mac nothing in them is edited. On an added computer, after one question when a login exists, Relaybar backs up and edits the Claude Code settings and the Codex config, and puts them back on Remove.
+- Pool runs beside per-account mode and uses the normal `~/.claude` and `~/.codex`. On this Mac nothing in them is edited. On an added computer, after one question when a login or another setup exists, Relaybar backs up and edits the Claude Code settings and the Codex config, and puts them back on Remove.
 - Other computers are in scope: a home Linux computer can run the helper over SSH; other machines can use it.
 - Typed addresses (user, 2026-10-29): Relaybar is public, so people must be able to type a home network address or a Tailscale address in the first dialog, not only pick a found SSH name.
 - After the first video was confusing, the flow became "Combine accounts". The user kept the home computer, then approved these changes after the T3 Code audit ("yes apply it"):
