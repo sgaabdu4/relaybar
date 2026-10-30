@@ -366,14 +366,13 @@ public struct PoolTailscaleComputer: Sendable {
         return PoolTailscaleHome(installed: true, running: status?.running == true && address != nil, address: address)
     }
 
-    public func reaches(_ destination: String) -> Bool {
-        run(
+    public func reaches(_ destination: String, at address: String? = nil) -> Bool {
+        let hostName = address.map { ["-o", "HostName=\($0)"] } ?? []
+        return run(
             Command(
                 "/usr/bin/ssh",
-                [
-                    "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new", "--", destination,
-                    "true",
-                ], limit: 20)
+                ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=accept-new"] + hostName
+                    + ["--", destination, "true"], limit: 20)
         ).succeeded
     }
 
