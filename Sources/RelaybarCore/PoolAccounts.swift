@@ -75,10 +75,19 @@ public enum PoolAccounts {
         case .paused: return .resume(row.credential?.name ?? "")
         case .active:
             guard row.canPause, let name = row.credential?.name else {
-                return .blocked("This is the last \(row.account.kind.rawValue.capitalized) account in use. Keep at least one account on.")
+                return .blocked(lastAccountMessage(row.account.kind))
             }
             return .pause(name)
         }
+    }
+
+    public static func lastAccountMessage(_ kind: PoolKind) -> String {
+        "This is the last \(kind.rawValue.capitalized) account in use. Keep at least one account on."
+    }
+
+    public static func canPause(_ name: String, in credentials: [PoolCredential]) -> Bool {
+        guard let kind = credentials.first(where: { $0.name == name })?.kind else { return false }
+        return credentials.contains { $0.kind == kind && $0.name != name && !$0.disabled && !$0.needsSignIn }
     }
 
     public static func assuming(_ action: PoolAccountAction, in members: [PoolMember]) -> [PoolMember] {

@@ -199,6 +199,10 @@ extension PoolController {
             Task {
                 do {
                     guard let management = await Task.detached(operation: { setup.management }).value else { throw PoolError.unreachable }
+                    if case .pause(let credential) = action, !PoolAccounts.canPause(credential, in: try await management.credentials()) {
+                        app.show("It cannot be paused", PoolAccounts.lastAccountMessage(row.account.kind))
+                        return await fetchAfterChange()
+                    }
                     try await PoolAccounts.apply(action, management: management)
                 } catch {
                     app.show("Relaybar could not change the account", error.localizedDescription)

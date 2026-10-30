@@ -65,6 +65,16 @@ struct PoolAccountsTests {
         #expect(PoolAccounts.assuming(.resume("claude-ann@example.com.json"), in: before) == before)
     }
 
+    @Test func checksTheLiveListBeforePausing() {
+        let ann = credential("ann@example.com", .claude)
+        let live = { (other: PoolCredential) in [ann, other, self.credential("cat@example.com", .codex)] }
+        #expect(PoolAccounts.canPause(ann.name, in: live(credential("bob@example.com", .claude))))
+        #expect(!PoolAccounts.canPause(ann.name, in: live(credential("bob@example.com", .claude, disabled: true))))
+        #expect(!PoolAccounts.canPause(ann.name, in: live(credential("bob@example.com", .claude, status: "expired"))))
+        #expect(!PoolAccounts.canPause(ann.name, in: [ann, credential("cat@example.com", .codex)]))
+        #expect(!PoolAccounts.canPause("claude-gone@example.com.json", in: [ann]))
+    }
+
     @Test func signsInAMissingAccount() {
         let rows = PoolAccounts.rows(accounts: [ann, bob], members: [member("ann@example.com", .claude, status: "error")])
         #expect(rows[0].state == .signedOut)
