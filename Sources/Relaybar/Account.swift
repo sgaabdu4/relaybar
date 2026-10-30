@@ -50,6 +50,8 @@ final class Account {
         set { UserDefaults.standard.set(newValue, forKey: "tag:" + id) }
     }
 
+    var menuName: String { tag.isEmpty ? (isClaude ? "Claude" : "Codex") : tag }
+
     var tint: Tint {
         get { UserDefaults.standard.string(forKey: "color:" + id).flatMap(Tint.init(rawValue:)) ?? defaultTint }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "color:" + id) }

@@ -149,7 +149,11 @@
         "--",
         "build.sh",
         "scripts/test.sh",
-        "scripts/efficiency.sh"
+        "scripts/efficiency.sh",
+        "scripts/pool-e2e.sh",
+        "scripts/pool-e2e-lib.sh",
+        "scripts/pool-e2e-installs.sh",
+        "Resources/relaybar-helper.sh"
       ]
     },
     {

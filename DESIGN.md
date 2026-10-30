@@ -9,6 +9,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Account colours: the AppKit system colours orange, blue, green, purple, pink, teal, yellow and red, plus "No color" (label colour). Owner: `Tint` in `Sources/Relaybar/Render.swift`.
 - Low warning (10% left or less): light red, sRGB (1, 0.55, 0.55) in dark appearance and (0.88, 0.3, 0.3) in light. Owner: `Tint.low`.
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
+- Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
 - Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo and a white pill with the tag in the darker colour. Owner: `DesktopApp.icon`.
 
 ## Typography
@@ -25,13 +26,16 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Atoms: logo (Claude or Codex SVG, tinted), tag pill, bar, value text.
 - Molecules: menu bar account group (logo, tag, stacked numbers); limit row (label, bar, value, reset).
 - Organisms: `AccountCard` (one account, clickable when it has an app to open); the status item image (`Render.row`).
-- Templates: the dropdown — account cards, then Customize, Add account, Open at login, Quit.
-- Pages: the dropdown and the add, rename, remove and make-desktop-app dialogs (standard `NSAlert`).
+- Templates: the dropdown — account cards, then "Combine accounts…" or "All accounts ›" (subtitle "On homebox" or "On this Mac"), Customize, Add account, Open at login, Quit. The "All accounts" submenu has Claude and Codex section headers, one tickable row per account (states as a second line), "Change order…" (a standard `NSAlert` with an "Automatic" / "Use my order" segmented control; Automatic shows the live order read-only with one secondary line, Use my order shows the drag list), a "Computers" section (one row per added computer, each with "Remove <host>…"), "Add a computer…" and "Stop combining…".
+- Pages: the dropdown and the add, rename, remove and make-desktop-app dialogs (standard `NSAlert`). "Add a computer" adds two tick boxes with a one-line secondary subtitle each (shown only when they apply, on by default) and a small secondary note; its password prompt is an `NSAlert` with a secure field. Its setup window is a checklist (`PoolAddPanel`): a green tick for done steps, a spinner on the current step, dim upcoming steps, and a sign-in row with "Waiting for you in the browser", Copy Link, Open Again and Cancel.
 
 ## Do's and Don'ts
 
 - Do keep each menu bar group as narrow as the numbers allow.
 - Do use the account colour for its logo, tag and numbers; use light red only for low limits.
 - Do show "…" while waiting for numbers and "Login expired" only for a rejected or expired login.
+- Do show a pooled account's state as words on the right of its card header ("in use", "paused", "signed out"); no extra summary cards.
+- Do build dialogs from native parts: `NSAlert` with the app icon, equal-width buttons, the default on the right, accessory views stacked with even spacing; destructive actions ask twice with Cancel as the default.
+- Do confirm a pause, resume or order change with a short note under the menu bar icon that fades after 2 seconds (cyan dot, outlined dot or cyan check); keep alerts for failures.
 - Don't dim accounts with transparency; dark colours become unreadable.
 - Don't show emails or account details in the menu bar or in tooltips.
