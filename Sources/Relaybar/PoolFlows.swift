@@ -273,6 +273,7 @@ extension PoolController {
         var keysLeft: [String] = []
         var lingerStays: [String] = []
         var t3LinkStays: [String] = []
+        var keptBackups: [String] = []
         var leftAlone: Set<String> = []
         while true {
             let attempt = password
@@ -284,6 +285,7 @@ extension PoolController {
             keysLeft += report.keysLeft
             lingerStays += report.lingerStays
             t3LinkStays += report.t3LinkStays
+            keptBackups += report.keptBackups
             if let host = report.needsPassword {
                 panel.close()
                 password = PoolDialogs.restoreSleepPassword(host: host, wrong: wrong)
@@ -329,6 +331,7 @@ extension PoolController {
         if joined, !keysLeft.isEmpty { showKeysLeft(hub: hub, names: keysLeft) }
         await releaseLinger(lingerStays)
         showT3LinkStays(t3LinkStays)
+        showKeptBackups(keptBackups)
         let hubLeft = report.unreachable != nil
         let computersLeft = !report.unreachableComputers.isEmpty
         let others = report.failed.filter { entry in
@@ -428,6 +431,15 @@ extension PoolController {
         if removal?.hubKeyProblem != nil { showKeysLeft(hub: state?.ssh ?? "the home computer", names: [host]) }
         if removal?.lingerStays == true { await releaseLinger([host]) }
         if removal?.t3LinkStays == true { showT3LinkStays([host]) }
+        showKeptBackups((removal?.keptBackups ?? []).map { "\(host): \($0)" })
+    }
+
+    private func showKeptBackups(_ files: [String]) {
+        guard !files.isEmpty else { return }
+        app.show(
+            "Relaybar kept some old files",
+            "You changed these files after Relaybar switched them, so Relaybar took out only its own lines and kept your changes. The old copy of each is still there:\n"
+                + files.joined(separator: "\n"))
     }
 
     private func showT3LinkStays(_ hosts: [String]) {
