@@ -21,7 +21,7 @@ Give this file to Claude Code or Codex when Relaybar's **Combine accounts** need
 | Keys | Mac Keychain items "Relaybar access key" and "Relaybar management secret" |
 | Added computer | on the added Linux computer: user unit `relaybar-tunnel.service`, and in `~/.config/relaybar/` the files `hub_key`, `hub_key.pub`, `known_hosts` and `access-key`; on the home computer: one line ending `relaybar-client:<name>` in `~/.ssh/authorized_keys` (backup: `authorized_keys.relaybar-backup`) |
 | Tools | `~/.local/bin/claude+` and `~/.local/bin/codex+` (they set the helper only at launch; nothing in `~/.claude` or `~/.codex` is edited) |
-| Replaced logins | on an added computer where the user chose Replace: `~/.claude/settings.json` (`apiKeyHelper` and `env`), `~/.codex/config.toml` (the `relaybar` provider), and the old logins and settings kept in `~/.config/relaybar/kept/` until Remove puts them back |
+| Replaced logins | on an added computer where the user chose Replace: `~/.claude/settings.json` (`apiKeyHelper` and `env`), `~/.codex/config.toml` (the `relaybar` provider), and the old logins and settings kept in `~/.config/relaybar/kept/` until Remove puts them back (if you changed the two files since, Remove takes out only Relaybar's lines and leaves the old copies in that folder) |
 | T3 Code | entries "Claude+" and "Codex+", and the usage source "All accounts" |
 
 The helper always listens on `127.0.0.1:8317` of the computer that runs it. A Mac reaches a home helper through its SSH tunnel on its own `127.0.0.1:8317`.
