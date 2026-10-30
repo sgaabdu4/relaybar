@@ -215,6 +215,26 @@ struct PoolOrderTests {
         #expect(PoolState.load(none.paths) == nil)
     }
 
+    @Test func keepsAnOrderSavedWhileTheHelperIsBeingUpdated() async throws {
+        let harness = try Harness()
+        try PoolState().save(harness.paths)
+        harness.recorder.respond = { _ in CommandResult(output: "msecret\n") }
+        let setup = PoolSetup(env: harness.env())
+        try setup.setOrder(kind: .claude, emails: ["a@example.com", "b@example.com", "c@example.com"])
+        let saved = SavedOnce()
+        harness.http.handler = { _ in
+            saved.once {
+                try? setup.setOrder(kind: .claude, emails: ["c@example.com", "b@example.com", "a@example.com"])
+                try? setup.setOrderMode(.manual)
+            }
+            return ok(["status": "ok"])
+        }
+        _ = try await setup.updateOrder(members: [member("a@example.com"), member("b@example.com"), member("c@example.com")])
+        let after = PoolState.load(harness.paths)
+        #expect(after?.order["claude"] == ["c@example.com", "b@example.com", "a@example.com"])
+        #expect(after?.orderMode == .manual)
+    }
+
     @Test func aJoinedMacNeverSendsPriorities() async throws {
         let harness = try Harness()
         try PoolState(ssh: "homebox", joined: true).save(harness.paths)
@@ -237,5 +257,18 @@ struct PoolOrderTests {
         let raised = members + [member("f@example.com", priority: 3)]
         #expect(PoolOrder.inUse(kind: .claude, members: raised)?.credential.email == "f@example.com")
         #expect(PoolOrder.inUse(kind: .claude, members: []) == nil)
+    }
+}
+
+private final class SavedOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func once(_ work: () -> Void) {
+        let first = lock.withLock {
+            defer { done = true }
+            return !done
+        }
+        if first { work() }
     }
 }

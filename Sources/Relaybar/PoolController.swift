@@ -11,7 +11,7 @@ final class PoolController: NSObject {
     private var reachable = true
     private var reachReason: String?
     private var lastFetch = Date.distantPast
-    private var fetching = false
+    private(set) var fetching = false
     private var lastScan = Date.distantPast
     private var offers: [PoolJoinOffer] = []
     private var statuses: [String: PoolStatus] = [:]

@@ -258,6 +258,7 @@ extension PoolController {
         }
         let current = members
         Task {
+            while fetching { try? await Task.sleep(nanoseconds: 100_000_000) }
             _ = try? await setup.updateOrder(members: current)
             await fetchAfterChange()
             let first = [PoolKind.claude, .codex].compactMap(inUseName)

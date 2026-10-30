@@ -98,17 +98,18 @@ public enum PoolOrder {
 
 extension PoolSetup {
     public func updateOrder(members: [PoolMember]) async throws -> [PoolPlan] {
-        guard var state = PoolState.load(env.paths), !state.joined, let management else { return [] }
+        guard let state = PoolState.load(env.paths), !state.joined, let management else { return [] }
         var plans: [PoolPlan] = []
         for kind in [PoolKind.claude, .codex] {
             let plan = PoolOrder.plan(
                 kind: kind, members: members, saved: state.order[kind.rawValue] ?? [], mode: state.orderMode)
-            state.order[kind.rawValue] = plan.savedOrder
             try await PoolOrder.apply(plan, management: management)
             plans.append(plan)
         }
         guard var latest = PoolState.load(env.paths) else { return plans }
-        latest.order = state.order
+        for plan in plans where latest.orderMode == state.orderMode && latest.order[plan.kind.rawValue] == state.order[plan.kind.rawValue] {
+            latest.order[plan.kind.rawValue] = plan.savedOrder
+        }
         try latest.save(env.paths)
         return plans
     }
