@@ -850,7 +850,7 @@ extension PoolJoinTests {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", plainScript(command)]
-        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin:/sbin"]
         let input = Pipe()
         let output = Pipe()
         process.standardInput = input
@@ -921,7 +921,7 @@ extension PoolJoinTests {
         #expect(result.replaced && !result.client.t3Entries)
         #expect(log.plan == [.letIn, .route, .commands, .logins])
         #expect(
-            result.client.kept == [
+            result.client.kept.map { PoolKeptFile(path: $0.path, existed: $0.existed, edited: $0.edited) } == [
                 PoolKeptFile(path: ".claude/.credentials.json", existed: true, edited: false),
                 PoolKeptFile(path: ".codex/auth.json", existed: true, edited: false),
                 PoolKeptFile(path: ".claude/settings.json", existed: true, edited: true),
@@ -976,7 +976,7 @@ extension PoolJoinTests {
             host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: quiet, run: empty.runner)
         #expect(silent.calls.isEmpty && fresh.replaced)
         #expect(
-            fresh.client.kept == [
+            fresh.client.kept.map { PoolKeptFile(path: $0.path, existed: $0.existed, edited: $0.edited) } == [
                 PoolKeptFile(path: ".claude/settings.json", existed: false, edited: true),
                 PoolKeptFile(path: ".codex/config.toml", existed: false, edited: true),
             ])
@@ -1042,51 +1042,102 @@ extension PoolJoinTests {
         }
     }
 
+    private func removeHere(_ client: PoolLinuxClient, home: Fixture) throws -> PoolClientRemoval {
+        let recorder = Recorder()
+        recorder.respond = { [self] command in
+            command.executable == "/usr/bin/ssh" ? runHere(command, home: home.root) : CommandResult()
+        }
+        return try PoolJoin.removeLinuxClient(client, hubRoutes: [], run: recorder.runner)
+    }
+
+    private func replaced(_ home: Fixture, probe: String) async throws -> PoolLinuxClient {
+        var hooks = AddLog().hooks
+        hooks.replaceLogins = { _ in true }
+        return try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks,
+            run: fileBacked(FakeClientHost(probe: probe), home: home).runner
+        ).client
+    }
+
     @Test func removePutsTheLoginsBack() async throws {
         let home = try Fixture()
         try seedLogins(home)
         let before = tree(home, [".claude", ".codex"])
-        let host = FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex\nclaudedir:new")
-        let recorder = fileBacked(host, home: home)
-        var hooks = AddLog().hooks
-        hooks.replaceLogins = { _ in true }
-        let result = try await PoolJoin.linuxClient(
-            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks, run: recorder.runner)
+        let client = try await replaced(home, probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex\nclaudedir:new")
+        #expect(client.kept.filter(\.edited).allSatisfy { $0.hash?.count == 64 })
         #expect(tree(home, [".claude", ".codex"]) != before)
-        let restore = try #require(PoolReplace.restoreScript(result.client.kept, createdFolders: result.client.createdFolders))
-        let removal = Recorder()
-        removal.respond = { _ in CommandResult() }
-        try PoolJoin.removeLinuxClient(result.client, hubRoutes: [], run: removal.runner)
-        let undo = try #require(onLaptop(removal).map(plainScript).last { $0.contains("relaybar-tunnel.service") })
-        #expect(undo.hasPrefix(restore))
-        let command = try #require(onLaptop(removal).first { plainScript($0).hasPrefix(restore) })
-        let ran = runHere(command, home: home.root)
-        #expect(ran.status == 0)
+        let removal = try removeHere(client, home: home)
+        #expect(removal.keptBackups.isEmpty)
         #expect(tree(home, [".claude", ".codex"]) == before)
         #expect(!FileManager.default.fileExists(atPath: home.root.appendingPathComponent(".config/relaybar/kept").path))
 
         let fresh = try Fixture()
-        let created = fileBacked(FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nclaudedir:new\ncodexdir:new"), home: fresh)
-        let bare = try await PoolJoin.linuxClient(
-            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks, run: created.runner)
-        #expect(bare.client.createdFolders == [".claude", ".codex"])
-        let undoFresh = try #require(PoolReplace.restoreScript(bare.client.kept, createdFolders: bare.client.createdFolders))
-        let last = Recorder()
-        try PoolJoin.removeLinuxClient(bare.client, hubRoutes: [], run: last.runner)
-        let again = try #require(onLaptop(last).first { plainScript($0).hasPrefix(undoFresh) })
-        _ = runHere(again, home: fresh.root)
+        let bare = try await replaced(fresh, probe: "new:.config/relaybar\nlinger:off\nclaudedir:new\ncodexdir:new")
+        #expect(bare.createdFolders == [".claude", ".codex"])
+        #expect(try removeHere(bare, home: fresh).keptBackups.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: fresh.root.appendingPathComponent(".claude").path))
         #expect(!FileManager.default.fileExists(atPath: fresh.root.appendingPathComponent(".codex").path))
 
         let edited = try Fixture()
         try edited.write(".codex/auth.json", "new login")
-        let mine = PoolKeptFile(path: ".codex/auth.json", existed: true, edited: false)
         let kept = edited.root.appendingPathComponent(".config/relaybar/kept/codex-auth.json")
         try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("old login".utf8).write(to: kept)
-        let script = try #require(PoolReplace.restoreScript([mine], createdFolders: []))
-        _ = runHere(Command("/usr/bin/ssh", ["-o", "x", "laptop", "--", "sh -c " + Shell.quote(script)]), home: edited.root)
+        var mine = PoolLinuxClient(host: "laptop")
+        mine.kept = [PoolKeptFile(path: ".codex/auth.json", existed: true, edited: false)]
+        _ = try removeHere(mine, home: edited)
         #expect(try String(contentsOf: edited.root.appendingPathComponent(".codex/auth.json"), encoding: .utf8) == "new login")
+    }
+
+    @Test func removeKeepsLaterChanges() async throws {
+        let home = try Fixture()
+        try seedLogins(home)
+        let client = try await replaced(home, probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex")
+        var settings = try home.json(".claude/settings.json")
+        settings["model"] = "later"
+        settings["permissions"] = ["allow": ["Read"]]
+        try JSONSerialization.data(withJSONObject: settings).write(to: home.root.appendingPathComponent(".claude/settings.json"))
+        let config = home.root.appendingPathComponent(".codex/config.toml")
+        let text = try String(contentsOf: config, encoding: .utf8)
+        try Data((text + "\n[mcp_servers.later]\ncommand = \"later\"\n").utf8).write(to: config)
+
+        let removal = try removeHere(client, home: home)
+        #expect(
+            removal.keptBackups == [
+                "~/.config/relaybar/kept/claude-settings.json", "~/.config/relaybar/kept/codex-config.toml",
+            ])
+        let after = try home.json(".claude/settings.json")
+        #expect(after["apiKeyHelper"] == nil && after["model"] as? String == "later")
+        #expect((after["permissions"] as? [String: [String]]) == ["allow": ["Read"]])
+        #expect((after["env"] as? [String: String]) == ["ANTHROPIC_AUTH_TOKEN": "old-token", "KEEP": "1"])
+        let sections = Self.sections(of: try String(contentsOf: config, encoding: .utf8))
+        #expect(sections[""]?["model_provider"] == "\"other\"" && sections[""]?["model"] == "\"sample\"")
+        #expect(sections["mcp_servers.x"] != nil && sections["mcp_servers.later"] == ["command": "\"later\""])
+        #expect(sections["projects.p"] != nil)
+        #expect(sections.keys.allSatisfy { !$0.hasPrefix("model_providers.relaybar") })
+        let kept = home.root.appendingPathComponent(".config/relaybar/kept")
+        #expect(
+            try String(contentsOf: kept.appendingPathComponent("codex-config.toml"), encoding: .utf8).contains("model_provider = \"other\"")
+        )
+        #expect(try String(contentsOf: kept.appendingPathComponent("claude-settings.json"), encoding: .utf8).contains("old-token"))
+        #expect(try String(contentsOf: home.root.appendingPathComponent(".codex/auth.json"), encoding: .utf8) == "{\"tokens\": {}}")
+        #expect(FileManager.default.fileExists(atPath: home.root.appendingPathComponent(".claude/.credentials.json").path))
+
+        let fresh = try Fixture()
+        let made = try await replaced(fresh, probe: "new:.config/relaybar\nlinger:off")
+        try Data("{\"model\": \"later\"}".utf8).write(to: fresh.root.appendingPathComponent(".claude/settings.json"))
+        let again = fresh.root.appendingPathComponent(".codex/config.toml")
+        try Data((try String(contentsOf: again, encoding: .utf8) + "\n[projects.p]\ntrust = \"trusted\"\n").utf8).write(to: again)
+        let second = try removeHere(made, home: fresh)
+        #expect(second.keptBackups.isEmpty)
+        #expect(try fresh.json(".claude/settings.json") as NSDictionary == ["model": "later"] as NSDictionary)
+        #expect(Self.sections(of: try String(contentsOf: again, encoding: .utf8)) == ["": [:], "projects.p": ["trust": "\"trusted\""]])
+
+        let gone = try Fixture()
+        let removed = try await replaced(gone, probe: "new:.config/relaybar\nlinger:off")
+        _ = try removeHere(removed, home: gone)
+        #expect(!FileManager.default.fileExists(atPath: gone.root.appendingPathComponent(".claude/settings.json").path))
+        #expect(!FileManager.default.fileExists(atPath: gone.root.appendingPathComponent(".codex/config.toml").path))
     }
 
     @Test func removesAnEarlierBuildsSetup() async throws {

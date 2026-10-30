@@ -8,6 +8,7 @@ public struct PoolTeardownReport: Equatable, Sendable {
     public var keysLeft: [String] = []
     public var lingerStays: [String] = []
     public var t3LinkStays: [String] = []
+    public var keptBackups: [String] = []
     public var needsPassword: String?
 
     public init() {}
@@ -16,7 +17,7 @@ public struct PoolTeardownReport: Equatable, Sendable {
         left.undone == right.undone && left.failed.map(\.step) == right.failed.map(\.step)
             && left.unreachable == right.unreachable && left.unreachableComputers == right.unreachableComputers
             && left.keysLeft == right.keysLeft && left.lingerStays == right.lingerStays && left.t3LinkStays == right.t3LinkStays
-            && left.needsPassword == right.needsPassword
+            && left.keptBackups == right.keptBackups && left.needsPassword == right.needsPassword
     }
 
     public var finished: Bool { failed.isEmpty }
@@ -98,6 +99,7 @@ public enum PoolTeardown {
             if removal.hubKeyProblem != nil { report.keysLeft.append(client.host) }
             if removal.lingerStays { report.lingerStays.append(client.host) }
             if removal.t3LinkStays { report.t3LinkStays.append(client.host) }
+            report.keptBackups += removal.keptBackups.map { "\(client.host): \($0)" }
             state.linuxClients.removeAll { $0.host == client.host }
             try state.save(env.paths)
         }

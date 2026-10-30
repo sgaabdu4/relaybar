@@ -1,14 +1,17 @@
+import CryptoKit
 import Foundation
 
 public struct PoolKeptFile: Codable, Equatable, Sendable {
     public var path: String
     public var existed: Bool
     public var edited: Bool
+    public var hash: String?
 
-    public init(path: String, existed: Bool, edited: Bool) {
+    public init(path: String, existed: Bool, edited: Bool, hash: String? = nil) {
         self.path = path
         self.existed = existed
         self.edited = edited
+        self.hash = hash
     }
 }
 
@@ -48,6 +51,31 @@ public enum PoolReplace {
         return try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
+    static let envKeys = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
+
+    static func claudeWithout(current: Data, original: Data?) -> Data? {
+        guard var root = try? JSONSerialization.jsonObject(with: current) as? [String: Any] else { return nil }
+        let before = original.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        var env = root["env"] as? [String: Any] ?? [:]
+        if env["ANTHROPIC_BASE_URL"] as? String == Pool.base.absoluteString { env["ANTHROPIC_BASE_URL"] = nil }
+        if (root["apiKeyHelper"] as? String)?.contains("/.config/relaybar/access-key") == true { root["apiKeyHelper"] = nil }
+        let earlier = before["env"] as? [String: Any] ?? [:]
+        for name in envKeys where env[name] == nil { env[name] = earlier[name] }
+        if root["apiKeyHelper"] == nil { root["apiKeyHelper"] = before["apiKeyHelper"] }
+        root["env"] = env.isEmpty ? nil : env
+        return try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    }
+
+    static func codexWithout(current: String, original: String?) -> String {
+        let now = codexKept(current, ownProviderOnly: true)
+        var kept = now.kept
+        let hasProvider = codexKept(current, ownProviderOnly: false).provider != nil && now.provider == nil
+        if !hasProvider, let line = original.flatMap({ codexKept($0).provider }) { kept.insert(line, at: 0) }
+        while kept.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { kept.removeLast() }
+        while kept.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { kept.removeFirst() }
+        return kept.isEmpty ? "" : kept.joined(separator: "\n") + "\n"
+    }
+
     static func codexConfig(existing: String, keyFile: String) -> String {
         var kept = codexKept(existing).kept
         while kept.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { kept.removeLast() }
@@ -62,33 +90,10 @@ public enum PoolReplace {
             + table("model_providers.relaybar.") + ["", "[model_providers.relaybar.auth]"] + table("model_providers.relaybar.auth.")
         return lines.joined(separator: "\n") + "\n"
     }
-
-    static func restoreScript(_ kept: [PoolKeptFile], createdFolders: [String]) -> String? {
-        let folder = "$HOME/\(keptFolder)"
-        var steps: [String] = []
-        for file in kept {
-            guard let name = names[file.path] else { continue }
-            let source = "\"\(folder)/\(name)\""
-            let target = "\"$HOME/\(file.path)\""
-            if file.edited && file.existed {
-                steps.append("[ -e \(source) ] && [ ! -L \(target) ] && cp -p \(source) \(target) && rm -f \(source)")
-            } else if file.edited {
-                steps.append("[ -f \(target) ] && [ ! -L \(target) ] && rm -f \(target)")
-            } else {
-                steps.append("[ -e \(source) ] && [ ! -e \(target) ] && [ ! -L \(target) ] && mv \(source) \(target)")
-            }
-        }
-        guard !steps.isEmpty else { return nil }
-        steps.append("rmdir \"\(folder)\" 2>/dev/null")
-        for created in createdFolders where [".claude", ".codex"].contains(created) {
-            steps.append("rmdir \"$HOME/\(created)\" 2>/dev/null")
-        }
-        return steps.joined(separator: "; ") + "; true"
-    }
 }
 
 extension PoolJoin {
-    private static func readFile(_ remote: PoolRemote, _ path: String) throws -> String? {
+    static func readFile(_ remote: PoolRemote, _ path: String) throws -> String? {
         let output = try remote.execute("f=\"$HOME/\(path)\"; if [ -f \"$f\" ]; then echo yes; cat \"$f\"; else echo no; fi")
         guard output.hasPrefix("yes\n") else { return nil }
         return String(output.dropFirst(4))
@@ -145,7 +150,8 @@ extension PoolJoin {
         _ remote: PoolRemote, path: String, existed: Bool, content: Data, client: inout PoolLinuxClient,
         checkpoint: (PoolLinuxClient?) -> Void
     ) throws {
-        client.kept.append(PoolKeptFile(path: path, existed: existed, edited: true))
+        let hash = SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
+        client.kept.append(PoolKeptFile(path: path, existed: existed, edited: true, hash: hash))
         checkpoint(client)
         let name = PoolReplace.names[path] ?? ""
         let copy = "$HOME/\(PoolReplace.keptFolder)/\(name)"

@@ -68,8 +68,10 @@ public struct PoolClientRemoval: Equatable, Sendable {
     public var hubKeyProblem: String?
     public var lingerStays = false
     public var t3LinkStays = false
+    public var keptBackups: [String] = []
 
-    public init(hubKeyProblem: String? = nil, lingerStays: Bool = false, t3LinkStays: Bool = false) {
+    public init(hubKeyProblem: String? = nil, lingerStays: Bool = false, t3LinkStays: Bool = false, keptBackups: [String] = []) {
+        self.keptBackups = keptBackups
         self.hubKeyProblem = hubKeyProblem
         self.lingerStays = lingerStays
         self.t3LinkStays = t3LinkStays
@@ -607,10 +609,8 @@ extension PoolJoin {
         removal.t3LinkStays = !revokeT3Link(remote, client: client)
         do { try removeT3(remote, client: client) } catch { problem = problem ?? error }
         let config = clientConfig
-        var steps = [
-            PoolReplace.restoreScript(client.kept, createdFolders: client.createdFolders),
-            "systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1",
-        ].compactMap { $0 }
+        do { removal.keptBackups = try restoreLogins(remote, client: client) } catch { problem = problem ?? error }
+        var steps = ["systemctl --user disable --now relaybar-tunnel.service >/dev/null 2>&1"]
         steps += [
             "rm -f \"$HOME/.config/systemd/user/relaybar-tunnel.service\" \"\(config)/access-key\" \"\(config)/hub_key\" \"\(config)/hub_key.pub\" \"\(config)/known_hosts\"",
             "f=\"$HOME/.codex-hub/config.toml\"; grep -q '\(PoolFile.marker)' \"$f\" 2>/dev/null && rm -f \"$f\"",
