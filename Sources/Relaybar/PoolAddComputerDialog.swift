@@ -93,7 +93,7 @@ final class AddComputerDialog: NSObject {
     @objc private func picked() {
         if popup.selectedItem?.tag == Self.another {
             popup.selectItem(at: previous)
-            Task { askAddress(text: "", error: nil) }
+            askAddress(text: "", error: nil)
         } else {
             previous = popup.indexOfSelectedItem
         }
