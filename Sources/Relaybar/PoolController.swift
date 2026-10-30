@@ -150,6 +150,13 @@ final class PoolController: NSObject {
         }?.account.name
     }
 
+    func assumePause(_ action: PoolAccountAction) {
+        generation += 1
+        members = PoolAccounts.assuming(action, in: members)
+        rebuildStatuses()
+        app.redraw()
+    }
+
     private func rebuildStatuses() {
         statuses = [:]
         guard loaded else { return }

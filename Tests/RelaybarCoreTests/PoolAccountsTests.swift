@@ -50,6 +50,21 @@ struct PoolAccountsTests {
         #expect(bodies.map { $0["disabled"] as? Bool } == [true, false])
     }
 
+    @Test func blocksASecondPauseBeforeTheFirstOneFinishes() {
+        let accounts = [ann, bob]
+        let before = [member("ann@example.com", .claude), member("bob@example.com", .claude)]
+        let first = PoolAccounts.toggle(PoolAccounts.rows(accounts: accounts, members: before)[0])
+        #expect(first == .pause("claude-ann@example.com.json"))
+        let after = PoolAccounts.assuming(first, in: before)
+        let rows = PoolAccounts.rows(accounts: accounts, members: after)
+        #expect(rows[0].state == .paused)
+        guard case .blocked = PoolAccounts.toggle(rows[1]) else {
+            Issue.record("a second pause was allowed while the first was still running")
+            return
+        }
+        #expect(PoolAccounts.assuming(.resume("claude-ann@example.com.json"), in: before) == before)
+    }
+
     @Test func signsInAMissingAccount() {
         let rows = PoolAccounts.rows(accounts: [ann, bob], members: [member("ann@example.com", .claude, status: "error")])
         #expect(rows[0].state == .signedOut)

@@ -81,6 +81,11 @@ public enum PoolAccounts {
         }
     }
 
+    public static func assuming(_ action: PoolAccountAction, in members: [PoolMember]) -> [PoolMember] {
+        guard case .pause(let name) = action else { return members }
+        return members.map { $0.credential.name == name ? PoolMember(credential: $0.credential, state: .paused) : $0 }
+    }
+
     public static func apply(_ action: PoolAccountAction, management: PoolManagement) async throws {
         switch action {
         case .pause(let name): try await management.setPaused(name: name, paused: true)

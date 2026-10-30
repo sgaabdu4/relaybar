@@ -195,13 +195,14 @@ extension PoolController {
         case .signIn: Task { await signIn(row.account) }
         case let action:
             let setup = PoolSetup(env: environment())
+            if case .pause = action { assumePause(action) }
             Task {
                 do {
                     guard let management = await Task.detached(operation: { setup.management }).value else { throw PoolError.unreachable }
                     try await PoolAccounts.apply(action, management: management)
                 } catch {
                     app.show("Relaybar could not change the account", error.localizedDescription)
-                    return await fetch()
+                    return await fetchAfterChange()
                 }
                 await fetchAfterChange()
                 let name = row.account.name
