@@ -1121,8 +1121,10 @@ extension PoolJoinTests {
         try Data("old login".utf8).write(to: kept)
         var mine = PoolLinuxClient(host: "laptop")
         mine.kept = [PoolKeptFile(path: ".codex/auth.json", existed: true, edited: false)]
-        _ = try removeHere(mine, home: edited)
+        let skipped = try removeHere(mine, home: edited)
         #expect(try String(contentsOf: edited.root.appendingPathComponent(".codex/auth.json"), encoding: .utf8) == "new login")
+        #expect(skipped.keptBackups == ["~/.config/relaybar/kept/codex-auth.json"])
+        #expect(try String(contentsOf: kept, encoding: .utf8) == "old login")
     }
 
     @Test func neverReusesAnOldKeptFolder() async throws {

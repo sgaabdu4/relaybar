@@ -23,7 +23,12 @@ extension PoolJoin {
         for created in client.createdFolders where [".claude", ".codex"].contains(created) {
             steps.append("rmdir \"$HOME/\(created)\" 2>/dev/null")
         }
-        try remote.execute(steps.joined(separator: "; ") + "; true")
+        steps.append("ls -A \"\(folder)\" 2>/dev/null")
+        let remaining = try remote.execute(steps.joined(separator: "; ") + "; true")
+        for name in remaining.split(whereSeparator: \.isNewline).map({ $0.trimmingCharacters(in: .whitespaces) }) where !name.isEmpty {
+            let path = "~/\(PoolReplace.keptFolder)/\(name)"
+            if !left.contains(path) { left.append(path) }
+        }
         if let problem { throw problem }
         return left
     }
