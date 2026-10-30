@@ -7,6 +7,7 @@ import Sparkle
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var accounts: [Account] = []
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let toast = Toast()
     private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private var watcher: Watcher?
     private var cards: [AccountCard] = []
@@ -521,6 +522,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate()
         alert.window.initialFirstResponder = view is NSStackView ? view.subviews.first : view
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    func note(_ title: String, _ detail: String, mark: Toast.Mark) {
+        toast.show(title, detail, mark: mark, under: item.button)
     }
 
     func show(_ title: String, _ text: String) {

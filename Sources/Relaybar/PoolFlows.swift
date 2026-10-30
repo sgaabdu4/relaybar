@@ -201,8 +201,16 @@ extension PoolController {
                     try await PoolAccounts.apply(action, management: management)
                 } catch {
                     app.show("Relaybar could not change the account", error.localizedDescription)
+                    return await fetch()
                 }
-                await fetch()
+                await fetchAfterChange()
+                let name = row.account.name
+                if case .pause = action {
+                    let next = inUseName(row.account.kind).map { "New chats use \($0)." } ?? "New chats use your other accounts."
+                    app.note("\(name) is paused", next, mark: .paused)
+                } else {
+                    app.note("\(name) is back in All accounts", "New chats can use it again.", mark: .on)
+                }
             }
         }
     }
@@ -250,7 +258,12 @@ extension PoolController {
         let current = members
         Task {
             _ = try? await setup.updateOrder(members: current)
-            await fetch()
+            await fetchAfterChange()
+            let first = [PoolKind.claude, .codex].compactMap(inUseName)
+            app.note(
+                "Order saved",
+                first.isEmpty ? "New chats follow the new order." : "New chats use \(first.joined(separator: " and ")) first.",
+                mark: .saved)
         }
     }
 
