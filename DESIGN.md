@@ -36,5 +36,6 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Do show "…" while waiting for numbers and "Login expired" only for a rejected or expired login.
 - Do show a pooled account's state as words on the right of its card header ("in use", "paused", "signed out"); no extra summary cards.
 - Do build dialogs from native parts: `NSAlert` with the app icon, equal-width buttons, the default on the right, accessory views stacked with even spacing; destructive actions ask twice with Cancel as the default.
+- Do confirm a pause, resume or order change with a short note under the menu bar icon that fades after 2 seconds (cyan dot, outlined dot or cyan check); keep alerts for failures.
 - Don't dim accounts with transparency; dark colours become unreadable.
 - Don't show emails or account details in the menu bar or in tooltips.
