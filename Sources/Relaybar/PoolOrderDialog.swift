@@ -190,8 +190,15 @@ final class PoolOrderDialog: NSObject, NSTableViewDataSource, NSTableViewDelegat
             Render.tint(logo, entry.tag.color).draw(in: NSRect(x: 30, y: middle - 7, width: 14, height: 14))
             let pill = PoolTag.width(entry.tag.text)
             PoolTag.draw(entry.tag, in: NSRect(x: 52, y: middle - 7, width: pill, height: 14))
-            let name: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]
-            (entry.label as NSString).draw(at: NSPoint(x: 52 + pill + 6, y: middle - 8), withAttributes: name)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let name: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
+            ]
+            let left = 52 + pill + 6
+            (entry.label as NSString).draw(
+                with: NSRect(x: left, y: middle - 8, width: max(0, bounds.width - left - 4), height: 17),
+                options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: name)
         }
     }
 }
