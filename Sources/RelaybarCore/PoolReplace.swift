@@ -49,24 +49,8 @@ public enum PoolReplace {
     }
 
     static func codexConfig(existing: String, keyFile: String) -> String {
-        var kept: [String] = []
-        var inTable = false
-        var dropping = false
-        for line in existing.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
-            let text = line.trimmingCharacters(in: .whitespaces)
-            if text.hasPrefix("[") {
-                inTable = true
-                let name = text.drop { $0 == "[" || $0 == " " }.prefix { $0 != "]" }.trimmingCharacters(in: .whitespaces)
-                dropping = name == "model_providers.relaybar" || name.hasPrefix("model_providers.relaybar.")
-                if dropping { continue }
-            } else if dropping {
-                continue
-            } else if !inTable, isProviderKey(text) {
-                continue
-            }
-            kept.append(line)
-        }
-        while kept.last?.isEmpty == true { kept.removeLast() }
+        var kept = codexKept(existing).kept
+        while kept.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { kept.removeLast() }
         let provider = PoolConfig.codexProvider(keyCommand: ["/bin/cat", keyFile])
         func table(_ prefix: String) -> [String] {
             provider.filter { $0.0.hasPrefix(prefix) && !$0.0.dropFirst(prefix.count).contains(".") }.map {
@@ -77,12 +61,6 @@ public enum PoolReplace {
             ["model_provider = \"relaybar\""] + kept + [""] + ["[model_providers.relaybar]"]
             + table("model_providers.relaybar.") + ["", "[model_providers.relaybar.auth]"] + table("model_providers.relaybar.auth.")
         return lines.joined(separator: "\n") + "\n"
-    }
-
-    private static func isProviderKey(_ text: String) -> Bool {
-        if text.hasPrefix("model_providers.relaybar.") { return true }
-        guard text.hasPrefix("model_provider") else { return false }
-        return text.dropFirst("model_provider".count).drop { $0 == " " || $0 == "\t" }.first == "="
     }
 
     static func restoreScript(_ kept: [PoolKeptFile], createdFolders: [String]) -> String? {

@@ -137,6 +137,30 @@ struct PoolConfigTests {
             keyFile: "/k")
         #expect(dotted.contains("model_provider_extra = 1") && dotted.contains("[a]\nmodel_provider = \"keep\""))
         #expect(!dotted.contains("= \"x\"") && !dotted.contains("model_provider=\"y\""))
+
+        let quoted = PoolReplace.codexConfig(
+            existing: [
+                "model = \"m\"", "[\"model_providers\".\"relaybar\"]", "name = \"old1\"", "[model_providers.\"relaybar\".auth]",
+                "command = \"old2\"", "[ 'model_providers' . 'relaybar' . 'extra' ]", "x = 1", "[model_providers.other]", "name = \"mine\"",
+                "[\"model_providers\"]", "\"relaybar\".name = \"old3\"", "keep = 1", "",
+            ].joined(separator: "\n"),
+            keyFile: "/k")
+        #expect(quoted.contains("model = \"m\"") && quoted.contains("[model_providers.other]\nname = \"mine\""))
+        #expect(quoted.contains("[\"model_providers\"]\nkeep = 1"))
+        for old in ["old1", "old2", "old3", "'extra'", "x = 1"] { #expect(!quoted.contains(old), "\(old)") }
+        #expect(quoted.components(separatedBy: "relaybar]").count == 2)
+
+        let strings = PoolReplace.codexConfig(
+            existing: [
+                "instructions = \"\"\"", "[model_providers.relaybar]", "model_provider = \"inside\"", "\"\"\"", "after = 1",
+                "note = '''one", "[not.a.heading]", "end'''", "[model_providers.relaybar]", "text = \"\"\"", "[other]", "\"\"\"", "[mine]",
+                "ok = 2", "",
+            ].joined(separator: "\n"),
+            keyFile: "/k")
+        #expect(strings.contains("instructions = \"\"\"\n[model_providers.relaybar]\nmodel_provider = \"inside\"\n\"\"\"\nafter = 1"))
+        #expect(strings.contains("note = '''one\n[not.a.heading]\nend'''"))
+        #expect(!strings.contains("text = ") && !strings.contains("[other]") && strings.contains("[mine]\nok = 2"))
+        #expect(strings.components(separatedBy: "[model_providers.relaybar]\n").count == 3)
     }
 
     @Test func keychainWritesGoThroughStandardInput() {
