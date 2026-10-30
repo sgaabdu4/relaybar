@@ -32,8 +32,22 @@ public enum PoolReplace {
         + "for p in .claude .claude/settings.json .claude/.credentials.json .codex .codex/config.toml .codex/auth.json \(keptFolder); do "
         + "[ -L \"$HOME/$p\" ] && echo link:$p; done; "
         + "[ -e \"$HOME/.claude\" ] || echo claudedir:new; "
+        + "grep -q '\"primaryApiKey\"' \"$HOME/.claude.json\" 2>/dev/null && echo setup:claude; "
 
     static func hasLogin(_ lines: [String]) -> Bool { lines.contains("login:claude") || lines.contains("login:codex") }
+
+    static func hasSetup(_ lines: [String]) -> Bool { hasLogin(lines) || lines.contains("setup:claude") }
+
+    static func ownClaudeSetup(_ settings: String?) -> Bool {
+        guard let settings, let root = try? JSONSerialization.jsonObject(with: Data(settings.utf8)) as? [String: Any] else { return false }
+        let env = root["env"] as? [String: Any] ?? [:]
+        return root["apiKeyHelper"] != nil || envKeys.contains { env[$0] != nil }
+    }
+
+    static func ownCodexSetup(_ config: String?) -> Bool {
+        guard let config else { return false }
+        return codexLines(config).contains { $0.table.isEmpty && ($0.key == ["model_provider"] || $0.key == ["profile"]) }
+    }
 
     static func blockedByLink(_ lines: [String]) -> Bool { lines.contains { $0.hasPrefix("link:") } }
 
@@ -112,7 +126,9 @@ extension PoolJoin {
             progress("The Claude Code settings on \(remote.host) are not valid JSON, so Relaybar will not change them")
             return false
         }
-        guard PoolReplace.hasLogin(lines) else { return true }
+        let claude = try readFile(remote, PoolReplace.claudeSettings)
+        let codex = try readFile(remote, PoolReplace.codexConfig)
+        guard PoolReplace.hasSetup(lines) || PoolReplace.ownClaudeSetup(claude) || PoolReplace.ownCodexSetup(codex) else { return true }
         return await hooks.replaceLogins(remote.host)
     }
 

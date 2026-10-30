@@ -1059,6 +1059,35 @@ extension PoolJoinTests {
         ).client
     }
 
+    @Test func asksWhenThereIsAnotherSetup() async throws {
+        let cases: [(String, [String: String], String, Bool)] = [
+            ("helper", [".claude/settings.json": "{\"apiKeyHelper\": \"/bin/x\"}"], "", true),
+            ("base url", [".claude/settings.json": "{\"env\": {\"ANTHROPIC_BASE_URL\": \"http://x\"}}"], "", true),
+            ("api key", [".claude/settings.json": "{\"env\": {\"ANTHROPIC_API_KEY\": \"k\"}}"], "", true),
+            ("auth token", [".claude/settings.json": "{\"env\": {\"ANTHROPIC_AUTH_TOKEN\": \"k\"}}"], "", true),
+            ("primary key", [:], "\nsetup:claude", true),
+            ("provider", [".codex/config.toml": "model = \"m\"\nmodel_provider = \"other\"\n"], "", true),
+            ("profile", [".codex/config.toml": "profile = \"p\"\n"], "", true),
+            ("plain claude", [".claude/settings.json": "{\"model\": \"m\", \"env\": {\"KEEP\": \"1\"}}"], "", false),
+            ("plain codex", [".codex/config.toml": "model = \"m\"\n[profiles.p]\nmodel_provider = \"inner\"\n"], "", false),
+        ]
+        for (name, files, extra, asks) in cases {
+            let home = try Fixture()
+            for (path, text) in files { try home.write(path, text) }
+            let asked = Asked()
+            var hooks = AddLog().hooks
+            hooks.replaceLogins = { host in
+                asked.add(false, host)
+                return false
+            }
+            let result = try await PoolJoin.linuxClient(
+                host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks,
+                run: fileBacked(FakeClientHost(probe: "new:.config/relaybar\nlinger:off" + extra), home: home).runner)
+            #expect(asked.calls.count == (asks ? 1 : 0), "\(name)")
+            #expect(result.replaced == !asks, "\(name)")
+        }
+    }
+
     @Test func removePutsTheLoginsBack() async throws {
         let home = try Fixture()
         try seedLogins(home)
