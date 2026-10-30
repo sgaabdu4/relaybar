@@ -386,6 +386,7 @@ public struct PoolTailscaleComputer: Sendable {
 
     private var signInCommand: String {
         "tailscale status --json 2>/dev/null | grep -q '\"BackendState\": *\"Running\"' && { echo \(PoolTailscale.running); exit 0; }; "
+            + "if command -v systemctl >/dev/null 2>&1 && ! systemctl is-active --quiet tailscaled; then systemctl enable --now tailscaled >/dev/null 2>&1; fi; "
             + "f=$(mktemp); nohup tailscale up >\"$f\" 2>&1 </dev/null & pid=$!; "
             + "while kill -0 $pid 2>/dev/null && ! grep -q 'https://\(PoolTailscale.loginHost)/' \"$f\"; do sleep 1; done; cat \"$f\""
     }

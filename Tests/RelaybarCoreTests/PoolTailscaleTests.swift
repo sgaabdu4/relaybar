@@ -242,6 +242,47 @@ struct PoolTailscaleTests {
             PoolTailscaleComputer(host: "x", run: there.runner, pause: { _ in }).user() == "sam")
     }
 
+    @Test func startsAStoppedTailscaleServiceBeforeSigningIn() async throws {
+        let bin = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bin) }
+        let started = bin.appendingPathComponent("started").path
+        let fakes = [
+            "systemctl": "case \"$1\" in is-active) test -e '\(started)';; enable) touch '\(started)';; esac",
+            "tailscale": """
+            [ "$1" = up ] || exit 1
+            if [ -e '\(started)' ]; then printf '\(signInOutput.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\t", with: "\\t"))'; sleep 5
+            else echo "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)"; exit 1; fi
+            """,
+        ]
+        for (name, body) in fakes {
+            let file = bin.appendingPathComponent(name)
+            try ("#!/bin/sh\n" + body + "\n").write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+        let running = "RB-IP\n100.64.0.9\nRB-STATUS\n" + tailscaleStatus("Running") + "\n"
+        let recorder = Recorder()
+        recorder.respond = { _ in CommandResult(output: running) }
+        let computer = PoolTailscaleComputer(host: "linuxpc", run: recorder.runner, pause: { _ in })
+        let opened = Opens()
+        let result = try await computer.bringUp(
+            found: PoolTailscaleHome(installed: true, running: false, address: nil),
+            privileged: { command, _ in
+                let shell = Process()
+                shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+                shell.arguments = ["-c", command]
+                shell.environment = ["PATH": bin.path + ":/usr/bin:/bin"]
+                let out = Pipe()
+                shell.standardOutput = out
+                try shell.run()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                shell.waitUntilExit()
+                return String(decoding: data, as: UTF8.self)
+            }, onLink: { opened.add($0) })
+        #expect(opened.urls.map(\.absoluteString) == ["https://login.tailscale.com/a/1a2b3c4d5e6f"])
+        #expect(result.address == "100.64.0.9")
+    }
+
     @Test func readsTheSignInLink() async throws {
         #expect(PoolTailscale.signInLink(in: signInOutput)?.absoluteString == "https://login.tailscale.com/a/1a2b3c4d5e6f")
         #expect(PoolTailscale.signInLink(in: "visit https://login.tailscale.com.evil.example/a/x now") == nil)
