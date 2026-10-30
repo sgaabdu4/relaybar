@@ -1,6 +1,6 @@
 # Combine accounts
 
-Status: Draft
+Status: Complete
 
 ## Outcome + scope
 
@@ -29,7 +29,7 @@ Probes before the build (2026-10-29, real binary 8.0.44 in a scratch folder, fak
 - Claude Code in an empty config folder with only `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` reached the helper and passed its key check (400 "unknown provider" with no logins). Codex 0.165 in an empty `CODEX_HOME` with a `relaybar` provider and `auth.command` did the same.
 - Linux (Ubuntu 24.04 container with systemd, over SSH): the no-plugin release passed its checksum, ran as a user service with lingering, answered `/v1/models`, and with `ProtectHome=tmpfs` plus `BindPaths` for its folder it could read and write its folder but not a home file.
 - Not yet known: the Codex account id for `ChatGPT-Account-Id` (needs a real Codex sign-in; checked in the journey).
-Same cause: repeated Complete-check failure, 2026-10-30: the installed Hard Eng (8de0e62) finds a named test only when its name is quoted, so every Swift test named in Acceptance (`@Test func name()`) reads as missing; the only other place is the same check run by the Stop hook. Fixed upstream in Hard Eng issue #440 (branch `fix/swift-test-functions`); the short `Suite::name` references were also changed to full file paths.
+Same cause: repeated Complete-check failure, 2026-10-30: the installed Hard Eng (8de0e62) finds a named test only when its name is quoted, so every Swift test named in Acceptance (`@Test func name()`) reads as missing; the only other place is the same check run by the Stop hook. Fixed upstream for Hard Eng issue #440 (PR #442, released in dd118ea and installed here); the short `Suite::name` references were also changed to full file paths.
 
 ## Decisions + authorization
 
@@ -75,8 +75,8 @@ Recommendations awaiting approval (design response to "simplify"):
 - Delivery: one PR with four slices in order (this Mac, home computer, other computers, docs).
 - Risk wording, dialog: "Your accounts could be banned. Use your plans only for your own work. Use Claude plans only in Claude Code." Checkbox: "I accept the risk and these rules."
 - Risk wording, README: "Combining accounts can get your accounts banned. Anthropic or OpenAI may treat it as against their terms. Relaybar cannot stop or undo a ban. Two rules: 1. Use your plans only for your own work. Never use them to serve other people. 2. Use Claude plans only for Claude models in Claude Code. Never use them in any other app. Run the helper only on your own computers at home. Never on a cloud server or behind a VPN."
-Blockers: the Complete check cannot pass until Hard Eng's fix for issue #440 is released to `main` and installed here through the Hard Eng update PR. Resume: run that update, then `python3 .hooks/hard-eng.py check --plan-stage Complete`, and set Status Complete when it passes.
-Handoff: Approval
+Blockers: None
+Handoff: Build
 Authority: Plan approved for build by the user on 2026-10-29 ("okay implement and then test the full thing and remember we need to update README and possibly our video as well"). No authority to commit, push, merge or release. Later approved: push and a draft PR ("okay yeah"). The install additions to Add a computer were approved from the mockup on 2026-10-29 ("perfect but you just need to make ui more beautiful"): build them with a more polished native look than the mockup.
 
 ## Acceptance + steps
