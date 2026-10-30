@@ -387,7 +387,7 @@ extension PoolJoin {
             }
             if installT3 {
                 let computer = PoolTailscaleComputer(host: host, run: run, pause: hooks.pause)
-                if let tailscaleAddress, let user = computer.user(), computer.reaches("\(user)@\(tailscaleAddress)") {
+                if let tailscaleAddress, computer.reaches(host, at: tailscaleAddress) {
                     progress("Limiting T3 Code on \(host) to Tailscale")
                     client.t3Host = tailscaleAddress
                     checkpoint(client)

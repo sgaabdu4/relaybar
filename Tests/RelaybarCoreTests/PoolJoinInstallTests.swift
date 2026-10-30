@@ -605,8 +605,8 @@ extension PoolJoinTests {
         #expect(scripts[env].contains("if [ -L \"$f\" ]; then echo link; exit 0; fi;"))
         #expect(client.t3Host == "100.64.0.9")
         #expect(opens.urls.count == 1)
-        let reach = try #require(recorder.commands.first { $0.arguments.last == "true" && $0.arguments.contains("sam@100.64.0.9") })
-        #expect(reach.arguments.contains("BatchMode=yes"))
+        let reach = try #require(recorder.commands.first { $0.arguments.last == "true" && $0.arguments.contains("HostName=100.64.0.9") })
+        #expect(reach.arguments.contains("BatchMode=yes") && reach.arguments.suffix(3) == ["--", "laptop", "true"])
 
         let quiet = Recorder()
         let silent = FakeClientHost(reachable: false)
