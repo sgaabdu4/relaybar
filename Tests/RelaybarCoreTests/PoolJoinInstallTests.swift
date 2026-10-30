@@ -1118,6 +1118,38 @@ extension PoolJoinTests {
         #expect(try String(contentsOf: edited.root.appendingPathComponent(".codex/auth.json"), encoding: .utf8) == "new login")
     }
 
+    @Test func neverReusesAnOldKeptFolder() async throws {
+        let home = try Fixture()
+        try seedLogins(home)
+        let before = tree(home, [".claude", ".codex"])
+        try home.write(".config/relaybar/kept/claude-settings.json", "{\"old\": \"original\"}")
+        try home.write(".config/relaybar/kept/codex-auth.json", "old login")
+        let oldKept = tree(home, [".config/relaybar/kept"])
+        let notes = Events()
+        var hooks = AddLog().hooks
+        hooks.replaceLogins = { _ in true }
+        let result = try await PoolJoin.linuxClient(
+            host: "laptop", hub: "homebox", accessKey: secrets.accessKey, hooks: hooks,
+            run: fileBacked(
+                FakeClientHost(probe: "new:.config/relaybar\nlinger:off\nlogin:claude\nlogin:codex\nkept:old"), home: home
+            ).runner,
+            progress: { notes.add($0) })
+        #expect(result.replaced)
+        #expect(notes.items.contains { $0.contains("moved an older folder") })
+        let aside = try #require(
+            try FileManager.default.contentsOfDirectory(atPath: home.root.appendingPathComponent(".config/relaybar").path)
+                .first { $0.hasPrefix("kept-") })
+        let moved = tree(home, [".config/relaybar/" + aside])
+        #expect(moved.values.sorted { $0.count < $1.count } == oldKept.values.sorted { $0.count < $1.count })
+        let current = home.root.appendingPathComponent(".config/relaybar/kept/claude-settings.json")
+        #expect(try String(contentsOf: current, encoding: .utf8).contains("sample-model"))
+
+        let removal = try removeHere(result.client, home: home)
+        #expect(removal.keptBackups.isEmpty)
+        #expect(tree(home, [".claude", ".codex"]) == before)
+        #expect(tree(home, [".config/relaybar/" + aside]) == moved)
+    }
+
     @Test func removeKeepsLaterChanges() async throws {
         let home = try Fixture()
         try seedLogins(home)

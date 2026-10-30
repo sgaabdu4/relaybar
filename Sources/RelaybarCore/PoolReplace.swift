@@ -32,6 +32,7 @@ public enum PoolReplace {
         + "for p in .claude .claude/settings.json .claude/.credentials.json .codex .codex/config.toml .codex/auth.json \(keptFolder); do "
         + "[ -L \"$HOME/$p\" ] && echo link:$p; done; "
         + "[ -e \"$HOME/.claude\" ] || echo claudedir:new; "
+        + "[ -e \"$HOME/\(keptFolder)\" ] && echo kept:old; "
         + "grep -q '\"primaryApiKey\"' \"$HOME/.claude.json\" 2>/dev/null && echo setup:claude; "
 
     static func hasLogin(_ lines: [String]) -> Bool { lines.contains("login:claude") || lines.contains("login:codex") }
@@ -133,10 +134,16 @@ extension PoolJoin {
     }
 
     static func replaceLogins(
-        _ remote: PoolRemote, home: String, lines: [String], client: inout PoolLinuxClient, checkpoint: (PoolLinuxClient?) -> Void
+        _ remote: PoolRemote, home: String, lines: [String], client: inout PoolLinuxClient, progress: (String) -> Void,
+        checkpoint: (PoolLinuxClient?) -> Void
     ) throws {
         let kept = "$HOME/\(PoolReplace.keptFolder)"
-        try remote.execute("umask 077; mkdir -p \"\(kept)\"")
+        if lines.contains("kept:old") {
+            try remote.execute(
+                "k=\"\(kept)\"; n=\"$k-$(date +%Y%m%d-%H%M%S)-$$\"; [ ! -e \"$n\" ] && mv \"$k\" \"$n\"")
+            progress("Relaybar moved an older folder of kept files on \(remote.host) aside")
+        }
+        try remote.execute("umask 077; mkdir -p \"$HOME/.config/relaybar\" && mkdir \"\(kept)\"")
         if lines.contains("claudedir:new") { client.createdFolders.append(".claude") }
         if lines.contains("codexdir:new") { client.createdFolders.append(".codex") }
         checkpoint(client)
@@ -171,7 +178,7 @@ extension PoolJoin {
         checkpoint(client)
         let name = PoolReplace.names[path] ?? ""
         let copy = "$HOME/\(PoolReplace.keptFolder)/\(name)"
-        let backup = existed ? "[ -e \"\(copy)\" ] || cp -p \"$f\" \"\(copy)\" || exit 1; cp -p \"$f\" \"$t\" || exit 1; " : ""
+        let backup = existed ? "[ ! -e \"\(copy)\" ] && cp -p \"$f\" \"\(copy)\" || exit 1; cp -p \"$f\" \"$t\" || exit 1; " : ""
         try remote.execute(
             "f=\"$HOME/\(path)\"; t=\"$f.relaybar-new\"; \(backup)cat > \"$t\" && mv \"$t\" \"$f\" || { rm -f \"$t\"; exit 1; }",
             stdin: content)

@@ -310,7 +310,10 @@ extension PoolController {
             var forgot = false
             for host in report.unreachableComputers where !leftAlone.contains(host) {
                 panel.close()
-                switch PoolDialogs.unreachable(host: host, reason: report.failed.first { $0.step == .linuxClient }?.reason ?? "") {
+                switch PoolDialogs.unreachable(
+                    host: host, reason: report.failed.first { $0.step == .linuxClient }?.reason ?? "",
+                    replaced: state?.linuxClients.first { $0.host == host }?.loginsReplaced == true)
+                {
                 case .again: again = true
                 case .forget:
                     let removal = await Task.detached { try? setup.forgetComputer(host: host) }.value
@@ -420,7 +423,10 @@ extension PoolController {
                 removal = try await Task.detached { try setup.removeComputer(host: host) }.value
             } catch {
                 panel.close()
-                switch PoolDialogs.unreachable(host: host, reason: error.localizedDescription) {
+                switch PoolDialogs.unreachable(
+                    host: host, reason: error.localizedDescription,
+                    replaced: state?.linuxClients.first { $0.host == host }?.loginsReplaced == true)
+                {
                 case .again: panel.showSetup(title: title, message: "Trying again")
                 case .forget: removal = await Task.detached { (try? setup.forgetComputer(host: host)) ?? PoolClientRemoval() }.value
                 case .leave: return

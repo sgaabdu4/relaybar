@@ -56,6 +56,7 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
     public var t3Binary: String?
     public var kept: [PoolKeptFile] = []
     public var createdFolders: [String] = []
+    public var loginsReplaced: Bool { kept.contains { $0.edited } }
 
     public init(host: String, folders: [String] = [], linger: Bool = false) {
         self.host = host
