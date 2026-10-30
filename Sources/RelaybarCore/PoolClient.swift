@@ -170,13 +170,14 @@ extension PoolJoin {
     }
 
     public static func linuxClient(
-        host: String, hub: String, hubLabel: String? = nil, accessKey: String, options: PoolAddOptions = PoolAddOptions(),
+        host: String, hub: String, hubHostName: String? = nil, hubLabel: String? = nil, accessKey: String,
+        options: PoolAddOptions = PoolAddOptions(),
         hooks: PoolAddHooks = .none, run: @escaping CommandRunner, progress: (String) -> Void = { _ in },
         checkpoint: (PoolLinuxClient?) -> Void = { _ in }
     ) async throws -> PoolAddResult {
         let remote = PoolRemote(host: host, run: run)
         let hubName = try PoolHubPicker.validate(hub)
-        let hubRemote = PoolRemote(host: hubName, run: run)
+        let hubRemote = PoolRemote(host: hubName, hostName: hubHostName, run: run)
         let label = hubLabel ?? hubName
         let system = try operatingSystem(remote)
         if system == "Darwin" { throw PoolClientError.mac(host) }
@@ -432,7 +433,9 @@ extension PoolJoin {
                 }
             }
         } catch {
-            if let removal = try? removeLinuxClient(client, hubRoutes: [hubName], run: run), removal.hubKeyProblem == nil {
+            if let removal = try? removeLinuxClient(client, hubRoutes: [PoolRoute(hubName, hostName: hubHostName)], run: run),
+                removal.hubKeyProblem == nil
+            {
                 checkpoint(nil)
             }
             throw error
@@ -580,7 +583,7 @@ extension PoolJoin {
         !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
-    static func removeHubKey(_ client: PoolLinuxClient, routes: [String], run: @escaping CommandRunner) throws {
+    static func removeHubKey(_ client: PoolLinuxClient, routes: [PoolRoute], run: @escaping CommandRunner) throws {
         let script =
             "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -e \"$f\" ] && [ ! -L \"$f\" ]; then umask 077; tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; "
             + "\(dropTagged(client.host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
@@ -591,15 +594,15 @@ extension PoolJoin {
         }
         var first: CommandResult?
         for route in routes {
-            let result = run(PoolSSH.command(host: route, script: script))
+            let result = run(PoolSSH.command(host: route.host, hostName: route.hostName, script: script))
             if result.succeeded { return }
             first = first ?? result
         }
-        throw PoolSSHError.failed(PoolHubPicker.explain(first?.error ?? "", host: routes.first ?? ""))
+        throw PoolSSHError.failed(PoolHubPicker.explain(first?.error ?? "", host: routes.first?.host ?? ""))
     }
 
     @discardableResult
-    public static func removeLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String] = [], run: @escaping CommandRunner) throws
+    public static func removeLinuxClient(_ client: PoolLinuxClient, hubRoutes: [PoolRoute] = [], run: @escaping CommandRunner) throws
         -> PoolClientRemoval
     {
         var removal = forgetLinuxClient(client, hubRoutes: hubRoutes, run: run)
@@ -635,7 +638,7 @@ extension PoolJoin {
         return removal
     }
 
-    public static func forgetLinuxClient(_ client: PoolLinuxClient, hubRoutes: [String], run: @escaping CommandRunner)
+    public static func forgetLinuxClient(_ client: PoolLinuxClient, hubRoutes: [PoolRoute], run: @escaping CommandRunner)
         -> PoolClientRemoval
     {
         var removal = PoolClientRemoval()

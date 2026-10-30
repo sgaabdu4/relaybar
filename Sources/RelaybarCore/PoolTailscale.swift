@@ -177,7 +177,7 @@ public struct PoolTailscale: Sendable {
 
     public func home(_ host: String) throws -> PoolTailscaleHome { try computer(host).facts() }
 
-    func reaches(_ destination: String) -> Bool { computer(destination).reaches(destination) }
+    func reaches(_ route: PoolRoute) -> Bool { computer(route.host).reaches(route.host, at: route.hostName) }
 
     func user(of destination: String) -> String? { computer(destination).user() }
 
@@ -187,9 +187,10 @@ public struct PoolTailscale: Sendable {
         _ = env.run(Command("/bin/launchctl", ["bootstrap", env.domain, plist], limit: 30))
     }
 
-    func point(at destination: String) throws {
+    func point(at route: PoolRoute) throws {
         try PoolFile.write(
-            Data(PoolTunnel.plist(paths: env.paths, destination: destination).utf8), to: env.paths.agent(Pool.tunnelLabel), backup: false)
+            Data(PoolTunnel.plist(paths: env.paths, destination: route.host, hostName: route.hostName).utf8),
+            to: env.paths.agent(Pool.tunnelLabel), backup: false)
         load()
     }
 
@@ -204,14 +205,14 @@ public struct PoolTailscale: Sendable {
 
     public func switchTunnel(to address: String, mac: PoolTailscaleStatus) async -> PoolSwitchOutcome {
         guard var state = PoolState.load(env.paths), let host = state.ssh, state.needsTailscale else { return .notApplicable }
-        guard let name = user(of: host) else { return .stayed(.notAnswering) }
-        let destination = "\(name)@\(address)"
-        guard reaches(destination) else { return .stayed(mac.peers.contains(address) ? .notAnswering : .differentTailnet) }
-        state.tailscale = destination
-        guard (try? state.save(env.paths)) != nil, (try? point(at: destination)) != nil else {
+        guard user(of: host) != nil else { return .stayed(.notAnswering) }
+        let route = PoolRoute(host, hostName: address)
+        guard reaches(route) else { return .stayed(mac.peers.contains(address) ? .notAnswering : .differentTailnet) }
+        state.tailscale = address
+        guard (try? state.save(env.paths)) != nil, (try? point(at: route)) != nil else {
             return await putBack(host, state)
         }
-        if await waitForTunnel() { return .switched(destination) }
+        if await waitForTunnel() { return .switched(address) }
         return await putBack(host, state)
     }
 
@@ -219,7 +220,7 @@ public struct PoolTailscale: Sendable {
         var original = state
         original.tailscale = nil
         try? original.save(env.paths)
-        try? point(at: host)
+        try? point(at: PoolRoute(host))
         _ = await waitForTunnel()
         return .stayed(.notAnswering)
     }

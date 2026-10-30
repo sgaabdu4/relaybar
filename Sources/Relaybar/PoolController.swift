@@ -122,8 +122,8 @@ final class PoolController: NSObject {
     private func reachProblem(_ error: Error) async -> String? {
         guard let state else { return nil }
         var probe: CommandResult?
-        if !PoolReach.isRejectedKey(error), let target = state.tunnelDestination, !state.runsOnThisMac {
-            probe = await Task.detached { PoolProcess.run(PoolReach.probe(host: target)) }.value
+        if !PoolReach.isRejectedKey(error), let target = state.tunnelRoute, !state.runsOnThisMac {
+            probe = await Task.detached { PoolProcess.run(PoolReach.probe(host: target.host, hostName: target.hostName)) }.value
         }
         return PoolReach.reason(host: hostName, error: error, probe: probe)
     }

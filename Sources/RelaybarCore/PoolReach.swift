@@ -1,9 +1,10 @@
 import Foundation
 
 public enum PoolReach {
-    public static func probe(host: String) -> Command {
+    public static func probe(host: String, hostName: String? = nil) -> Command {
         PoolSSH.command(
-            host: host, script: "curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:\(Pool.port)/v1/models; true",
+            host: host, hostName: hostName,
+            script: "curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:\(Pool.port)/v1/models; true",
             connectTimeout: 5, limit: 15)
     }
 

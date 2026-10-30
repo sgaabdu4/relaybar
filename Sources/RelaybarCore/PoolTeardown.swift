@@ -74,9 +74,9 @@ public enum PoolTeardown {
         return run(env)
     }
 
-    private static func viaRoutes(_ state: PoolState, _ env: PoolEnvironment, _ command: (String) -> Command) -> CommandResult {
+    private static func viaRoutes(_ state: PoolState, _ env: PoolEnvironment, _ command: (PoolRoute) -> Command) -> CommandResult {
         var first: CommandResult?
-        for route in [state.tailscale, state.ssh].compactMap({ $0 }) {
+        for route in state.hubRoutes {
             let result = env.run(command(route))
             if result.succeeded { return result }
             first = first ?? result
@@ -85,7 +85,7 @@ public enum PoolTeardown {
     }
 
     private static func removeComputers(_ state: inout PoolState, _ env: PoolEnvironment, report: inout PoolTeardownReport) throws {
-        let routes = [state.tailscale, state.ssh].compactMap { $0 }
+        let routes = state.hubRoutes
         var reasons: [String] = []
         for client in state.linuxClients {
             let removal: PoolClientRemoval
@@ -119,12 +119,12 @@ public enum PoolTeardown {
         case .tunnelAgent: unload(Pool.tunnelLabel, env)
         case .remoteHelper:
             guard state.ssh != nil else { return }
-            let result = viaRoutes(state, env) { PoolSSH.command(host: $0, script: remoteRemoval) }
+            let result = viaRoutes(state, env) { PoolSSH.command(host: $0.host, hostName: $0.hostName, script: remoteRemoval) }
             guard result.succeeded else { throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: state.ssh ?? "")) }
         case .keepOn:
             guard state.ssh != nil, !state.keepOn.isEmpty else { return }
             let result = viaRoutes(state, env) {
-                PoolRemote.restoreSleepCommand(host: $0, keep: state.keepOn, password: sudoPassword)
+                PoolRemote.restoreSleepCommand(host: $0.host, hostName: $0.hostName, keep: state.keepOn, password: sudoPassword)
             }
             guard result.succeeded else {
                 let host = state.ssh ?? ""

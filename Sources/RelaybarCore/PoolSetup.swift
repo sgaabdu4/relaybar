@@ -146,12 +146,12 @@ public struct PoolSetup: Sendable {
         progress: @Sendable (String) -> Void = { _ in }
     ) async throws -> PoolAddResult {
         guard var state = PoolState.load(env.paths) else { throw PoolSetupError.notCombining }
-        guard let hub = state.tunnelDestination else { throw PoolSetupError.hubIsThisMac }
+        guard let hub = state.tunnelRoute else { throw PoolSetupError.hubIsThisMac }
         guard let access = accessKey() else { throw PoolSetupError.accessKeyMissing }
         let host = try PoolHubPicker.validate(typed)
         if let old = state.linuxClients.first(where: { $0.host == host }) {
             progress("Clearing the earlier setup on \(host)")
-            try PoolJoin.removeLinuxClient(old, hubRoutes: hubRoutes(state), run: env.run)
+            try PoolJoin.removeLinuxClient(old, hubRoutes: state.hubRoutes, run: env.run)
             state.linuxClients.removeAll { $0.host == host }
             try state.save(env.paths)
         }
@@ -159,7 +159,8 @@ public struct PoolSetup: Sendable {
         var options = options
         if options.t3Channel != nil, options.t3Model == nil { options.t3Model = env.t3.claudeModel() }
         let result = try await PoolJoin.linuxClient(
-            host: host, hub: hub, hubLabel: state.ssh, accessKey: access, options: options, hooks: hooks ?? PoolAddHooks(pause: env.pause),
+            host: host, hub: hub.host, hubHostName: hub.hostName, hubLabel: state.ssh, accessKey: access, options: options,
+            hooks: hooks ?? PoolAddHooks(pause: env.pause),
             run: env.run, progress: progress,
             checkpoint: { partial in
                 state.linuxClients.removeAll { $0.host == host }
@@ -178,7 +179,7 @@ public struct PoolSetup: Sendable {
         guard let state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else {
             return PoolClientRemoval()
         }
-        let removal = try PoolJoin.removeLinuxClient(client, hubRoutes: hubRoutes(state), run: env.run)
+        let removal = try PoolJoin.removeLinuxClient(client, hubRoutes: state.hubRoutes, run: env.run)
         try dropComputer(host: host)
         return removal
     }
@@ -191,7 +192,7 @@ public struct PoolSetup: Sendable {
         guard let state = PoolState.load(env.paths), let client = state.linuxClients.first(where: { $0.host == host }) else {
             return PoolClientRemoval()
         }
-        let removal = PoolJoin.forgetLinuxClient(client, hubRoutes: hubRoutes(state), run: env.run)
+        let removal = PoolJoin.forgetLinuxClient(client, hubRoutes: state.hubRoutes, run: env.run)
         try dropComputer(host: host)
         return removal
     }
@@ -202,8 +203,6 @@ public struct PoolSetup: Sendable {
         if state.linuxClients.isEmpty { state.steps.removeAll { $0 == .linuxClient } }
         try state.save(env.paths)
     }
-
-    func hubRoutes(_ state: PoolState) -> [String] { [state.tailscale, state.ssh].compactMap { $0 } }
 
     public func join(host typed: String, progress: @Sendable (String) -> Void = { _ in }) async throws {
         let host = try PoolHubPicker.validate(typed)
@@ -228,7 +227,9 @@ public struct PoolSetup: Sendable {
 
     public func refreshUpdateScript() throws -> Bool {
         guard let script = env.script, let state = PoolState.load(env.paths), !state.joined else { return false }
-        if let host = state.tunnelDestination { return try PoolRemote(host: host, run: env.run).refreshScript(script) }
+        if let route = state.tunnelRoute {
+            return try PoolRemote(host: route.host, hostName: route.hostName, run: env.run).refreshScript(script)
+        }
         if (try? Data(contentsOf: env.paths.updateScript)) == script { return false }
         try PoolFile.write(script, to: env.paths.updateScript, executable: true, backup: false)
         return true

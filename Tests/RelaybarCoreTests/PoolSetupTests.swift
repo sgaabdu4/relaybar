@@ -380,6 +380,11 @@ struct PoolSetupTests {
         harness.recorder.respond = { _ in CommandResult() }
         #expect(try setup.refreshUpdateScript())
         #expect(harness.recorder.commands.last?.stdin == harness.script)
+        remote.tailscale = "100.64.0.7"
+        try remote.save(harness.paths)
+        #expect(try setup.refreshUpdateScript())
+        let viaTailscale = try #require(harness.recorder.commands.last)
+        #expect(Array(viaTailscale.arguments.dropLast().suffix(4)) == ["-o", "HostName=100.64.0.7", "--", "homebox"])
     }
 
     @Test func doesNotAddTheUsageSourceTwice() async throws {

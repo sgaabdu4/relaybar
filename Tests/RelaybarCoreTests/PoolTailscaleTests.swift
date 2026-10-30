@@ -70,7 +70,7 @@ struct PoolTailscaleTests {
         var macInstalled = true
         var home: String?
         var probeWorks = true
-        var tunnelAnswersOn = "sam@100.64.0.7"
+        var tunnelAnswersOn = "HostName=100.64.0.7"
         var signature = signedPackage
         var passwordNeeded = false
     }
@@ -127,15 +127,17 @@ struct PoolTailscaleTests {
         try seeded(harness)
         _ = answer(harness, World(home: homeReply()))
         let outcome = await tailscale(harness).automaticSwitch()
-        #expect(outcome == .switched("sam@\(homeAddress)"))
+        #expect(outcome == .switched(homeAddress))
         let plist = try String(contentsOf: harness.paths.agent(Pool.tunnelLabel), encoding: .utf8)
-        #expect(plist.contains("<string>sam@\(homeAddress)</string>"))
-        #expect(!plist.contains("<string>\(oldDestination)</string>"))
+        #expect(plist.contains("<string>-o</string>\n        <string>HostName=\(homeAddress)</string>"))
+        #expect(plist.contains("<string>--</string>\n        <string>\(oldDestination)</string>"))
+        #expect(!plist.contains("sam@"))
         let state = try #require(PoolState.load(harness.paths))
-        #expect(state.tailscale == "sam@\(homeAddress)")
+        #expect(state.tailscale == homeAddress)
         #expect(state.ssh == oldDestination)
         let probe = try #require(harness.recorder.commands.first { $0.arguments.last == "true" })
         #expect(probe.arguments.contains("ConnectTimeout=5") && probe.arguments.contains("BatchMode=yes"))
+        #expect(probe.arguments.suffix(5) == ["-o", "HostName=\(homeAddress)", "--", oldDestination, "true"])
         #expect(harness.recorder.ran("/bin/launchctl", containing: "bootstrap gui/501 "))
         #expect(await tailscale(harness).automaticSwitch() == .notApplicable)
     }
@@ -168,7 +170,7 @@ struct PoolTailscaleTests {
         _ = answer(harness, World(home: homeReply()))
         let stages = Stages()
         let outcome = try await tailscale(harness).setUp(host: oldDestination, hooks: hooks(stages))
-        #expect(outcome == .switched("sam@\(homeAddress)"))
+        #expect(outcome == .switched(homeAddress))
         let all = harness.recorder.commands.map { ($0.executable + " " + $0.arguments.joined(separator: " ")) }
         for banned in ["tailscale up", "install.sh", "sudo", "curl", "pkgutil", "installer"] {
             #expect(!all.contains { $0.contains(banned) }, "ran \(banned)")
@@ -301,7 +303,7 @@ struct PoolTailscaleTests {
             case PoolTailscale.macCLI: return CommandResult(output: tailscaleStatus("Running", peers: ["100.64.0.7"]))
             case "/bin/launchctl":
                 let plist = (try? String(contentsOf: paths.agent(Pool.tunnelLabel), encoding: .utf8)) ?? ""
-                tunnel.on = command.arguments.first == "bootstrap" && plist.contains("sam@100.64.0.7")
+                tunnel.on = command.arguments.first == "bootstrap" && plist.contains("<string>HostName=100.64.0.7</string>")
                 return CommandResult()
             case "/usr/bin/ssh":
                 if text.contains("command -v tailscale") {
@@ -319,7 +321,7 @@ struct PoolTailscaleTests {
         harness.http.handler = { request in tunnel.on && request.url.path == "/v1/models" ? HTTPResponse(status: 401) : nil }
         let opened = Opened()
         let outcome = try await tailscale(harness, opened: opened).setUp(host: oldDestination, hooks: hooks())
-        #expect(outcome == .switched("sam@\(homeAddress)"))
+        #expect(outcome == .switched(homeAddress))
         #expect(opened.urls.map(\.absoluteString) == ["https://login.tailscale.com/a/1a2b3c4d5e6f"])
         let up = try #require(harness.recorder.commands.first { remoteScript($0).contains("tailscale up") })
         #expect(remoteScript(up).hasPrefix("sudo -n sh -c "))
@@ -344,7 +346,7 @@ struct PoolTailscaleTests {
         }
         _ = tunnel
         let outcome = try await tailscale(harness).setUp(host: oldDestination, hooks: hooks(password: "hunter2"))
-        #expect(outcome == .switched("sam@\(homeAddress)"))
+        #expect(outcome == .switched(homeAddress))
         let withPassword = harness.recorder.commands.filter { $0.stdin != nil }
         #expect(!withPassword.isEmpty)
         for command in withPassword {
@@ -410,7 +412,7 @@ struct PoolTailscaleTests {
                 return true
             }, password: { _ in nil }, report: { _, _ in })
         let outcome = try await tailscale(harness, opened: opened).setUp(host: oldDestination, hooks: working)
-        #expect(outcome == .switched("sam@\(homeAddress)"))
+        #expect(outcome == .switched(homeAddress))
         #expect(packages.urls.map(\.lastPathComponent) == ["Tailscale.pkg"])
         #expect(opened.urls.map(\.path) == [PoolTailscale.macApp])
         let script = PoolTailscale.installScript(package: URL(fileURLWithPath: "/tmp/a b/\"x\".pkg"))
@@ -485,6 +487,23 @@ struct PoolTailscaleTests {
     @Test func stopStillReachesTheHomeComputerOverTailscale() throws {
         let harness = try Harness()
         var state = PoolState(ssh: oldDestination)
+        state.tailscale = homeAddress
+        state.record(.remoteHelper)
+        try state.save(harness.paths)
+        harness.recorder.respond = { command in
+            command.arguments.contains("HostName=\(self.homeAddress)")
+                ? CommandResult() : CommandResult(status: 255, error: "ssh: connect to host homebox timed out")
+        }
+        let report = PoolTeardown.run(harness.env())
+        #expect(report.finished)
+        let reached = try #require(harness.recorder.commands.first)
+        #expect(Array(reached.arguments.dropLast().suffix(4)) == ["-o", "HostName=\(homeAddress)", "--", oldDestination])
+        #expect(harness.recorder.commands.count == 1)
+    }
+
+    @Test func stopStillUsesAnOldSavedUserAndAddress() throws {
+        let harness = try Harness()
+        var state = PoolState(ssh: oldDestination)
         state.tailscale = "sam@\(homeAddress)"
         state.record(.remoteHelper)
         try state.save(harness.paths)
@@ -496,5 +515,21 @@ struct PoolTailscaleTests {
         #expect(report.finished)
         let hosts = harness.recorder.commands.compactMap { $0.arguments.dropLast().last }
         #expect(hosts == ["sam@\(homeAddress)"])
+        #expect(!harness.recorder.commands.contains { $0.arguments.contains { $0.hasPrefix("HostName=") } })
+    }
+
+    @Test func removingAComputerReachesTheHomeComputerOverTailscaleByItsName() throws {
+        let harness = try Harness()
+        var client = PoolLinuxClient(host: "laptop")
+        client.hubKey = true
+        var state = PoolState(ssh: oldDestination)
+        state.tailscale = homeAddress
+        state.steps = [.linuxClient]
+        state.linuxClients = [client]
+        try state.save(harness.paths)
+        let report = PoolTeardown.run(harness.env())
+        #expect(report.keysLeft.isEmpty)
+        let keyRemoval = try #require(harness.recorder.commands.first { remoteScript($0).contains("authorized_keys") })
+        #expect(Array(keyRemoval.arguments.dropLast().suffix(4)) == ["-o", "HostName=\(homeAddress)", "--", oldDestination])
     }
 }

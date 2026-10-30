@@ -15,9 +15,10 @@ public enum PoolTunnel {
         ]
     }
 
-    public static func plist(paths: PoolPaths, destination: String) -> String {
+    public static func plist(paths: PoolPaths, destination: String, hostName: String? = nil) -> String {
         PoolInstall.plist(
-            label: Pool.tunnelLabel, arguments: ["/usr/bin/ssh"] + arguments(destination: destination),
+            label: Pool.tunnelLabel,
+            arguments: ["/usr/bin/ssh"] + arguments(destination: destination, extra: PoolSSH.override(hostName: hostName)),
             workingDirectory: paths.appSupport.path, keepAlive: true,
             extra: "    <key>ThrottleInterval</key>\n    <integer>10</integer>\n")
     }

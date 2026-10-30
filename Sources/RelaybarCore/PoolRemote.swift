@@ -26,16 +26,18 @@ public struct PoolRemote: Sendable {
     static let needsPasswordStatus: Int32 = 7
 
     public let host: String
+    public let hostName: String?
     public let run: CommandRunner
 
-    public init(host: String, run: @escaping CommandRunner) {
+    public init(host: String, hostName: String? = nil, run: @escaping CommandRunner) {
         self.host = host
+        self.hostName = hostName
         self.run = run
     }
 
     @discardableResult
     func execute(_ script: String, stdin: Data? = nil, limit: TimeInterval = 120) throws -> String {
-        let result = run(PoolSSH.command(host: host, script: script, stdin: stdin, limit: limit))
+        let result = run(PoolSSH.command(host: host, hostName: hostName, script: script, stdin: stdin, limit: limit))
         guard result.succeeded else { throw PoolSSHError.failed(PoolHubPicker.explain(result.error, host: host)) }
         return result.output
     }
@@ -103,7 +105,7 @@ public struct PoolRemote: Sendable {
         progress("Downloading and checking the helper on \(host)")
         let result = run(
             PoolSSH.command(
-                host: host,
+                host: host, hostName: hostName,
                 script: Pool.scriptEnvironment.sorted { $0.key < $1.key }.map { "\($0.key)=\"\($0.value)\" " }.joined()
                     + "sh \"\(Self.scriptPath)\" install \"\(Self.helperDir)\"",
                 limit: 900))
@@ -133,7 +135,7 @@ public struct PoolRemote: Sendable {
                 + "sudo -S -p '' sh -c \"[ $lingerNeeded = 0 ] || loginctl enable-linger $u && { [ -z '$todo' ] || systemctl mask $todo; }\" "
                 + "|| exit 1; [ $lingerNeeded = 0 ] || echo changed:linger; for t in $todo; do echo changed:$t; done"
         }
-        let result = run(PoolSSH.command(host: host, script: script, stdin: password.map { Data(($0 + "\n").utf8) }))
+        let result = run(PoolSSH.command(host: host, hostName: hostName, script: script, stdin: password.map { Data(($0 + "\n").utf8) }))
         var changes = PoolKeepOn()
         for line in result.output.split(whereSeparator: \.isNewline) where line.hasPrefix("changed:") {
             let name = String(line.dropFirst(8))
@@ -143,7 +145,7 @@ public struct PoolRemote: Sendable {
         return PoolKeepResult(sleep: sleep, changes: changes)
     }
 
-    public static func restoreSleepCommand(host: String, keep: PoolKeepOn, password: String?) -> Command {
+    public static func restoreSleepCommand(host: String, hostName: String? = nil, keep: PoolKeepOn, password: String?) -> Command {
         var steps: [String] = []
         if !keep.masked.isEmpty { steps.append("systemctl unmask \(keep.masked.joined(separator: " "))") }
         if keep.linger { steps.append("loginctl disable-linger \"$u\"") }
@@ -151,11 +153,12 @@ public struct PoolRemote: Sendable {
         guard let password else {
             let list = steps.map { $0.hasPrefix("loginctl") ? "{ \($0) 2>/dev/null || sudo -n \($0); }" : "sudo -n \($0)" }
             return PoolSSH.command(
-                host: host, script: "u=$(id -un); " + (list.isEmpty ? "true" : list.joined(separator: " && ")) + " " + fail)
+                host: host, hostName: hostName,
+                script: "u=$(id -un); " + (list.isEmpty ? "true" : list.joined(separator: " && ")) + " " + fail)
         }
         let inner = steps.joined(separator: " && ").replacingOccurrences(of: "\"$u\"", with: "$u")
         return PoolSSH.command(
-            host: host, script: "u=$(id -un); sudo -S -p '' sh -c \"\(inner.isEmpty ? "true" : inner)\" \(fail)",
+            host: host, hostName: hostName, script: "u=$(id -un); sudo -S -p '' sh -c \"\(inner.isEmpty ? "true" : inner)\" \(fail)",
             stdin: Data((password + "\n").utf8))
     }
 

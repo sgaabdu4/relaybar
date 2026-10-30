@@ -133,7 +133,15 @@ public struct PoolState: Codable, Equatable, Sendable {
 
     public var runsOnThisMac: Bool { ssh == nil }
 
-    public var tunnelDestination: String? { tailscale ?? ssh }
+    public var tailscaleRoute: PoolRoute? {
+        guard let address = tailscale else { return nil }
+        guard let ssh, !address.contains("@") else { return PoolRoute(address) }
+        return PoolRoute(ssh, hostName: address)
+    }
+
+    public var tunnelRoute: PoolRoute? { tailscaleRoute ?? ssh.map { PoolRoute($0) } }
+
+    public var hubRoutes: [PoolRoute] { [tailscaleRoute, ssh.map { PoolRoute($0) }].compactMap { $0 } }
 
     public static func load(_ paths: PoolPaths) -> PoolState? {
         guard let data = try? Data(contentsOf: paths.state) else { return nil }
@@ -191,16 +199,35 @@ public struct PoolEnvironment: Sendable {
     public var domain: String { "gui/\(uid)" }
 }
 
+public struct PoolRoute: Equatable, Sendable, ExpressibleByStringLiteral {
+    public let host: String
+    public let hostName: String?
+
+    public init(_ host: String, hostName: String? = nil) {
+        self.host = host
+        self.hostName = hostName
+    }
+
+    public init(stringLiteral value: String) {
+        self.init(value)
+    }
+}
+
 public enum PoolSSH {
+    public static func override(hostName: String?) -> [String] {
+        hostName.map { ["-o", "HostName=\($0)"] } ?? []
+    }
+
     public static func options(connectTimeout: Int = 10) -> [String] {
         ["-o", "BatchMode=yes", "-o", "ConnectTimeout=\(connectTimeout)", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"]
     }
 
     public static func command(
-        host: String, script: String, stdin: Data? = nil, connectTimeout: Int = 10, limit: TimeInterval = 120
+        host: String, hostName: String? = nil, script: String, stdin: Data? = nil, connectTimeout: Int = 10, limit: TimeInterval = 120
     ) -> Command {
         Command(
-            "/usr/bin/ssh", options(connectTimeout: connectTimeout) + ["--", host, "sh -c " + Shell.quote(script)], stdin: stdin,
-            limit: limit)
+            "/usr/bin/ssh",
+            options(connectTimeout: connectTimeout) + override(hostName: hostName) + ["--", host, "sh -c " + Shell.quote(script)],
+            stdin: stdin, limit: limit)
     }
 }
