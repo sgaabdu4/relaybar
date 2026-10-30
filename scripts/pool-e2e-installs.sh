@@ -248,6 +248,25 @@ import json, sys
 data = json.load(open(sys.argv[1]))
 sys.exit(1 if data.get("providerInstances") else 0)
 ' "$work/settings-restored.json" || fail "the T3 Code entries are still in the client settings"
+  replaceLogins=replace installStep addInstalls e2eAddsTheClientWithInstalls
+  clientRemote "cd $homeDir && sed -i 's/\"model\" *: *\"sample-model\"/\"model\" : \"later\",\n  \"permissions\" : { \"allow\" : [ \"Read\" ] }/' .claude/settings.json && printf '\n[mcp_servers.later]\ncommand = \"later\"\n' >> .codex/config.toml" || fail "cannot change the client settings after Replace"
+  swiftStep remove e2eRemovesTheClient
+  clientRemote "cat $homeDir/.claude/settings.json" > "$work/claude-later.json"
+  clientRemote "cat $homeDir/.codex/config.toml" > "$work/codex-later.toml"
+  python3 -I -c '
+import json, sys, tomllib
+settings = json.load(open(sys.argv[1]))
+if "apiKeyHelper" in settings or settings.get("model") != "later" or settings.get("permissions") != {"allow": ["Read"]}:
+    sys.exit("settings: %s" % settings)
+if settings.get("env") != {"ANTHROPIC_AUTH_TOKEN": "old-token", "KEEP": "1"}:
+    sys.exit("env: %s" % settings.get("env"))
+config = tomllib.load(open(sys.argv[2], "rb"))
+if config.get("model_provider") != "other" or config.get("mcp_servers", {}).get("later") != {"command": "later"} or "relaybar" in config.get("model_providers", {}):
+    sys.exit("config: %s" % config)
+' "$work/claude-later.json" "$work/codex-later.toml" || fail "Remove did not keep the changes made after Replace"
+  [ "$(clientRemote "cd $homeDir && ls .config/relaybar/kept | tr '\n' ' '")" = "claude-settings.json codex-config.toml " ] || fail "the old settings and config copies were not kept after the files changed"
+  [ "$(clientRemote "cd $homeDir && sha256sum .claude/.credentials.json .codex/auth.json")" = "$(printf '%s\n' "$loginsBefore" | sed -n '1p;3p')" ] || fail "the logins are not back after Remove with changed settings"
+  clientRemote "rm -rf $homeDir/.config/relaybar/kept" || fail "cannot clear the kept copies"
   [ "$(remote "cat $homeDir/.ssh/authorized_keys")" = "$keysBefore" ] || fail "the hub authorized_keys is not as it was before the computer was added"
-  echo "  none of the three tools were on the client; Keep Them gave claude+ and codex+ and the Claude+ and Codex+ entries; Replace set apiKeyHelper and the Codex provider, the real helper answered '$headersResult' (both headers, x-api-key only, bearer only, none, wrong), and Remove put every login and settings file back byte for byte"
+  echo "  none of the three tools were on the client; Keep Them gave claude+ and codex+ and the Claude+ and Codex+ entries; Replace set apiKeyHelper and the Codex provider, the real helper answered '$headersResult' (both headers, x-api-key only, bearer only, none, wrong), and Remove put every login and settings file back byte for byte, or kept later changes and the old copies"
 }
