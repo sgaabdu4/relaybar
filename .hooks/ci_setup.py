@@ -9,6 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ci_jobs import migrate_runner_variable, migrate_swift_runner
 from gate_config import GateConfig, Group, JsonValue
 from project_setup import dependency_command
 
@@ -85,12 +86,6 @@ def impact_tools(root: Path, groups: list[Group]) -> list[str]:
     return list(dict.fromkeys(tools))
 
 
-def impact_runner(groups: list[Group]) -> str:
-    """Xcode runs on macOS; every other selection stays on Linux."""
-    swift = any(group.get("language") == "swift" for group in groups)
-    return "macos-latest" if swift else "ubuntu-latest"
-
-
 def workflow_triggers(source: Path, base: str) -> tuple[str, str]:
     """The template trigger block and its copy for the project's base branch."""
     template = (source / ".github/workflows/hard-eng.yml").read_text()
@@ -117,8 +112,9 @@ def workflow_budget(root: Path, content: str) -> str:
     policy = load_policy(root, required=False)
     if policy is None:
         return content
+    jobs = "linux|apple" if "\n  apple:\n" in content else "hard-eng"
     return re.sub(
-        r"(?ms)(^  hard-eng:\n.*?^    timeout-minutes: )\d+$",
+        rf"(?ms)(^  (?:{jobs}):\n(?:(?!^  \S).)*?^    timeout-minutes: )\d+$",
         lambda match: match[1] + str(math.ceil(policy["ci_seconds"] / 60)),
         content,
     )
@@ -183,26 +179,6 @@ def migrate_bun(source: Path, content: str) -> str:
 
 LEGACY_PACKAGE = '--package="@jdxcode/mise-linux-${RUNNER_ARCH,,}@latest"'
 MISE_PACKAGE = '--package="$MISE_PACKAGE"'
-RUNNER_JOB = """  impact:
-    name: impact
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      runner: ${{ steps.impact.outputs.runner }}
-    steps:
-%s      - name: Choose the runner
-        id: impact
-        env:
-          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .hooks/hard-eng.py impact --base "$BASE_SHA" >> "$GITHUB_OUTPUT" || echo runner=macos-latest >> "$GITHUB_OUTPUT"
-
-"""
-CHECK_JOB = "  hard-eng:\n    name: hard-eng\n    runs-on: ubuntu-latest\n"
-RUNNER_HEADER = (
-    "    needs: impact\n    if: ${{ !cancelled() }}\n"
-    "    runs-on: ${{ needs.impact.outputs.runner || 'macos-latest' }}\n"
-)
 
 
 def migrate_launcher(source: Path, content: str) -> str:
@@ -232,25 +208,21 @@ def migrate_launcher(source: Path, content: str) -> str:
     return "".join(jobs).replace(LEGACY_PACKAGE, MISE_PACKAGE)
 
 
-def migrate_swift_runner(config: GateConfig, content: str) -> str:
-    """A project with a Swift group runs its check on macOS only when impact selects one."""
-    if impact_runner(config["packages"]) != "macos-latest" or "  impact:\n" in content:
-        return content
-    checkout = re.search(
-        r"(?m)^      - uses: actions/checkout@[^\n]*\n(?:        [^\n]*\n)*", content
+TOOL_DIRECTORIES = (
+    "MISE_DATA_DIR",
+    "MISE_CACHE_DIR",
+    "MISE_STATE_DIR",
+    "BUN_INSTALL_CACHE_DIR",
+)
+
+
+def migrate_tool_environment(content: str) -> str:
+    """A runner that already exports a tool or cache directory keeps it; the temp path fills only a missing one."""
+    return re.sub(
+        rf'(?m)^( *echo ")({"|".join(TOOL_DIRECTORIES)})=(\$RUNNER_TEMP/hard-eng-tools/[^"\n]*)"$',
+        r'\1\2=${\2:-\3}"',
+        content,
     )
-    if content.count(CHECK_JOB) != 1 or checkout is None:
-        print(
-            "CI runner not added: .github/workflows/hard-eng.yml is customised. "
-            "Add the impact job from the Hard Eng generator and make the hard-eng "
-            "job use its runner output so Swift checks run on macOS.",
-            file=sys.stderr,
-        )
-        return content
-    job = RUNNER_JOB % checkout[0] + CHECK_JOB.replace(
-        "    runs-on: ubuntu-latest\n", RUNNER_HEADER
-    )
-    return content.replace(CHECK_JOB, job, 1)
 
 
 OLD_PERMISSIONS = (
@@ -692,7 +664,10 @@ def configure_ci(
         )
         migrated = migrate_affected_tools(root, source, config, migrated)
         migrated = migrate_docs_token(migrate_impact_token(migrated))
-        migrated = migrate_swift_runner(config, migrate_launcher(source, migrated))
+        migrated = migrate_swift_runner(
+            config, migrate_runner_variable(migrate_launcher(source, migrated))
+        )
+        migrated = migrate_tool_environment(migrated)
         if "\n  pull-requests:" not in migrated:
             migrated = migrated.replace(
                 OLD_PERMISSIONS, OLD_PERMISSIONS + PERMISSIONS, 1
