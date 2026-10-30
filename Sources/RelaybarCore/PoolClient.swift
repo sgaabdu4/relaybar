@@ -351,7 +351,7 @@ extension PoolJoin {
             if replace {
                 report(.logins, .working)
                 progress("Switching Claude Code and Codex on \(host) to your accounts")
-                try replaceLogins(remote, home: home, lines: lines, client: &client, checkpoint: checkpoint)
+                try replaceLogins(remote, home: home, lines: lines, client: &client, progress: progress, checkpoint: checkpoint)
                 result.replaced = true
                 report(.logins, .done)
             }

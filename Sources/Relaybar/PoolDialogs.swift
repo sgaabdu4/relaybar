@@ -188,7 +188,7 @@ enum PoolDialogs {
         case leave
     }
 
-    static func unreachable(host: String, reason: String? = nil) -> Unreachable {
+    static func unreachable(host: String, reason: String? = nil, replaced: Bool = false) -> Unreachable {
         let computer = reason != nil
         while true {
             let alert = NSAlert()
@@ -205,6 +205,9 @@ enum PoolDialogs {
                     "Forget \(host)?",
                     computer
                         ? "Relaybar leaves the setup on \(host) and stops tracking it. It also removes the key of \(host) from the home computer when it can. You can remove the rest there by hand later."
+                            + (replaced
+                                ? "\n\nClaude Code and Codex on \(host) will stop working until you sign in again there or put the old files back. Relaybar kept the old logins and settings in ~/.config/relaybar/kept on \(host)."
+                                : "")
                         : "Relaybar leaves the helper running on \(host) and stops tracking it. You can remove it there by hand later.",
                     go: "Forget It", destructive: true)
                 {
