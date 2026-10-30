@@ -139,6 +139,17 @@ final class PoolController: NSObject {
         statuses[account.id]
     }
 
+    func fetchAfterChange() async {
+        while fetching { try? await Task.sleep(nanoseconds: 100_000_000) }
+        await fetch()
+    }
+
+    func inUseName(_ kind: PoolKind) -> String? {
+        PoolAccounts.rows(accounts: inputs(), members: members).first {
+            $0.account.kind == kind && statuses[$0.account.id] == .inUse
+        }?.account.name
+    }
+
     private func rebuildStatuses() {
         statuses = [:]
         guard loaded else { return }
