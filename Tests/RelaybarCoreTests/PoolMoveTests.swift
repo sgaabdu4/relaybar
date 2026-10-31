@@ -295,6 +295,72 @@ struct PoolMoveTests {
         #expect(tunnelText(harness).contains("<string>homebox</string>"))
     }
 
+    private func interrupted(
+        _ harness: Harness, _ backend: Backend, phase: PoolMovePhase, claimed: Bool = true, newKeepOn: PoolKeepOn = PoolKeepOn(linger: true)
+    ) async throws {
+        try await combined(harness, backend, host: "homebox")
+        var state = try #require(PoolState.load(harness.paths))
+        let old = PoolMoveOld(ssh: "homebox", tailscale: nil, keepOn: state.keepOn)
+        state.move = PoolMove(target: "mediabox", phase: phase, old: old, claimed: claimed, newKeepOn: newKeepOn)
+        if phase == .switched {
+            state.ssh = "mediabox"
+            state.keepOn = newKeepOn
+        }
+        try state.save(harness.paths)
+        if phase == .switched {
+            try PoolFile.write(
+                Data(PoolTunnel.plist(paths: harness.paths, destination: "mediabox").utf8), to: harness.paths.agent(Pool.tunnelLabel),
+                backup: false)
+        }
+        harness.recorder.removeCommands()
+    }
+
+    @Test func resumesOrUndoesAnInterruptedMove() async throws {
+        var state = PoolState(ssh: "homebox")
+        #expect(PoolMove.action(for: state) == .none)
+        state.move = PoolMove(target: "mediabox", phase: .preparing, old: nil)
+        #expect(PoolMove.action(for: state) == .undo)
+        state.move?.phase = .switched
+        #expect(PoolMove.action(for: state) == .finish)
+
+        let before = try Harness()
+        let backend = Backend()
+        try await interrupted(before, backend, phase: .preparing)
+        let original = try #require(PoolState.load(before.paths))
+        try PoolFile.write(
+            Data(PoolTunnel.plist(paths: before.paths, destination: "mediabox").utf8), to: before.paths.agent(Pool.tunnelLabel),
+            backup: false)
+        let undone = await PoolSetup(env: before.env()).settleMove()
+        #expect(undone == PoolMoveReport())
+        var expected = original
+        expected.move = nil
+        #expect(PoolState.load(before.paths) == expected)
+        #expect(tunnelText(before).contains("<string>homebox</string>") && backend.served == "homebox")
+        let removals = before.recorder.commands.filter { remoteScript($0).contains("rm -rf") }
+        #expect(removals.count == 1 && removals[0].arguments.contains("mediabox"))
+        #expect(
+            before.recorder.commands.contains { remoteScript($0).contains("loginctl disable-linger") && $0.arguments.contains("mediabox") })
+
+        let after = try Harness()
+        let second = Backend()
+        try await interrupted(after, second, phase: .switched, newKeepOn: PoolKeepOn(linger: true))
+        let finished = await PoolSetup(env: after.env()).settleMove()
+        #expect(finished == PoolMoveReport())
+        let saved = try #require(PoolState.load(after.paths))
+        #expect(saved.move == nil && saved.ssh == "mediabox")
+        let old = after.recorder.commands.filter { $0.arguments.contains("homebox") }.map(remoteScript)
+        #expect(old.contains { $0.contains("rm -rf \"$HOME/.local/share/relaybar-helper\"") })
+        #expect(!after.recorder.commands.contains { $0.arguments.contains("mediabox") && remoteScript($0).contains("rm -rf") })
+        let again = await PoolSetup(env: after.env()).settleMove()
+        #expect(again == PoolMoveReport())
+
+        let foreign = try Harness()
+        try await interrupted(foreign, Backend(), phase: .preparing, claimed: false, newKeepOn: PoolKeepOn())
+        _ = await PoolSetup(env: foreign.env()).settleMove()
+        #expect(!foreign.recorder.commands.contains { $0.arguments.contains("mediabox") })
+        #expect(PoolState.load(foreign.paths)?.move == nil)
+    }
+
     private func harnessRespondsFree(_ harness: Harness) {
         harness.recorder.respond = { _ in CommandResult(output: "000") }
     }
