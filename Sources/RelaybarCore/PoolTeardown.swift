@@ -44,7 +44,9 @@ public enum PoolTeardown {
         var report = PoolTeardownReport()
         guard var state = PoolState.load(env.paths) else { return report }
         if state.move != nil {
-            switch PoolMove.settleForStop(state, env, sudoPassword: sudoPassword) {
+            let settled = PoolMove.settleForStop(state, env, sudoPassword: sudoPassword)
+            state.move = PoolState.load(env.paths)?.move
+            switch settled {
             case .done:
                 state.move = nil
                 try? state.save(env.paths)

@@ -950,6 +950,21 @@ struct PoolMoveTests {
         #expect(harness.recorder.commands.contains { remoteScript($0).contains("systemctl unmask") && $0.stdin == Data("pw\n".utf8) })
     }
 
+    @Test func stopKeepsTheRemovalItDidWhenSleepNeedsAPassword() async throws {
+        let harness = try Harness()
+        try afterSwitch(harness)
+        harness.recorder.respond = { command in
+            remoteScript(command).contains("systemctl unmask") && command.stdin == nil
+                ? CommandResult(status: PoolRemote.needsPasswordStatus) : CommandResult()
+        }
+        let stop = PoolSetup(env: harness.env()).stop()
+        #expect(stop.needsPassword == "homebox")
+        #expect(PoolState.load(harness.paths)?.move?.old?.helperRemoved == true)
+        harness.recorder.removeCommands()
+        _ = await PoolSetup(env: harness.env()).settleMove()
+        #expect(!harness.recorder.commands.contains { plainScript($0) == PoolTeardown.remoteRemoval && $0.arguments.contains("homebox") })
+    }
+
     @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {
         let script = PoolTeardown.remoteRemoval
         #expect(script.contains("[ ! -e \"$HOME/.local/share/relaybar-helper\" ]"))
