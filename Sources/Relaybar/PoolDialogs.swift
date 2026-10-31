@@ -122,6 +122,62 @@ enum PoolDialogs {
         return t3 && response == .alertFirstButtonReturn ? .openT3 : .close
     }
 
+    enum MoveReach {
+        case cancel
+        case again
+        case anyway
+    }
+
+    static func moveOldUnreachable(host: String) -> MoveReach {
+        let alert = NSAlert()
+        alert.icon = NSApp.applicationIconImage
+        alert.messageText = "Relaybar cannot reach \(host)"
+        alert.informativeText =
+            "You can still move. When \(host) is back, Relaybar removes the old helper and its logins from it. If \(host) is lost, sign out of all sessions on claude.ai and chatgpt.com."
+        let anyway = alert.addButton(withTitle: "Move Anyway")
+        alert.addButton(withTitle: "Try Again")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        anyway.keyEquivalent = ""
+        cancel.keyEquivalent = "\r"
+        switch run(alert) {
+        case .alertFirstButtonReturn: return .anyway
+        case .alertSecondButtonReturn: return .again
+        default: return .cancel
+        }
+    }
+
+    static func moveToThisMac(hosts: [String]) -> Bool {
+        let list = hosts.joined(separator: ", ")
+        return stopAlert(
+            "Move the helper to this Mac?",
+            "A helper on this Mac cannot be reached from other computers, so \(list) would stop working. Relaybar removes \(hosts.count == 1 ? "it" : "them") from Computers first, then moves the helper. You can add \(hosts.count == 1 ? "it" : "them") again after you move the helper to a home computer.",
+            go: "Remove and Move", destructive: true)
+    }
+
+    static func moved(host: String, computers: [String], old: String?, pending: Bool, note: String?, tailscale: Bool) -> Bool {
+        let alert = NSAlert()
+        alert.icon = badged(NSApp.applicationIconImage, symbol: "checkmark.circle.fill", color: .systemGreen)
+        alert.messageText = "Your accounts now run on \(host)"
+        let names = ["This Mac"] + computers
+        let users = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        var text = "\(users) \(computers.isEmpty ? "uses" : "use") \(host) now."
+        if let old {
+            text +=
+                pending
+                ? " Relaybar could not reach \(old). It removes the helper and its logins from \(old) when it is back."
+                : " Relaybar removed the helper and its logins from \(old)."
+        }
+        text += " Other Macs that use your accounts reconnect in one click."
+        if let note { text += "\n\n" + note }
+        alert.informativeText = text
+        if tailscale {
+            let box = TailscaleBox(host: host) { NSApp.stopModal(withCode: tailscaleCode) }
+            alert.accessoryView = box.view
+        }
+        alert.addButton(withTitle: "OK")
+        return run(alert) == tailscaleCode
+    }
+
     static func offer(_ offer: PoolAccountOffer) -> Bool {
         let name = offer.account.name
         let alert = NSAlert()
@@ -405,7 +461,15 @@ final class CombineDialog: NSObject {
         let setUp: (String) -> Void
     }
 
+    struct Move {
+        let here: String?
+        let skip: [String]
+        let text: String
+    }
+
     private let services: Services
+    private let move: Move?
+    private var placeholder: NSMenuItem?
     private let alert = NSAlert()
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let accept = NSButton(checkboxWithTitle: "I accept the risk and these rules.", target: nil, action: nil)
@@ -416,31 +480,45 @@ final class CombineDialog: NSObject {
     private var finished = false
     private var checking = false
 
-    init(services: Services) {
+    init(services: Services, move: Move? = nil) {
         self.services = services
+        self.move = move
     }
 
     func run() -> Choice? {
-        alert.messageText = "Combine your accounts?"
-        alert.informativeText = "T3 Code will use whichever account has room. When one runs out, the next one takes over."
-        combine = alert.addButton(withTitle: "Combine")
-        alert.addButton(withTitle: "Cancel")
+        if let move {
+            alert.icon = NSApp.applicationIconImage
+            alert.messageText = "Move the helper to another computer?"
+            alert.informativeText = move.text
+            combine = alert.addButton(withTitle: "Move")
+            alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
+            combine?.keyEquivalent = ""
+            let item = NSMenuItem(title: "Choose a computer", action: nil, keyEquivalent: "")
+            popup.menu?.addItem(item)
+            placeholder = item
+            if move.here != nil { add("This Mac", .thisMac) }
+        } else {
+            alert.messageText = "Combine your accounts?"
+            alert.informativeText = "T3 Code will use whichever account has room. When one runs out, the next one takes over."
+            combine = alert.addButton(withTitle: "Combine")
+            alert.addButton(withTitle: "Cancel")
+            add("This Mac", .thisMac)
+        }
         combine?.isEnabled = false
-        add("This Mac", .thisMac)
         popup.menu?.addItem(.separator())
         add("Another computer…", .another)
         popup.target = self
         popup.action = #selector(picked)
         accept.target = self
         accept.action = #selector(toggled)
-        let runs = NSTextField(labelWithString: "Runs on")
+        let runs = NSTextField(labelWithString: move == nil ? "Runs on" : "Move to")
         runs.textColor = .secondaryLabelColor
         let row = NSStackView(views: [runs, popup])
         row.spacing = 8
         row.distribution = .fill
         runs.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         popup.setContentHuggingPriority(.init(1), for: .horizontal)
-        let stack = PoolDialogs.column([row, riskBox(), accept, note])
+        let stack = PoolDialogs.column(move == nil ? [row, riskBox(), accept, note] : [row, note])
         note.isHidden = true
         PoolDialogs.fit(stack)
         alert.accessoryView = stack
@@ -504,7 +582,10 @@ final class CombineDialog: NSObject {
     }
 
     private func refreshButton() {
-        combine?.isEnabled = accept.state == .on && !checking
+        let chosen = choice(at: popup.indexOfSelectedItem)
+        placeholder?.isHidden = chosen != nil
+        let ready = move == nil ? accept.state == .on : chosen != nil && chosen != .another
+        combine?.isEnabled = ready && !checking
         popup.isEnabled = !checking
     }
 
@@ -530,6 +611,7 @@ final class CombineDialog: NSObject {
         } else {
             previous = popup.indexOfSelectedItem
             userChose = true
+            refreshButton()
         }
     }
 
@@ -581,6 +663,7 @@ final class CombineDialog: NSObject {
     private func choose(_ index: Int) {
         popup.selectItem(at: index)
         previous = index
+        refreshButton()
     }
 
     private func discover() async {
@@ -593,7 +676,7 @@ final class CombineDialog: NSObject {
             say("This Mac looks like a cloud server or a VPN, so only This Mac is offered.")
             return
         }
-        for computer in found.offered.reversed() {
+        for computer in found.offered.reversed() where move?.skip.contains(computer.name) != true {
             insert(computer.name, select: !userChose)
         }
     }

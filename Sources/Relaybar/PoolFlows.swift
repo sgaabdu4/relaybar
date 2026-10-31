@@ -4,11 +4,11 @@ import RelaybarCore
 extension PoolController {
     private var knownKey: String { "poolKnown" }
 
-    private func markKnown() {
+    func markKnown() {
         UserDefaults.standard.set(app.accounts.map(\.id), forKey: knownKey)
     }
 
-    private func progress(_ panel: PoolProgressPanel) -> @Sendable (String) -> Void {
+    func progress(_ panel: PoolProgressPanel) -> @Sendable (String) -> Void {
         { text in Task { @MainActor in panel.update(message: text) } }
     }
 
@@ -59,7 +59,7 @@ extension PoolController {
             command + "\necho\necho 'Done. Go back to Relaybar and click Try Again.'\nprintf 'Press Return to close this window. '\nread _")
     }
 
-    private func attempt(host: String?, title: String, panel: some PoolWorkPanel, _ work: () async throws -> Void) async -> Bool {
+    func attempt(host: String?, title: String, panel: some PoolWorkPanel, _ work: () async throws -> Void) async -> Bool {
         while true {
             do {
                 try await work()
@@ -120,7 +120,7 @@ extension PoolController {
         return finish(host: host, note: note)
     }
 
-    private func keepOn(host: String, setup: PoolSetup) async -> String? {
+    func keepOn(host: String, setup: PoolSetup) async -> String? {
         var wrong = false
         while let password = PoolDialogs.sudoPassword(host: host, wrong: wrong) {
             let result = await Task.detached { setup.keepOn(password: password) }.value
@@ -152,11 +152,11 @@ extension PoolController {
         panel.close()
     }
 
-    private func signInAll(panel: PoolProgressPanel, setup: PoolSetup) async -> SignInEnd {
+    func signInAll(panel: PoolProgressPanel, setup: PoolSetup, canStop: Bool = true) async -> SignInEnd {
         guard let management = await Task.detached(operation: { setup.management }).value else {
             return SignInEnd(stopped: false, unsigned: app.accounts.map(\.menuName))
         }
-        let current = SignInSession(pool: self, panel: panel, management: management)
+        let current = SignInSession(pool: self, panel: panel, management: management, canStop: canStop)
         session = current
         defer { session = nil }
         return await current.run()
@@ -429,7 +429,7 @@ extension PoolController {
         Task { await performRemoveComputer(host) }
     }
 
-    private func performRemoveComputer(_ host: String) async {
+    func performRemoveComputer(_ host: String) async {
         busy = true
         defer { busy = false }
         let title = "Removing \(host)"
@@ -493,7 +493,7 @@ extension PoolController {
         )
     }
 
-    private func showKeysLeft(hub: String, names: [String]) {
+    func showKeysLeft(hub: String, names: [String]) {
         app.show(
             "Some keys are still on \(hub)",
             "Relaybar could not reach \(hub) to remove the keys of \(names.joined(separator: ", ")). They can only open the helper port. Remove the lines that end in relaybar-client:<name> from ~/.ssh/authorized_keys on \(hub), or stop combining on the Mac that set it up."

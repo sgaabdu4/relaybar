@@ -14,6 +14,12 @@ final class PoolController: NSObject {
     private(set) var fetching = false
     private var lastScan = Date.distantPast
     private var offers: [PoolJoinOffer] = []
+    private(set) var movedOffer: PoolJoinOffer?
+    private let movedGap: TimeInterval = 300
+    private var lastMovedScan = Date.distantPast
+    private var lastSettle = Date.distantPast
+    private var settling = false
+    private var passwordSkipped = false
     private var statuses: [String: PoolStatus] = [:]
     var busy = false
     var generation = 0
@@ -46,6 +52,7 @@ final class PoolController: NSObject {
         let setup = PoolSetup(env: environment())
         Task.detached { _ = try? setup.refreshUpdateScript() }
         Task {
+            await settlePending(force: true)
             if !busy, state?.needsTailscale == true, tailscaleOnThisMac {
                 busy = true
                 defer { busy = false }
@@ -83,7 +90,10 @@ final class PoolController: NSObject {
     func refresh(force: Bool = false) {
         guard state != nil, !busy, !fetching else { return }
         if !force, Date().timeIntervalSince(lastFetch) < gap { return }
-        Task { await fetch() }
+        Task {
+            await settlePending()
+            await fetch()
+        }
     }
 
     func fetch() async {
@@ -107,12 +117,14 @@ final class PoolController: NSObject {
             loaded = true
             reachable = true
             reachReason = nil
+            movedOffer = nil
             _ = try? await setup.updateOrder(members: members)
         } catch {
             let reason = await reachProblem(error)
             guard started == generation else { return }
             reachable = false
             reachReason = reason
+            await lookForMovedHelper()
         }
         guard started == generation else { return }
         rebuildStatuses()
@@ -213,7 +225,44 @@ final class PoolController: NSObject {
             textColor: plain ? .windowBackgroundColor : .black, paused: paused)
     }
 
+    private func lookForMovedHelper() async {
+        guard state?.joined == true, movedOffer == nil, Date().timeIntervalSince(lastMovedScan) >= movedGap else { return }
+        lastMovedScan = Date()
+        let config = paths.home.appendingPathComponent(".ssh/config")
+        let hosts = PoolHubPicker.parseSSHConfig((try? String(contentsOf: config, encoding: .utf8)) ?? "")
+        let setup = PoolSetup(env: environment())
+        movedOffer = await setup.findMovedHelper(hosts: hosts)
+        app.redraw()
+    }
+
+    func settlePending(force: Bool = false) async {
+        guard !busy, !settling, let state, state.move != nil || state.linuxClients.contains(where: \.needsRepoint) else { return }
+        guard force || Date().timeIntervalSince(lastSettle) >= gap else { return }
+        lastSettle = Date()
+        settling = true
+        defer { settling = false }
+        let setup = PoolSetup(env: environment())
+        var report = await setup.settleMove()
+        var wrong = false
+        while let host = report.needsPassword, !passwordSkipped {
+            guard let password = PoolDialogs.restoreSleepPassword(host: host, wrong: wrong) else {
+                passwordSkipped = true
+                break
+            }
+            wrong = true
+            report = await setup.settleMove(sudoPassword: password)
+        }
+    }
+
     func topItems() -> [NSMenuItem] {
+        if !busy, state?.joined == true, !reachable, let moved = movedOffer {
+            let item = NSMenuItem(title: "Your accounts moved to \(moved.host)", action: #selector(followMoved(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = moved.host
+            item.image = swatch(Render.tint(app.claudeLogo, PoolStatus.color))
+            subtitle(item, "Click to connect this Mac")
+            return [item, .separator()]
+        }
         guard !busy, state == nil, let offer = offers.first else { return [] }
         let item = NSMenuItem(title: "Use combined accounts", action: #selector(useOffer(_:)), keyEquivalent: "")
         item.target = self
@@ -282,6 +331,14 @@ final class PoolController: NSObject {
         menu.addItem(.separator())
         if state?.ssh != nil { menu.addItem(action("Add a computer…", #selector(addComputer))) }
         if state?.needsTailscale == true { menu.addItem(action("Use it away from home…", #selector(setUpTailscale))) }
+        if state?.joined == true, !reachable, movedOffer == nil {
+            menu.addItem(action("Connect to the new computer…", #selector(connectToNewComputer)))
+        }
+        if state?.canMoveHelper == true {
+            let move = action("Move the helper…", #selector(moveHelper))
+            subtitle(move, "Now on \(hostName)")
+            menu.addItem(move)
+        }
         menu.addItem(action("Stop combining…", #selector(stopCombining)))
         let item = NSMenuItem(title: "All accounts", action: nil, keyEquivalent: "")
         item.submenu = menu

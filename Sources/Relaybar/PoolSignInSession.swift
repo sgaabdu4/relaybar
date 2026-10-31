@@ -13,6 +13,7 @@ final class SignInSession {
     private let management: PoolManagement
     private var ids: [String]
     private let single: Bool
+    private let stoppable: Bool
     private var done: Set<String> = []
     private var waiting: Int?
     private var link: URL?
@@ -21,16 +22,17 @@ final class SignInSession {
     private var ended: CheckedContinuation<SignInEnd, Never>?
     private(set) var active = true
 
-    init(pool: PoolController, panel: PoolProgressPanel, management: PoolManagement, only: String? = nil) {
+    init(pool: PoolController, panel: PoolProgressPanel, management: PoolManagement, only: String? = nil, canStop: Bool = true) {
         self.pool = pool
         self.panel = panel
         self.management = management
         single = only != nil
+        stoppable = canStop
         ids = only.map { [$0] } ?? pool.app.accounts.map(\.id)
     }
 
     func run() async -> SignInEnd {
-        panel.showSignIn(ids.compactMap(entry), canStop: !single)
+        panel.showSignIn(ids.compactMap(entry), canStop: !single && stoppable)
         panel.onAction = { [weak self] index, action in self?.handle(index, action) }
         panel.onAdd = { [weak self] in self?.pool.app.chooseAndAddAccount() }
         return await withCheckedContinuation { continuation in

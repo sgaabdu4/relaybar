@@ -141,6 +141,44 @@ final class SignInRow: NSStackView {
 }
 
 @MainActor
+final class MoveStepRow: NSStackView {
+    private let mark = NSImageView()
+    private let spinner = NSProgressIndicator()
+    private let text: NSTextField
+
+    init(_ title: String) {
+        text = NSTextField(labelWithString: title)
+        super.init(frame: .zero)
+        orientation = .horizontal
+        alignment = .centerY
+        spacing = 8
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isHidden = true
+        mark.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        spinner.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        for view in [mark, spinner, text] { addArrangedSubview(view) }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func apply(done: Bool, working: Bool) {
+        spinner.isHidden = !working
+        mark.isHidden = working
+        if working {
+            spinner.startAnimation(nil)
+        } else {
+            spinner.stopAnimation(nil)
+        }
+        let symbol = done ? "checkmark" : "circle"
+        mark.image = NSImage(systemSymbolName: symbol, accessibilityDescription: done ? "Done" : "Waiting")
+        mark.contentTintColor = done ? .systemGreen : .tertiaryLabelColor
+        text.textColor = done || working ? .labelColor : .secondaryLabelColor
+        text.font = .systemFont(ofSize: 13, weight: working ? .semibold : .regular)
+    }
+}
+
+@MainActor
 final class PoolProgressPanel: NSObject {
     private let panel = NSPanel(
         contentRect: NSRect(x: 0, y: 0, width: 440, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
@@ -153,6 +191,8 @@ final class PoolProgressPanel: NSObject {
     private let add = NSButton(title: "Add an account…", target: nil, action: nil)
     private let done = NSButton(title: "Done", target: nil, action: nil)
     private let content = NSStackView()
+    private let stepList = NSStackView()
+    private var stepRows: [MoveStepRow] = []
     private var rows: [SignInRow] = []
     private var states: [SignInState] = []
     private static let wide: CGFloat = 560
@@ -203,7 +243,11 @@ final class PoolProgressPanel: NSObject {
         content.alignment = .leading
         content.spacing = 12
         content.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        for view in [heading, line, box, footer] { content.addArrangedSubview(view) }
+        stepList.orientation = .vertical
+        stepList.alignment = .leading
+        stepList.spacing = 10
+        stepList.isHidden = true
+        for view in [heading, stepList, line, box, footer] { content.addArrangedSubview(view) }
         box.widthAnchor.constraint(equalToConstant: Self.inner).isActive = true
         footer.widthAnchor.constraint(equalToConstant: Self.inner).isActive = true
         panel.contentView = content
@@ -221,6 +265,7 @@ final class PoolProgressPanel: NSObject {
         note.stringValue = message
         note.preferredMaxLayoutWidth = 400
         width = 440
+        stepList.isHidden = true
         spinner.isHidden = false
         spinner.startAnimation(nil)
         line?.isHidden = false
@@ -233,8 +278,30 @@ final class PoolProgressPanel: NSObject {
         note.stringValue = message
     }
 
+    func showSteps(title: String, steps: [String], current: Int) {
+        if stepRows.count != steps.count {
+            for view in stepList.arrangedSubviews { view.removeFromSuperview() }
+            stepRows = steps.map { MoveStepRow($0) }
+            for row in stepRows { stepList.addArrangedSubview(row) }
+        }
+        heading.stringValue = title
+        width = 440
+        line?.isHidden = true
+        box.isHidden = true
+        footer?.isHidden = true
+        stepList.isHidden = false
+        advance(to: current)
+        present()
+    }
+
+    func advance(to current: Int) {
+        for (index, row) in stepRows.enumerated() { row.apply(done: index < current, working: index == current) }
+    }
+
     func showSignIn(_ entries: [SignInEntry], canStop: Bool = true) {
         heading.stringValue = "Sign in to each account"
+        stepList.isHidden = true
+        line?.isHidden = false
         note.preferredMaxLayoutWidth = Self.inner
         width = Self.wide
         note.stringValue = "Click Sign In, then sign in to that account in the browser. Your normal logins stay as they are."
