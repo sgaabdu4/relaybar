@@ -161,9 +161,7 @@ extension PoolSetup {
         guard let state = PoolState.load(env.paths), let move = state.move else { return report }
         PoolMove.removeLocalNew(move, state: state, env)
         if let old = move.old { await putBack(old, state: state) }
-        let removal = PoolMove.removeRemoteNew(move, env, sudoPassword: sudoPassword)
-        if removal.gone { try? updateState { $0.move?.claimed = false } }
-        switch removal.result {
+        switch PoolMove.removeRemoteNew(move, env, sudoPassword: sudoPassword) {
         case .done: try? updateState { $0.move = nil }
         case .needsPassword(let host): report.needsPassword = host
         case .unreachable(let host): report.left = host
@@ -285,21 +283,23 @@ extension PoolMove {
         for step in localSteps.reversed() { try? PoolTeardown.undo(step, state: state, env) }
     }
 
-    static func removeRemoteNew(_ move: PoolMove, _ env: PoolEnvironment, sudoPassword: String?) -> (gone: Bool, result: PoolMoveClean) {
-        guard let target = move.target else { return (false, .done) }
-        var gone = false
+    static func removeRemoteNew(_ move: PoolMove, _ env: PoolEnvironment, sudoPassword: String?) -> PoolMoveClean {
+        guard let target = move.target else { return .done }
         if move.claimed {
             guard env.run(PoolSSH.command(host: target, script: PoolTeardown.remoteRemoval)).succeeded else {
-                return (false, .unreachable(target))
+                return .unreachable(target)
             }
-            gone = true
+            if var state = PoolState.load(env.paths) {
+                state.move?.claimed = false
+                try? state.save(env.paths)
+            }
         }
-        guard !move.newKeepOn.isEmpty else { return (gone, .done) }
+        guard !move.newKeepOn.isEmpty else { return .done }
         let restore = env.run(PoolRemote.restoreSleepCommand(host: target, keep: move.newKeepOn, password: sudoPassword))
         guard restore.succeeded else {
-            return (gone, restore.status == PoolRemote.needsPasswordStatus ? .needsPassword(target) : .unreachable(target))
+            return restore.status == PoolRemote.needsPasswordStatus ? .needsPassword(target) : .unreachable(target)
         }
-        return (gone, .done)
+        return .done
     }
 
     static func settleForStop(_ state: PoolState, _ env: PoolEnvironment, sudoPassword: String?) -> PoolMoveClean {
@@ -309,7 +309,7 @@ extension PoolMove {
         if move.old?.runsOnThisMac == true, FileManager.default.fileExists(atPath: env.paths.agent(Pool.tunnelLabel).path) {
             try? PoolTeardown.undo(.tunnelAgent, state: state, env)
         }
-        return removeRemoteNew(move, env, sudoPassword: sudoPassword).result
+        return removeRemoteNew(move, env, sudoPassword: sudoPassword)
     }
 
     public static func pausedEmails(in members: [PoolMember]) -> [String] {

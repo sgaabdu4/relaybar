@@ -965,6 +965,27 @@ struct PoolMoveTests {
         #expect(!harness.recorder.commands.contains { plainScript($0) == PoolTeardown.remoteRemoval && $0.arguments.contains("homebox") })
     }
 
+    @Test func stopKeepsTheRemovalOfAnUnfinishedTarget() async throws {
+        let harness = try Harness()
+        var state = PoolState(ssh: "homebox")
+        state.steps = [.keychainAccessKey, .keychainManagementSecret, .remoteHelper, .tunnelAgent]
+        state.move = PoolMove(
+            target: "mediabox", phase: .preparing, old: PoolMoveOld(ssh: "homebox", tailscale: nil, keepOn: PoolKeepOn()), claimed: true)
+        state.move?.newKeepOn = PoolKeepOn(masked: ["sleep.target"])
+        try state.save(harness.paths)
+        harness.recorder.respond = { command in
+            remoteScript(command).contains("systemctl unmask") && command.stdin == nil
+                ? CommandResult(status: PoolRemote.needsPasswordStatus) : CommandResult()
+        }
+        let stop = PoolSetup(env: harness.env()).stop()
+        #expect(stop.needsPassword == "mediabox")
+        #expect(PoolState.load(harness.paths)?.move?.claimed == false)
+        harness.recorder.removeCommands()
+        _ = PoolSetup(env: harness.env()).stop()
+        _ = await PoolSetup(env: harness.env()).settleMove()
+        #expect(!harness.recorder.commands.contains { plainScript($0) == PoolTeardown.remoteRemoval && $0.arguments.contains("mediabox") })
+    }
+
     @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {
         let script = PoolTeardown.remoteRemoval
         #expect(script.contains("[ ! -e \"$HOME/.local/share/relaybar-helper\" ]"))
