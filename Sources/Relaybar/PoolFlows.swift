@@ -274,7 +274,7 @@ extension PoolController {
     }
 
     @objc func stopCombining() {
-        guard !busy, PoolDialogs.stopFirst(joined: state?.joined ?? false, host: state?.ssh), PoolDialogs.stopSecond() else { return }
+        guard isFree, PoolDialogs.stopFirst(joined: state?.joined ?? false, host: state?.ssh), PoolDialogs.stopSecond() else { return }
         Task { await performStop(joined: state?.joined ?? false) }
     }
 
@@ -422,7 +422,7 @@ extension PoolController {
     }
 
     @objc func removeComputer(_ sender: NSMenuItem) {
-        guard !busy, let host = sender.representedObject as? String,
+        guard isFree, let host = sender.representedObject as? String,
             PoolDialogs.removeComputerFirst(host: host, client: state?.linuxClients.first { $0.host == host }),
             PoolDialogs.removeComputerSecond(host: host)
         else { return }

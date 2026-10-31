@@ -235,6 +235,12 @@ final class PoolController: NSObject {
         app.redraw()
     }
 
+    var isFree: Bool {
+        guard busy else { return true }
+        if settling { app.show("Relaybar is finishing an earlier move", "Try again in a few seconds.") }
+        return false
+    }
+
     func settlePending(force: Bool = false) async {
         guard !busy, !settling, let state, state.move != nil || state.linuxClients.contains(where: \.needsRepoint) else { return }
         guard force || Date().timeIntervalSince(lastSettle) >= gap else { return }

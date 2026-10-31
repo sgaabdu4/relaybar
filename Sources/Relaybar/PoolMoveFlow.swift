@@ -7,7 +7,7 @@ private final class MoveNotes: @unchecked Sendable {
 
 extension PoolController {
     @objc func moveHelper() {
-        guard !busy, let state, state.canMoveHelper else { return }
+        guard isFree, let state, state.canMoveHelper else { return }
         let env = environment()
         let config = paths.home.appendingPathComponent(".ssh/config")
         let hosts = PoolHubPicker.parseSSHConfig((try? String(contentsOf: config, encoding: .utf8)) ?? "")
