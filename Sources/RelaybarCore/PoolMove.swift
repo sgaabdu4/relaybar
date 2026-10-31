@@ -361,7 +361,7 @@ extension PoolJoin {
 
 extension PoolSetup {
     func repointComputers(progress: @Sendable (String) -> Void) -> [String] {
-        guard let state = PoolState.load(env.paths), !state.joined, let route = state.tunnelRoute else { return [] }
+        guard let state = PoolState.load(env.paths), let route = state.tunnelRoute else { return [] }
         let pending = state.linuxClients.filter(\.needsRepoint)
         guard !pending.isEmpty else { return [] }
         let hub = PoolRemote(host: route.host, hostName: route.hostName, run: env.run)
@@ -450,7 +450,8 @@ extension PoolSetup {
         return nil
     }
 
-    public func follow(host typed: String) async throws {
+    @discardableResult
+    public func follow(host typed: String) async throws -> [String] {
         guard let previous = PoolState.load(env.paths), previous.joined else { throw PoolSetupError.notCombining }
         guard let access = accessKey(), let management = env.keychain.read(service: Pool.managementService) else {
             throw PoolSetupError.accessKeyMissing
@@ -461,6 +462,7 @@ extension PoolSetup {
         var state = previous
         state.ssh = host
         state.tailscale = nil
+        for index in state.linuxClients.indices { state.linuxClients[index].needsRepoint = true }
         let plist = env.paths.agent(Pool.tunnelLabel)
         let before = PoolFile.contents(plist)
         do {
@@ -475,5 +477,6 @@ extension PoolSetup {
             load(Pool.tunnelLabel)
             throw error
         }
+        return repointComputers(progress: { _ in })
     }
 }

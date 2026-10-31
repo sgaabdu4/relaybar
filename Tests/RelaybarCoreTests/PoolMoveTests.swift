@@ -808,6 +808,39 @@ struct PoolMoveTests {
         }
     }
 
+    @Test func aJoinedMacPointsItsOwnComputersAtTheMovedHelper() async throws {
+        let mine = PoolSecrets(accessKey: String(repeating: "a1", count: 32), managementSecret: String(repeating: "b2", count: 32))
+        let (harness, backend) = try joinedMac(mine)
+        var state = try #require(PoolState.load(harness.paths))
+        var client = PoolLinuxClient(host: "linuxpc", folders: [".config/relaybar"])
+        client.hubKey = true
+        state.linuxClients = [client]
+        state.steps.append(.linuxClient)
+        try state.save(harness.paths)
+        let computers = FakeClientHost()
+        let file = joinFile(mine)
+        harness.recorder.respond = { command in
+            backend.apply(command)
+            guard command.executable == "/usr/bin/ssh" else { return CommandResult() }
+            let text = remoteScript(command)
+            if text.contains("join.json\"") { return CommandResult(output: text.hasPrefix("test -f") ? "pool\n" : file) }
+            if text.contains("hub_key.pub") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
+            if text == "command -v ssh" { return CommandResult(output: "/usr/bin/ssh\n") }
+            return computers.answer(command) ?? CommandResult()
+        }
+        let left = try await PoolSetup(env: harness.env()).follow(host: "mediabox")
+        #expect(left.isEmpty)
+        let saved = try #require(PoolState.load(harness.paths))
+        #expect(saved.ssh == "mediabox" && saved.joined && saved.linuxClients.map(\.needsRepoint) == [false])
+        let toHub = harness.recorder.commands.filter { $0.arguments.contains("mediabox") }
+        let keyAdd = try #require(toHub.first { remoteScript($0).contains("cat >> ") })
+        #expect(String(decoding: keyAdd.stdin ?? Data(), as: UTF8.self).contains("relaybar-client:linuxpc"))
+        #expect(
+            harness.recorder.commands.contains {
+                $0.arguments.contains("linuxpc") && remoteScript($0).contains("restart relaybar-tunnel.service")
+            })
+    }
+
     @Test func aJoinedMacRefusesADifferentHelper() async throws {
         let mine = PoolSecrets(accessKey: String(repeating: "a1", count: 32), managementSecret: String(repeating: "b2", count: 32))
         let other = PoolSecrets(accessKey: String(repeating: "c3", count: 32), managementSecret: String(repeating: "d4", count: 32))
