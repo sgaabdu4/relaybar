@@ -33,8 +33,10 @@ public enum PoolTeardown {
         + "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then umask 077; "
         + "t=$(mktemp \"$d/.relaybar.XXXXXX\") && awk '$NF ~ /^relaybar-client:/ { next } { print }' \"$f\" > \"$t\" "
         + "&& { cmp -s \"$t\" \"$f\" || cat \"$t\" > \"$f\"; }; rm -f \"$t\"; fi; "
-        + "{ [ ! -e \"$HOME/.local/share/relaybar-helper\" ] && ! systemctl --user is-active --quiet relaybar-helper.service; } "
-        + "|| { echo \"failed: the helper is still installed there\" >&2; exit 1; }"
+        + "s=$(systemctl --user is-active relaybar-helper.service 2>/dev/null); case \"$s\" in inactive|failed) k=1;; *) k=0;; esac; "
+        + "if [ ! -e \"$HOME/.local/share/relaybar-helper\" ] && [ $k = 1 ] "
+        + "&& ! { command -v pgrep >/dev/null 2>&1 && pgrep -f \"$HOME/.local/share/relaybar-helper/\" >/dev/null 2>&1; }; then :; "
+        + "else echo \"failed: the helper is still installed there\" >&2; exit 1; fi"
 
     public static func run(
         _ env: PoolEnvironment, sudoPassword: String? = nil, progress: (PoolStep) -> Void = { _ in }

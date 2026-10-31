@@ -331,7 +331,13 @@ extension PoolTeardownTests {
     }
 
     private func runRemoval(home: URL) -> CommandResult {
-        PoolProcess.run(Command("/bin/sh", ["-c", PoolTeardown.remoteRemoval], environment: ["HOME": home.path]))
+        let bin = home.appendingPathComponent("fake-bin")
+        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let file = bin.appendingPathComponent("systemctl")
+        try? Data("#!/bin/sh\necho inactive\nexit 3\n".utf8).write(to: file)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        return PoolProcess.run(
+            Command("/bin/sh", ["-c", PoolTeardown.remoteRemoval], environment: ["HOME": home.path, "PATH": bin.path + ":/usr/bin:/bin"]))
     }
 
     @Test func removalDeletesEveryClientKeyAndKeepsTheOwnersKeys() throws {

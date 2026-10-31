@@ -953,8 +953,9 @@ struct PoolMoveTests {
     @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {
         let script = PoolTeardown.remoteRemoval
         #expect(script.contains("[ ! -e \"$HOME/.local/share/relaybar-helper\" ]"))
-        #expect(script.contains("! systemctl --user is-active --quiet relaybar-helper.service"))
-        #expect(script.hasSuffix("exit 1; }"))
+        #expect(script.contains("systemctl --user is-active relaybar-helper.service"))
+        #expect(script.contains("inactive|failed") && script.contains("pgrep -f"))
+        #expect(script.hasSuffix("exit 1; fi"))
 
         let harness = try Harness()
         try afterSwitch(harness)
@@ -988,23 +989,64 @@ struct PoolMoveTests {
         #expect(PoolState.load(stop.paths)?.steps.contains(.remoteHelper) == true)
     }
 
+    private func fakeSystemctl(_ harness: Harness, prints answer: String, error: String = "", status: Int32) throws -> URL {
+        let bin = harness.home.root.appendingPathComponent("fake-bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let file = bin.appendingPathComponent("systemctl")
+        let text = "#!/bin/sh\n[ -z '\(error)' ] || echo '\(error)' >&2\n[ -z '\(answer)' ] || echo '\(answer)'\nexit \(status)\n"
+        try Data(text.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        return bin
+    }
+
+    private func runRemoval(_ harness: Harness, bin: URL) -> Int32 {
+        let home = harness.home.root.appendingPathComponent("home")
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let path = bin.path + ":/usr/bin:/bin"
+        return PoolProcess.run(Command("/bin/sh", ["-c", PoolTeardown.remoteRemoval], environment: ["HOME": home.path, "PATH": path]))
+            .status
+    }
+
     @Test func theRemovalScriptFailsWhenTheHelperFolderIsStillThere() throws {
-        func run(home: URL) -> Int32 {
-            PoolProcess.run(Command("/bin/sh", ["-c", PoolTeardown.remoteRemoval], environment: ["HOME": home.path])).status
-        }
         let clean = try Harness()
-        try clean.home.write(".local/share/relaybar-helper/config.yaml", "x")
-        try clean.home.write(".local/share/relaybar/relaybar-helper.sh", "x")
-        #expect(run(home: clean.home.root) == 0)
-        #expect(!FileManager.default.fileExists(atPath: clean.home.root.appendingPathComponent(".local/share/relaybar-helper").path))
-        #expect(run(home: clean.home.root) == 0)
+        let bin = try fakeSystemctl(clean, prints: "inactive", status: 3)
+        try clean.home.write("home/.local/share/relaybar-helper/config.yaml", "x")
+        try clean.home.write("home/.local/share/relaybar/relaybar-helper.sh", "x")
+        #expect(runRemoval(clean, bin: bin) == 0)
+        #expect(!FileManager.default.fileExists(atPath: clean.home.root.appendingPathComponent("home/.local/share/relaybar-helper").path))
+        #expect(runRemoval(clean, bin: bin) == 0)
 
         let stuck = try Harness()
-        try stuck.home.write(".local/share/relaybar-helper/config.yaml", "x")
-        let share = stuck.home.root.appendingPathComponent(".local/share")
+        let stuckBin = try fakeSystemctl(stuck, prints: "inactive", status: 3)
+        try stuck.home.write("home/.local/share/relaybar-helper/config.yaml", "x")
+        let share = stuck.home.root.appendingPathComponent("home/.local/share")
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: share.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: share.path) }
-        #expect(run(home: stuck.home.root) != 0)
+        #expect(runRemoval(stuck, bin: stuckBin) != 0)
+    }
+
+    @Test func theRemovalScriptOnlyPassesWhenTheHelperIsConfirmedStopped() throws {
+        for (answer, error, status, passes) in [
+            ("inactive", "", Int32(3), true), ("failed", "", 3, true), ("", "Failed to connect to bus: No medium found", 1, false),
+            ("", "", 0, false), ("active", "", 0, false), ("activating", "", 3, false),
+        ] {
+            let harness = try Harness()
+            let bin = try fakeSystemctl(harness, prints: answer, error: error, status: status)
+            #expect((runRemoval(harness, bin: bin) == 0) == passes, "answer \(answer) error \(error)")
+        }
+        let harness = try Harness()
+        let bin = try fakeSystemctl(harness, prints: "inactive", status: 3)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [
+            "-c", "sleep 30; true", harness.home.root.appendingPathComponent("home/.local/share/relaybar-helper/current").path,
+        ]
+        try process.run()
+        defer { process.terminate() }
+        #expect(runRemoval(harness, bin: bin) != 0)
+        process.terminate()
+        process.waitUntilExit()
+        #expect(runRemoval(harness, bin: bin) == 0)
     }
 
     private func harnessRespondsFree(_ harness: Harness) {
