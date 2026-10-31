@@ -153,6 +153,7 @@
         "scripts/pool-e2e.sh",
         "scripts/pool-e2e-lib.sh",
         "scripts/pool-e2e-installs.sh",
+        "scripts/pool-e2e-moves.sh",
         "Resources/relaybar-helper.sh"
       ]
     },

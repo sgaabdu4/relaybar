@@ -8,6 +8,7 @@ githubDownload=https://github.com/router-for-me/CLIProxyAPI/releases/download
 cache="${RELAYBAR_E2E_CACHE:-${TMPDIR:-/tmp}/relaybar-pool-e2e-cache}"
 containerName=rb-pool-e2e
 clientName=rb-pool-e2e-client
+targetName=rb-pool-e2e-target
 homeDir=/home/homeuser
 imageTag=relaybar-pool-linux
 
@@ -17,8 +18,9 @@ Usage: scripts/pool-e2e.sh [--local] [--update] [--remote]
   no flag   the local real-binary cases: modelsNeedTheKey picksUpANewLogin prioritySticks sandboxBlocksHomeFiles
   --local   the local real-binary cases (when combined with other flags)
   --update  updateRules: the update script against a fixture release server
-  --remote  remoteInstall, tunnelComesBack, clientConnects, clientInstalls and remoteStop against Linux containers in Docker
+  --remote  remoteInstall, tunnelComesBack, clientConnects, clientInstalls, helperMoves and remoteStop against Linux containers in Docker
 Set RELAYBAR_E2E_CACHE to keep the downloaded release between runs.
+Set RELAYBAR_E2E_ONLY to a list of case names to run only those (helperMoves needs remoteInstall before it).
 EOF
 }
 
@@ -40,7 +42,7 @@ if [ $wantUpdate = 0 ] && [ $wantRemote = 0 ]; then
   wantLocal=1
 fi
 
-cd "$repo" && source scripts/pool-e2e-lib.sh && source scripts/pool-e2e-installs.sh || exit 1
+cd "$repo" && source scripts/pool-e2e-lib.sh && source scripts/pool-e2e-installs.sh && source scripts/pool-e2e-moves.sh || exit 1
 
 root="$(mktemp -d "${TMPDIR:-/tmp}/relaybar-pool-e2e.XXXXXX")"
 root="$(cd "$root" && pwd -P)"
@@ -52,7 +54,7 @@ cleanupAll() {
     [ -d "$dir" ] && stopTracked "$dir"
   done
   if [ -f "$root/docker-started" ]; then
-    docker rm -f "$containerName" "$clientName" > /dev/null 2>&1
+    docker rm -f "$containerName" "$clientName" "$targetName" > /dev/null 2>&1
   fi
   rm -rf "$root"
 }
@@ -66,6 +68,9 @@ fail() {
 
 runCase() {
   local name=$1
+  if [ -n "${RELAYBAR_E2E_ONLY:-}" ] && [[ " $RELAYBAR_E2E_ONLY " != *" $name "* ]]; then
+    return 0
+  fi
   rm -f "$root/reason"
   if ("$name"); then
     echo "PASS $name"
@@ -986,6 +991,7 @@ if [ $wantRemote = 1 ]; then
   runCase tunnelComesBack
   runCase clientConnects
   runCase clientInstalls
+  runCase helperMoves
   runCase remoteStop
 fi
 
