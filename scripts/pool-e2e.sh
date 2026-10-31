@@ -20,7 +20,6 @@ Usage: scripts/pool-e2e.sh [--local] [--update] [--remote]
   --update  updateRules: the update script against a fixture release server
   --remote  remoteInstall, tunnelComesBack, clientConnects, clientInstalls, helperMoves and remoteStop against Linux containers in Docker
 Set RELAYBAR_E2E_CACHE to keep the downloaded release between runs.
-Set RELAYBAR_E2E_ONLY to a list of case names to run only those (helperMoves needs remoteInstall before it).
 EOF
 }
 
@@ -68,9 +67,6 @@ fail() {
 
 runCase() {
   local name=$1
-  if [ -n "${RELAYBAR_E2E_ONLY:-}" ] && [[ " $RELAYBAR_E2E_ONLY " != *" $name "* ]]; then
-    return 0
-  fi
   rm -f "$root/reason"
   if ("$name"); then
     echo "PASS $name"
