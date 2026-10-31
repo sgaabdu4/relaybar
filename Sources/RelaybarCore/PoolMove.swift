@@ -66,7 +66,7 @@ public struct PoolMoveReport: Equatable, Sendable {
 }
 
 extension PoolSetup {
-    private func updateState(_ change: (inout PoolState) -> Void) throws {
+    func updateState(_ change: (inout PoolState) -> Void) throws {
         guard var state = PoolState.load(env.paths) else { return }
         change(&state)
         try state.save(env.paths)
@@ -116,9 +116,16 @@ extension PoolSetup {
     public func settleMove(sudoPassword: String? = nil, progress: @Sendable (String) -> Void = { _ in }) async -> PoolMoveReport {
         guard let state = PoolState.load(env.paths) else { return PoolMoveReport() }
         switch PoolMove.action(for: state) {
-        case .none: return PoolMoveReport()
         case .undo: return await undoMove(sudoPassword: sudoPassword)
-        case .finish: return await finishMove(sudoPassword: sudoPassword, progress: progress)
+        case .none:
+            var report = PoolMoveReport()
+            report.computersLeft = repointComputers(progress: progress)
+            return report
+        case .finish:
+            let left = repointComputers(progress: progress)
+            var report = await finishMove(sudoPassword: sudoPassword, progress: progress)
+            report.computersLeft = left
+            return report
         }
     }
 
@@ -277,6 +284,59 @@ extension PoolSetup {
             credentials = try await management.credentials()
         }
         _ = try await updateOrder(members: credentials.map { PoolUsage.member($0, result: nil) })
+    }
+}
+
+extension PoolJoin {
+    static func repointLinuxClient(_ client: PoolLinuxClient, hub: PoolRemote, facts: PoolHubFacts, run: @escaping CommandRunner) throws
+        -> PoolLinuxClient
+    {
+        let remote = PoolRemote(host: client.host, run: run)
+        let home = try remote.remoteHome()
+        let made = try remote.execute("cut -d' ' -f1,2 \"\(clientConfig)/hub_key.pub\"")
+        guard let publicKey = made.split(whereSeparator: \.isNewline).map(String.init).first(where: { $0.hasPrefix("ssh-ed25519 ") }),
+            publicKey.dropFirst(12).allSatisfy({ $0.isLetter || $0.isNumber || "+/=".contains($0) })
+        else { throw PoolClientError.noKeyTool(client.host) }
+        let created = try addHubKey(hub, publicKey: publicKey, host: client.host)
+        let lines = created.split(whereSeparator: \.isNewline).map(String.init)
+        if lines.contains("link") { throw PoolFileError.link("\(hub.host):.ssh/authorized_keys") }
+        let key = home + "/.config/relaybar/hub_key"
+        let knownHosts = home + "/.config/relaybar/known_hosts"
+        try remote.execute("umask 077; cat > \"\(clientConfig)/known_hosts\"", stdin: Data(facts.knownHosts().utf8))
+        let address = try chooseAddress(remote, hub: hub.host, facts: facts, key: key, knownHosts: knownHosts)
+        let found = try remote.execute("command -v ssh").trimmingCharacters(in: .whitespacesAndNewlines)
+        let unit = try PoolTunnel.linuxUnit(
+            user: facts.user, addresses: facts.routes(worked: address), key: key, knownHosts: knownHosts, port: facts.port,
+            ssh: found.hasPrefix("/") ? found : "/usr/bin/ssh")
+        try remote.execute("cat > \"$HOME/.config/systemd/user/relaybar-tunnel.service\"", stdin: Data(unit.utf8))
+        try startTunnel(remote, label: hub.host)
+        var updated = client
+        updated.hubKey = true
+        updated.hubCreated = lines.filter { $0.hasPrefix("created:") }.map { String($0.dropFirst(8)) }
+        updated.needsRepoint = false
+        return updated
+    }
+}
+
+extension PoolSetup {
+    func repointComputers(progress: @Sendable (String) -> Void) -> [String] {
+        guard let state = PoolState.load(env.paths), !state.joined, let route = state.tunnelRoute else { return [] }
+        let pending = state.linuxClients.filter(\.needsRepoint)
+        guard !pending.isEmpty else { return [] }
+        let hub = PoolRemote(host: route.host, hostName: route.hostName, run: env.run)
+        var left: [String] = []
+        let facts = try? PoolJoin.hubFacts(hub)
+        for client in pending {
+            progress("Pointing \(client.host) at \(route.host)")
+            guard let facts, let updated = try? PoolJoin.repointLinuxClient(client, hub: hub, facts: facts, run: env.run) else {
+                left.append(client.host)
+                continue
+            }
+            try? updateState { latest in
+                if let index = latest.linuxClients.firstIndex(where: { $0.host == client.host }) { latest.linuxClients[index] = updated }
+            }
+        }
+        return left
     }
 }
 

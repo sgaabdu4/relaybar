@@ -247,15 +247,7 @@ extension PoolJoin {
             progress("Letting \(host) in on \(label)")
             client.hubKey = true
             checkpoint(client)
-            let created = try hubRemote.execute(
-                "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; umask 077; "
-                    + "if [ -L \"$f\" ]; then echo link; exit 0; fi; "
-                    + "[ -d \"$d\" ] || { mkdir -m 700 \"$d\" || exit 1; echo created:ssh; }; "
-                    + "if [ -e \"$f\" ]; then [ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; "
-                    + "tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; \(dropTagged(host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; "
-                    + "r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
-                    + "else : > \"$f\" && chmod 600 \"$f\" && echo created:keys || exit 1; fi; cat >> \"$f\"",
-                stdin: Data((hubKeyLine(publicKey: publicKey, host: host) + "\n").utf8))
+            let created = try addHubKey(hubRemote, publicKey: publicKey, host: host)
             if created.split(whereSeparator: \.isNewline).contains("link") { throw PoolFileError.link("\(label):.ssh/authorized_keys") }
             client.hubCreated = created.split(whereSeparator: \.isNewline).map(String.init).filter { $0.hasPrefix("created:") }.map {
                 String($0.dropFirst(8))
@@ -335,18 +327,7 @@ extension PoolJoin {
                 client.linger = enabled.contains("changed:linger")
                 checkpoint(client)
             }
-            try remote.execute(
-                "systemctl --user daemon-reload && systemctl --user enable relaybar-tunnel.service && systemctl --user restart relaybar-tunnel.service"
-            )
-            let answer = try remote.execute(
-                "i=0; while [ $i -lt 15 ]; do c=$(printf 'header = \"Authorization: Bearer %s\"\\n' \"$(cat \"\(keyFile)\")\" "
-                    + "| curl -s -o /dev/null -w '%{http_code}' --max-time 2 -K - http://127.0.0.1:\(Pool.port)/v1/models); "
-                    + "if [ \"$c\" = 200 ] && systemctl --user is-active --quiet relaybar-tunnel.service; then echo up; exit 0; fi; "
-                    + "sleep 1; i=$((i+1)); done; echo down")
-            guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "up" else {
-                throw PoolSSHError.failed(
-                    "\(host) reached \(label), but the helper did not answer there. Check that the helper is running, then try again.")
-            }
+            try startTunnel(remote, label: label)
             report(.commands, .done)
 
             if replace {
@@ -466,6 +447,34 @@ extension PoolJoin {
         return opened.address
     }
 
+    static func addHubKey(_ hub: PoolRemote, publicKey: String, host: String) throws -> String {
+        try hub.execute(
+            "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; umask 077; "
+                + "if [ -L \"$f\" ]; then echo link; exit 0; fi; "
+                + "[ -d \"$d\" ] || { mkdir -m 700 \"$d\" || exit 1; echo created:ssh; }; "
+                + "if [ -e \"$f\" ]; then [ -e \"$f.relaybar-backup\" ] || cp -p \"$f\" \"$f.relaybar-backup\" || exit 1; "
+                + "tmp=$(mktemp \"$d/.relaybar.XXXXXX\") || exit 1; \(dropTagged(host)) \"$f\" > \"$tmp\" && { cmp -s \"$tmp\" \"$f\" || cat \"$tmp\" > \"$f\"; }; "
+                + "r=$?; rm -f \"$tmp\"; [ $r = 0 ] || exit 1; "
+                + "else : > \"$f\" && chmod 600 \"$f\" && echo created:keys || exit 1; fi; cat >> \"$f\"",
+            stdin: Data((hubKeyLine(publicKey: publicKey, host: host) + "\n").utf8))
+    }
+
+    static func startTunnel(_ remote: PoolRemote, label: String) throws {
+        let keyFile = "\(clientConfig)/access-key"
+        try remote.execute(
+            "systemctl --user daemon-reload && systemctl --user enable relaybar-tunnel.service && systemctl --user restart relaybar-tunnel.service"
+        )
+        let answer = try remote.execute(
+            "i=0; while [ $i -lt 15 ]; do c=$(printf 'header = \"Authorization: Bearer %s\"\\n' \"$(cat \"\(keyFile)\")\" "
+                + "| curl -s -o /dev/null -w '%{http_code}' --max-time 2 -K - http://127.0.0.1:\(Pool.port)/v1/models); "
+                + "if [ \"$c\" = 200 ] && systemctl --user is-active --quiet relaybar-tunnel.service; then echo up; exit 0; fi; "
+                + "sleep 1; i=$((i+1)); done; echo down")
+        guard answer.trimmingCharacters(in: .whitespacesAndNewlines) == "up" else {
+            throw PoolSSHError.failed(
+                "\(remote.host) reached \(label), but the helper did not answer there. Check that the helper is running, then try again.")
+        }
+    }
+
     static func hubFacts(_ hub: PoolRemote) throws -> PoolHubFacts {
         guard let facts = PoolHubFacts.parse(try hub.execute(PoolHubFacts.script)) else { throw PoolClientError.hubIdentity(hub.host) }
         return facts
@@ -491,7 +500,7 @@ extension PoolJoin {
         return found.hasPrefix("/") ? found : "/usr/bin/ssh"
     }
 
-    private static func chooseAddress(_ remote: PoolRemote, hub: String, facts: PoolHubFacts, key: String, knownHosts: String) throws
+    static func chooseAddress(_ remote: PoolRemote, hub: String, facts: PoolHubFacts, key: String, knownHosts: String) throws
         -> String
     {
         let options = PoolTunnel.pinnedOptions(key: key, knownHosts: knownHosts, port: facts.port).map(Shell.quote).joined(separator: " ")

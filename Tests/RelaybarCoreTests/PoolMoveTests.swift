@@ -37,6 +37,15 @@ final class Credentials: @unchecked Sendable {
     }
 }
 
+final class Switches: @unchecked Sendable {
+    private let lock = NSLock()
+    private var down: Set<String> = []
+
+    func turnOff(_ host: String) { lock.withLock { _ = down.insert(host) } }
+    func turnOn(_ host: String) { lock.withLock { _ = down.remove(host) } }
+    func isOff(_ host: String) -> Bool { lock.withLock { down.contains(host) } }
+}
+
 final class Backend: @unchecked Sendable {
     private let lock = NSLock()
     private var holder: String?
@@ -163,7 +172,7 @@ struct PoolMoveTests {
 
     private func wire(
         _ harness: Harness, _ backend: Backend, failInstallOn: String? = nil, failLocalInstall: Bool = false,
-        existing: [String: String] = [:]
+        existing: [String: String] = [:], computers: FakeClientHost? = nil, switches: Switches = Switches()
     ) {
         let paths = harness.paths
         let keychain = harness.env().keychain
@@ -179,12 +188,18 @@ struct PoolMoveTests {
             if text.contains("printf %s \"$HOME\"") { return CommandResult(output: "/home/sam") }
             if text.contains("join.json\" ]") { return CommandResult(output: "000") }
             if text.contains("mkdir -m 700") { return CommandResult(output: "claimed") }
+            if switches.isOff(host) {
+                return CommandResult(status: 255, error: "ssh: connect to host \(host) port 22: Connection timed out")
+            }
+            if text.contains("hub_key.pub") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
+            if text == "command -v ssh" { return CommandResult(output: "/usr/bin/ssh\n") }
             if text.contains("lingerNeeded") {
                 return CommandResult(output: host == "homebox" ? "changed:sleep.target\n" : "changed:linger\n")
             }
             if text.contains(" install "), host == failInstallOn {
                 return CommandResult(status: 1, error: "failed: cannot download CLIProxyAPI\n")
             }
+            if let computers, let answer = computers.answer(command) { return answer }
             return CommandResult()
         }
         harness.http.handler = backend.handler(accessKey: { keychain.read(service: Pool.accessService) })
@@ -508,6 +523,83 @@ struct PoolMoveTests {
         harness.http.handler = last.handler(secret: secret)
         try await PoolSetup(env: harness.env()).pauseAgain(emails: ["ann@example.com"])
         #expect(last.patches.filter { $0.path == "credentials/status" }.isEmpty)
+    }
+
+    private func clientCommands(_ harness: Harness, _ host: String) -> [Command] {
+        harness.recorder.commands.filter { $0.arguments.contains(host) }
+    }
+
+    @Test func pointsAddedComputersAtTheNewHub() async throws {
+        let harness = try Harness()
+        let backend = Backend()
+        try await combined(harness, backend)
+        var state = try #require(PoolState.load(harness.paths))
+        var client = PoolLinuxClient(host: "linuxpc", folders: [".config/relaybar"])
+        client.hubKey = true
+        client.hubCreated = ["keys"]
+        state.linuxClients = [client]
+        state.steps.append(.linuxClient)
+        try state.save(harness.paths)
+        harness.recorder.removeCommands()
+        wire(harness, backend, computers: FakeClientHost())
+        let progress = Messages()
+        let report = try await PoolSetup(env: harness.env()).move(to: .computer("mediabox"), progress: { progress.texts.append($0) })
+        #expect(report.computersLeft.isEmpty && report.left == nil)
+        let saved = try #require(PoolState.load(harness.paths))
+        #expect(saved.linuxClients.count == 1 && !saved.linuxClients[0].needsRepoint && saved.linuxClients[0].hubKey)
+        #expect(saved.linuxClients[0].hubCreated.isEmpty)
+        #expect(saved.steps.contains(.linuxClient) && saved.move == nil)
+        let toHub = clientCommands(harness, "mediabox")
+        let keyAdd = try #require(toHub.first { remoteScript($0).contains("cat >> ") })
+        let line = String(decoding: keyAdd.stdin ?? Data(), as: UTF8.self)
+        #expect(line.contains("permitopen=\"127.0.0.1:8317\"") && line.contains("ssh-ed25519 AAAAclientkey relaybar-client:linuxpc"))
+        let toClient = clientCommands(harness, "linuxpc")
+        let hosts = try #require(toClient.first { remoteScript($0).contains("/known_hosts") && $0.stdin != nil })
+        #expect(String(decoding: hosts.stdin ?? Data(), as: UTF8.self).contains("192.168.1.20 ssh-ed25519 AAAAhubkey"))
+        let unit = try #require(toClient.first { remoteScript($0).contains("relaybar-tunnel.service") && $0.stdin != nil })
+        let unitText = String(decoding: unit.stdin ?? Data(), as: UTF8.self)
+        #expect(unitText.contains("sam@$$a") && unitText.contains("192.168.1.20") && unitText.contains("100.64.0.7"))
+        #expect(toClient.contains { remoteScript($0).contains("systemctl --user restart relaybar-tunnel.service") })
+        #expect(toClient.contains { remoteScript($0).contains("http_code") })
+        let order = harness.recorder.commands.map(remoteScript)
+        let restart = try #require(order.firstIndex { $0.contains("restart relaybar-tunnel.service") })
+        let cleanup = try #require(order.firstIndex { $0.contains("rm -rf \"$HOME/.local/share/relaybar-helper\"") })
+        #expect(restart < cleanup)
+        let removals = harness.recorder.commands.filter { plainScript($0).contains("awk '$NF ~ /^relaybar-client:/") }
+        #expect(removals.count == 1 && removals[0].arguments.contains("homebox"))
+        #expect(progress.texts.contains("Pointing linuxpc at mediabox"))
+    }
+
+    @Test func retriesAnAddedComputerThatWasOff() async throws {
+        let harness = try Harness()
+        let backend = Backend()
+        try await combined(harness, backend)
+        var state = try #require(PoolState.load(harness.paths))
+        state.linuxClients = [PoolLinuxClient(host: "linuxpc", folders: [".config/relaybar"])]
+        state.steps.append(.linuxClient)
+        try state.save(harness.paths)
+        let switches = Switches()
+        switches.turnOff("linuxpc")
+        wire(harness, backend, computers: FakeClientHost(), switches: switches)
+        let setup = PoolSetup(env: harness.env())
+        let report = try await setup.move(to: .computer("mediabox"))
+        #expect(report.computersLeft == ["linuxpc"])
+        var saved = try #require(PoolState.load(harness.paths))
+        #expect(saved.ssh == "mediabox" && saved.move == nil)
+        #expect(saved.linuxClients.map(\.needsRepoint) == [true])
+        let stillOff = await setup.settleMove()
+        #expect(stillOff.computersLeft == ["linuxpc"])
+        switches.turnOn("linuxpc")
+        harness.recorder.removeCommands()
+        let back = await setup.settleMove()
+        #expect(back == PoolMoveReport())
+        saved = try #require(PoolState.load(harness.paths))
+        #expect(saved.linuxClients.map(\.needsRepoint) == [false])
+        #expect(clientCommands(harness, "mediabox").contains { remoteScript($0).contains("cat >> ") })
+        #expect(!harness.recorder.commands.contains { remoteScript($0).contains("rm -rf") })
+        harness.recorder.removeCommands()
+        let idle = await setup.settleMove()
+        #expect(idle == PoolMoveReport() && harness.recorder.commands.isEmpty)
     }
 
     private func harnessRespondsFree(_ harness: Harness) {
