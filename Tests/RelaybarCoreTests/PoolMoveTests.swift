@@ -86,9 +86,13 @@ struct PoolMoveTests {
         #expect(throws: PoolSetupError.conflict(.portInUse(8317))) { try setup.checkMove(to: .computer("mediabox")) }
         harness.recorder.respond = { _ in CommandResult(output: "000") }
         #expect(try setup.checkMove(to: .computer("mediabox")) == "mediabox")
-        #expect(try setup.checkMove(to: .thisMac) == nil)
-        try harness.home.write("Library/Application Support/Relaybar/Helper/config.yaml", "mine")
-        #expect(throws: PoolSetupError.conflict(.foreignHelperFolder(harness.paths.helper.path))) { try setup.checkMove(to: .thisMac) }
+        #expect(throws: PoolMoveError.addedComputer("linuxpc")) { try setup.checkMove(to: .thisMac) }
+        let clean = try seeded()
+        #expect(try PoolSetup(env: clean.env()).checkMove(to: .thisMac) == nil)
+        try clean.home.write("Library/Application Support/Relaybar/Helper/config.yaml", "mine")
+        #expect(throws: PoolSetupError.conflict(.foreignHelperFolder(clean.paths.helper.path))) {
+            try PoolSetup(env: clean.env()).checkMove(to: .thisMac)
+        }
         #expect(PoolMoveError.alreadyHere("this Mac").errorDescription?.contains("this Mac") == true)
     }
 
@@ -359,6 +363,82 @@ struct PoolMoveTests {
         _ = await PoolSetup(env: foreign.env()).settleMove()
         #expect(!foreign.recorder.commands.contains { $0.arguments.contains("mediabox") })
         #expect(PoolState.load(foreign.paths)?.move == nil)
+    }
+
+    private func launchOrder(_ harness: Harness) -> [String] {
+        harness.recorder.commands.filter { $0.executable == "/bin/launchctl" }.map {
+            let name = URL(fileURLWithPath: $0.arguments.last ?? "").lastPathComponent
+            return ($0.arguments.first ?? "") + " " + (name.hasSuffix(".plist") ? String(name.dropLast(6)) : name)
+        }
+    }
+
+    @Test func movesOffThisMac() async throws {
+        let harness = try Harness()
+        let backend = Backend()
+        let before = try await moving(harness, backend, host: nil)
+        let keychain = harness.env().keychain
+        let access = try #require(keychain.read(service: Pool.accessService))
+        let report = try await PoolSetup(env: harness.env()).move(to: .computer("mediabox"))
+        #expect(report.sleep == .off && report.left == nil)
+        let order = launchOrder(harness)
+        let helperOut = try #require(order.firstIndex(of: "bootout com.relaybar.helper"))
+        let tunnelIn = try #require(order.firstIndex(of: "bootstrap com.relaybar.helper-tunnel"))
+        #expect(helperOut < tunnelIn)
+        let state = try #require(PoolState.load(harness.paths))
+        #expect(state.ssh == "mediabox" && state.move == nil && !state.joined)
+        #expect(state.steps.starts(with: [.keychainAccessKey, .keychainManagementSecret, .remoteHelper, .keepOn, .tunnelAgent]))
+        for step in [PoolStep.helperFolder, .helperAgent, .updateAgent] { #expect(!state.steps.contains(step)) }
+        for step in [PoolStep.terminalCommands, .t3Entries, .t3Default, .t3UsageSource] { #expect(state.steps.contains(step)) }
+        #expect(state.previousSelection == before.previousSelection && state.usageSourceAdded)
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.helper.path))
+        for label in [Pool.helperLabel, Pool.updateLabel] {
+            #expect(!FileManager.default.fileExists(atPath: harness.paths.agent(label).path))
+        }
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.updateScript.path))
+        #expect(backend.served == "mediabox" && tunnelText(harness).contains("<string>mediabox</string>"))
+        #expect(keychain.read(service: Pool.accessService) == access)
+        let config = harness.recorder.commands.first { remoteScript($0).contains("cat > ") && remoteScript($0).contains("/config.yaml") }
+        let written = String(decoding: config?.stdin ?? Data(), as: UTF8.self)
+        #expect(written.contains(access))
+        #expect(
+            !harness.recorder.commands.contains { $0.executable == "/usr/bin/security" && $0.arguments.first == "delete-generic-password" })
+    }
+
+    @Test func movesOntoThisMac() async throws {
+        let harness = try Harness()
+        let backend = Backend()
+        let before = try await moving(harness, backend, host: "homebox")
+        let keychain = harness.env().keychain
+        let access = try #require(keychain.read(service: Pool.accessService))
+        let report = try await PoolSetup(env: harness.env()).move(to: .thisMac)
+        #expect(report.sleep == nil && report.left == nil)
+        let order = launchOrder(harness)
+        let tunnelOut = try #require(order.firstIndex(of: "bootout com.relaybar.helper-tunnel"))
+        let helperIn = try #require(order.firstIndex(of: "bootstrap com.relaybar.helper"))
+        #expect(tunnelOut < helperIn)
+        let installed = try #require(
+            harness.recorder.commands.firstIndex { $0.executable == "/bin/sh" && $0.arguments.dropFirst().first == "install" })
+        let bootout = try #require(
+            harness.recorder.commands.firstIndex {
+                $0.executable == "/bin/launchctl" && ($0.arguments.last ?? "").hasSuffix(Pool.tunnelLabel)
+            })
+        #expect(bootout < installed)
+        let state = try #require(PoolState.load(harness.paths))
+        #expect(state.runsOnThisMac && state.tailscale == nil && state.move == nil && state.keepOn.isEmpty)
+        #expect(
+            state.steps.starts(with: [
+                .keychainAccessKey, .keychainManagementSecret, .helperFolder, .helperAgent, .updateAgent, .terminalCommands,
+            ]))
+        for step in [PoolStep.tunnelAgent, .remoteHelper, .keepOn] { #expect(!state.steps.contains(step)) }
+        #expect(state.steps.contains(.t3Entries) && state.previousSelection == before.previousSelection)
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.agent(Pool.tunnelLabel).path))
+        #expect(FileManager.default.fileExists(atPath: harness.paths.agent(Pool.helperLabel).path))
+        #expect(try String(contentsOf: harness.paths.config, encoding: .utf8).contains(access))
+        #expect(backend.served == "this Mac")
+        let old = harness.recorder.commands.filter { $0.arguments.contains("homebox") }.map(remoteScript)
+        #expect(old.contains { $0.contains("rm -rf \"$HOME/.local/share/relaybar-helper\"") })
+        #expect(old.contains { $0.contains("systemctl unmask sleep.target") })
+        #expect(keychain.read(service: Pool.accessService) == access)
     }
 
     private func harnessRespondsFree(_ harness: Harness) {

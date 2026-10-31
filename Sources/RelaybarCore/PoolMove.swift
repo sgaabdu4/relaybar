@@ -37,6 +37,7 @@ extension PoolSetup {
         switch target {
         case .thisMac:
             guard !state.runsOnThisMac else { throw PoolMoveError.alreadyHere("this Mac") }
+            if let computer = state.linuxClients.first { throw PoolMoveError.addedComputer(computer.host) }
             let paths = env.paths
             if FileManager.default.fileExists(atPath: paths.config.path) || FileManager.default.fileExists(atPath: paths.helper.path) {
                 throw PoolSetupError.conflict(.foreignHelperFolder(paths.helper.path))
