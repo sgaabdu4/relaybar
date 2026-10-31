@@ -432,6 +432,10 @@ extension PoolController {
     func performRemoveComputer(_ host: String) async {
         busy = true
         defer { busy = false }
+        await removeComputerWork(host)
+    }
+
+    func removeComputerWork(_ host: String) async {
         let title = "Removing \(host)"
         let panel = PoolProgressPanel()
         panel.showSetup(title: title, message: "Starting")

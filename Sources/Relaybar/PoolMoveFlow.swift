@@ -8,6 +8,7 @@ private final class MoveNotes: @unchecked Sendable {
 extension PoolController {
     @objc func moveHelper() {
         guard isFree, let state, state.canMoveHelper else { return }
+        busy = true
         let env = environment()
         let config = paths.home.appendingPathComponent(".ssh/config")
         let hosts = PoolHubPicker.parseSSHConfig((try? String(contentsOf: config, encoding: .utf8)) ?? "")
@@ -20,21 +21,28 @@ extension PoolController {
             "Your accounts stop for a few minutes while you sign in to each one again on the new computer. \(kept) Other Macs and computers keep working."
         let skip = [state.ssh, state.tailscale].compactMap { $0 } + state.linuxClients.map(\.host)
         let dialog = CombineDialog(services: services, move: CombineDialog.Move(here: state.ssh, skip: skip, text: text))
-        guard let choice = dialog.run() else { return }
-        switch choice {
-        case .thisMac: Task { await performMove(.thisMac) }
-        case .computer(let host): Task { await performMove(.computer(host)) }
-        case .another: break
+        let target: PoolMoveTarget
+        switch dialog.run() {
+        case .thisMac?: target = .thisMac
+        case .computer(let host)?: target = .computer(host)
+        case .another?, nil:
+            busy = false
+            return
+        }
+        Task {
+            let wantsTailscale = await performMove(target)
+            busy = false
+            if wantsTailscale { setUpTailscale() }
         }
     }
 
-    private func performMove(_ target: PoolMoveTarget) async {
-        guard let start = state, start.canMoveHelper, !busy else { return }
+    private func performMove(_ target: PoolMoveTarget) async -> Bool {
+        guard let start = state, start.canMoveHelper else { return false }
         if target == .thisMac {
             let hosts = start.linuxClients.map(\.host)
-            guard PoolDialogs.moveToThisMac(hosts: hosts) else { return }
-            for host in hosts { await performRemoveComputer(host) }
-            guard state?.linuxClients.isEmpty == true else { return }
+            guard PoolDialogs.moveToThisMac(hosts: hosts) else { return false }
+            for host in hosts { await removeComputerWork(host) }
+            guard state?.linuxClients.isEmpty == true else { return false }
         }
         let setup = PoolSetup(env: environment())
         if let old = start.ssh {
@@ -44,19 +52,17 @@ extension PoolController {
                     proceed = true
                 } else {
                     switch PoolDialogs.moveOldUnreachable(host: old) {
-                    case .cancel: return
+                    case .cancel: return false
                     case .again: break
                     case .anyway: proceed = true
                     }
                 }
             }
         }
-        busy = true
-        defer { busy = false }
-        await runMove(to: target, from: start, setup: setup)
+        return await runMove(to: target, from: start, setup: setup)
     }
 
-    private func runMove(to target: PoolMoveTarget, from start: PoolState, setup: PoolSetup) async {
+    private func runMove(to target: PoolMoveTarget, from start: PoolState, setup: PoolSetup) async -> Bool {
         var host: String?
         if case .computer(let name) = target { host = name }
         let computers = start.linuxClients.map(\.host)
@@ -86,7 +92,8 @@ extension PoolController {
         guard worked else {
             panel.close()
             clearCache()
-            return await fetch()
+            await fetch()
+            return false
         }
         var note: String?
         if report.sleep == .needsPassword, let host {
@@ -124,7 +131,7 @@ extension PoolController {
         let wantsTailscale = PoolDialogs.moved(
             host: host, computers: host == nil ? [] : reached, old: old ?? "this Mac", pending: pending,
             note: lines.isEmpty ? nil : lines.joined(separator: "\n\n"), tailscale: offer)
-        if wantsTailscale { setUpTailscale() }
+        return wantsTailscale
     }
 
     private func signInAgain(panel: PoolProgressPanel, setup: PoolSetup, steps: [MoveStep], title: String, paused: [String]) async
@@ -160,22 +167,32 @@ extension PoolController {
     }
 
     @objc func followMoved(_ sender: NSMenuItem) {
-        guard let host = sender.representedObject as? String, !busy else { return }
-        Task { await follow(host) }
+        guard let host = sender.representedObject as? String, isFree else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            await follow(host)
+        }
     }
 
     @objc func connectToNewComputer() {
-        guard !busy, state?.joined == true,
+        guard isFree, state?.joined == true else { return }
+        busy = true
+        guard
             let typed = PoolDialogs.address(
                 text: "", error: nil, title: "Where did your accounts move?",
                 message: "Type the address or SSH name of the computer that now runs the helper.", accept: "Connect")
-        else { return }
-        Task { await follow(typed) }
+        else {
+            busy = false
+            return
+        }
+        Task {
+            defer { busy = false }
+            await follow(typed)
+        }
     }
 
     private func follow(_ host: String) async {
-        busy = true
-        defer { busy = false }
         let title = "Connecting this Mac"
         let panel = PoolProgressPanel()
         panel.showSetup(title: title, message: "Connecting to \(host)")
