@@ -56,6 +56,7 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
     public var t3Binary: String?
     public var kept: [PoolKeptFile] = []
     public var createdFolders: [String] = []
+    public var needsRepoint = false
     public var loginsReplaced: Bool { kept.contains { $0.edited } }
 
     public init(host: String, folders: [String] = [], linger: Bool = false) {
@@ -88,12 +89,66 @@ public struct PoolLinuxClient: Codable, Equatable, Sendable {
         t3Binary = try values.decodeIfPresent(String.self, forKey: .t3Binary)
         kept = try values.decodeIfPresent([PoolKeptFile].self, forKey: .kept) ?? []
         createdFolders = try values.decodeIfPresent([String].self, forKey: .createdFolders) ?? []
+        needsRepoint = try values.decodeIfPresent(Bool.self, forKey: .needsRepoint) ?? false
     }
 }
 
 public enum PoolOrderMode: String, Codable, Equatable, Sendable {
     case automatic
     case manual
+}
+
+public enum PoolMovePhase: String, Codable, Sendable {
+    case preparing
+    case switched
+}
+
+public struct PoolMoveOld: Codable, Equatable, Sendable {
+    public var ssh: String?
+    public var tailscale: String?
+    public var keepOn: PoolKeepOn
+
+    public init(ssh: String?, tailscale: String?, keepOn: PoolKeepOn) {
+        self.ssh = ssh
+        self.tailscale = tailscale
+        self.keepOn = keepOn
+    }
+
+    public var runsOnThisMac: Bool { ssh == nil }
+
+    public var asState: PoolState {
+        var state = PoolState(ssh: ssh)
+        state.tailscale = tailscale
+        state.keepOn = keepOn
+        return state
+    }
+}
+
+public struct PoolMove: Codable, Equatable, Sendable {
+    public var target: String?
+    public var phase: PoolMovePhase
+    public var old: PoolMoveOld?
+    public var claimed = false
+    public var newKeepOn = PoolKeepOn()
+
+    public init(
+        target: String?, phase: PoolMovePhase, old: PoolMoveOld?, claimed: Bool = false, newKeepOn: PoolKeepOn = PoolKeepOn()
+    ) {
+        self.target = target
+        self.phase = phase
+        self.old = old
+        self.claimed = claimed
+        self.newKeepOn = newKeepOn
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        target = try values.decodeIfPresent(String.self, forKey: .target)
+        phase = try values.decode(PoolMovePhase.self, forKey: .phase)
+        old = try values.decodeIfPresent(PoolMoveOld.self, forKey: .old)
+        claimed = try values.decodeIfPresent(Bool.self, forKey: .claimed) ?? false
+        newKeepOn = try values.decodeIfPresent(PoolKeepOn.self, forKey: .newKeepOn) ?? PoolKeepOn()
+    }
 }
 
 public struct PoolState: Codable, Equatable, Sendable {
@@ -109,6 +164,7 @@ public struct PoolState: Codable, Equatable, Sendable {
     public var usageSourceAdded = false
     public var order: [String: [String]] = [:]
     public var orderMode = PoolOrderMode.automatic
+    public var move: PoolMove?
 
     public init(ssh: String? = nil, joined: Bool = false) {
         self.ssh = ssh
@@ -129,6 +185,7 @@ public struct PoolState: Codable, Equatable, Sendable {
         usageSourceAdded = try values.decodeIfPresent(Bool.self, forKey: .usageSourceAdded) ?? false
         order = try values.decodeIfPresent([String: [String]].self, forKey: .order) ?? [:]
         orderMode = (try? values.decodeIfPresent(PoolOrderMode.self, forKey: .orderMode)) ?? .automatic
+        move = try? values.decodeIfPresent(PoolMove.self, forKey: .move)
     }
 
     public var runsOnThisMac: Bool { ssh == nil }

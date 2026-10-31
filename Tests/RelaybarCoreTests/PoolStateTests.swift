@@ -35,6 +35,8 @@ struct PoolStateTests {
             !client.t3Installed && !client.t3Service && client.t3Host == nil && !client.tailscaleInstalled && client.t3Session == nil
                 && client.t3Binary == nil)
         #expect(state.orderMode == .automatic)
+        #expect(!client.needsRepoint)
+        #expect(state.move == nil)
         var manual = state
         manual.orderMode = .manual
         try manual.save(harness.paths)
@@ -48,6 +50,10 @@ struct PoolStateTests {
         newer.linuxClients[0].t3Secrets = ["provider-env-x"]
         newer.linuxClients[0].t3Installed = true
         newer.linuxClients[0].t3Host = "100.64.0.9"
+        newer.linuxClients[0].needsRepoint = true
+        newer.move = PoolMove(
+            target: "mediabox", phase: .switched, old: PoolMoveOld(ssh: "homebox", tailscale: "100.64.0.7", keepOn: PoolKeepOn(linger: true)),
+            claimed: true, newKeepOn: PoolKeepOn(masked: ["sleep.target"]))
         try newer.save(harness.paths)
         #expect(PoolState.load(harness.paths) == newer)
     }
