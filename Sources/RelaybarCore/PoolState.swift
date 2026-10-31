@@ -31,6 +31,11 @@ public struct PoolKeepOn: Codable, Equatable, Sendable {
     }
 
     public var isEmpty: Bool { !linger && masked.isEmpty }
+
+    public mutating func add(_ changes: PoolKeepOn) {
+        linger = linger || changes.linger
+        masked += changes.masked.filter { !masked.contains($0) }
+    }
 }
 
 public struct PoolLinuxClient: Codable, Equatable, Sendable {

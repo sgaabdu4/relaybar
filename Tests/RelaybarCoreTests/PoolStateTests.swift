@@ -52,7 +52,8 @@ struct PoolStateTests {
         newer.linuxClients[0].t3Host = "100.64.0.9"
         newer.linuxClients[0].needsRepoint = true
         newer.move = PoolMove(
-            target: "mediabox", phase: .switched, old: PoolMoveOld(ssh: "homebox", tailscale: "100.64.0.7", keepOn: PoolKeepOn(linger: true)),
+            target: "mediabox", phase: .switched,
+            old: PoolMoveOld(ssh: "homebox", tailscale: "100.64.0.7", keepOn: PoolKeepOn(linger: true)),
             claimed: true, newKeepOn: PoolKeepOn(masked: ["sleep.target"]))
         try newer.save(harness.paths)
         #expect(PoolState.load(harness.paths) == newer)

@@ -61,18 +61,10 @@ public struct PoolSetup: Sendable {
             try state.save(env.paths)
             let secrets = try storeSecrets(&state, progress: progress)
             progress("Setting up the helper on this Mac")
-            try PoolFile.makeFolder(env.paths.helper, secret: true)
-            try PoolFile.makeFolder(env.paths.auth, secret: true)
+            try makeHelperFolders()
             state.record(.helperFolder)
             try state.save(env.paths)
-            try PoolFile.write(
-                Data(PoolConfig.helperYAML(secrets: secrets, authDir: env.paths.auth.path).utf8), to: env.paths.config, secret: true)
-            try PoolFile.write(Data(PoolInstall.sandboxProfile(paths: env.paths).utf8), to: env.paths.sandbox, secret: true, backup: false)
-            try PoolFile.write(script, to: env.paths.updateScript, executable: true, backup: false)
-            try PoolFile.write(
-                Data(PoolInstall.helperPlist(paths: env.paths).utf8), to: env.paths.agent(Pool.helperLabel), backup: false)
-            try PoolFile.write(
-                Data(PoolInstall.updatePlist(paths: env.paths).utf8), to: env.paths.agent(Pool.updateLabel), backup: false)
+            try writeHelperFiles(secrets: secrets, script: script)
             state.record(.helperAgent)
             state.record(.updateAgent)
             try state.save(env.paths)
@@ -132,10 +124,23 @@ public struct PoolSetup: Sendable {
         return kept.sleep
     }
 
+    func makeHelperFolders() throws {
+        try PoolFile.makeFolder(env.paths.helper, secret: true)
+        try PoolFile.makeFolder(env.paths.auth, secret: true)
+    }
+
+    func writeHelperFiles(secrets: PoolSecrets, script: Data) throws {
+        try PoolFile.write(
+            Data(PoolConfig.helperYAML(secrets: secrets, authDir: env.paths.auth.path).utf8), to: env.paths.config, secret: true)
+        try PoolFile.write(Data(PoolInstall.sandboxProfile(paths: env.paths).utf8), to: env.paths.sandbox, secret: true, backup: false)
+        try PoolFile.write(script, to: env.paths.updateScript, executable: true, backup: false)
+        try PoolFile.write(Data(PoolInstall.helperPlist(paths: env.paths).utf8), to: env.paths.agent(Pool.helperLabel), backup: false)
+        try PoolFile.write(Data(PoolInstall.updatePlist(paths: env.paths).utf8), to: env.paths.agent(Pool.updateLabel), backup: false)
+    }
+
     private func recordKeepOn(_ changes: PoolKeepOn, state: inout PoolState) throws {
         guard !changes.isEmpty else { return }
-        state.keepOn.linger = state.keepOn.linger || changes.linger
-        state.keepOn.masked += changes.masked.filter { !state.keepOn.masked.contains($0) }
+        state.keepOn.add(changes)
         state.record(.keepOn)
         try state.save(env.paths)
     }
@@ -278,13 +283,13 @@ public struct PoolSetup: Sendable {
         guard env.keychain.read(service: service) == secret else { throw PoolSetupError.keychain }
     }
 
-    private func load(_ label: String) {
+    func load(_ label: String) {
         let plist = env.paths.agent(label).path
         _ = env.run(Command("/bin/launchctl", ["bootout", "\(env.domain)/\(label)"], limit: 30))
         _ = env.run(Command("/bin/launchctl", ["bootstrap", env.domain, plist], limit: 30))
     }
 
-    private func waitForHelper(_ secrets: PoolSecrets) async throws {
+    func waitForHelper(_ secrets: PoolSecrets) async throws {
         let api = PoolManagement(secret: secrets.managementSecret, http: env.http)
         for _ in 0..<20 {
             if await api.modelsAnswer(accessKey: secrets.accessKey) { return }
@@ -293,7 +298,7 @@ public struct PoolSetup: Sendable {
         throw PoolSetupError.notAnswering
     }
 
-    private func confirmHelper(_ secrets: PoolSecrets, host: String) async throws {
+    func confirmHelper(_ secrets: PoolSecrets, host: String) async throws {
         do { _ = try await PoolManagement(secret: secrets.managementSecret, http: env.http).credentials() } catch {
             throw PoolSetupError.helperNotConfirmed(host)
         }
