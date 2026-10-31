@@ -80,6 +80,10 @@ unset key
 - On a Linux computer added in Relaybar: plain `claude` and `codex` if the user chose Replace, otherwise `claude+` and `codex+`. The key is in a private file there.
 - Anywhere else: do not set this up by hand. Ask the user to use Relaybar: **All accounts**, then **Add a computer…**. A Mac runs Relaybar itself and connects in one click.
 
+## Move the helper
+
+Do not move the helper by hand. Ask the user to use Relaybar: **All accounts**, then **Move the helper…**. Relaybar sets up the new computer with the same keys, switches the Mac and the added computers to it, and removes the old helper and its logins. The user signs each account in again. If the old computer is off, Relaybar cleans it when it is back, and Stop combining also cleans it.
+
 ## Stop
 
 Use Relaybar: **All accounts**, then **Stop combining…**. It removes everything in the table above and puts T3 Code back as it was. If a helper version is ever reported as bad, also ask the user to sign out of all sessions on claude.ai and chatgpt.com.
