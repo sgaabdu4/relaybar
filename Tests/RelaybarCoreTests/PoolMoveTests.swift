@@ -333,9 +333,14 @@ struct PoolMoveTests {
         let stubborn = Backend()
         before = try await moving(stuck, stubborn, host: "homebox")
         stubborn.stubborn = true
-        await #expect(throws: PoolMoveError.oldStillAnswers) { _ = try await PoolSetup(env: stuck.env()).move(to: .computer("mediabox")) }
+        await #expect(throws: PoolMoveError.oldStillAnswers) {
+            _ = try await PoolSetup(env: stuck.env()).move(to: .computer("mediabox"), sudoPassword: "pw")
+        }
         try assertPutBack(stuck, before: before, backend: stubborn, served: "homebox", newHost: "mediabox")
-        #expect(stuck.recorder.commands.contains { remoteScript($0).contains("loginctl disable-linger") })
+        #expect(
+            stuck.recorder.commands.contains {
+                remoteScript($0).contains("loginctl disable-linger") && $0.arguments.contains("mediabox") && $0.stdin == Data("pw\n".utf8)
+            })
     }
 
     @Test func aFailureOnThisMacPutsBackTheLocalHelper() async throws {
@@ -476,12 +481,18 @@ struct PoolMoveTests {
         let before = try await moving(harness, backend, host: "homebox")
         let keychain = harness.env().keychain
         let access = try #require(keychain.read(service: Pool.accessService))
-        let report = try await PoolSetup(env: harness.env()).move(to: .thisMac)
+        let progress = Messages()
+        let report = try await PoolSetup(env: harness.env()).move(to: .thisMac, progress: { progress.texts.append($0) })
         #expect(report.sleep == nil && report.left == nil)
         let order = launchOrder(harness)
         let tunnelOut = try #require(order.firstIndex(of: "bootout com.relaybar.helper-tunnel"))
         let helperIn = try #require(order.firstIndex(of: "bootstrap com.relaybar.helper"))
         #expect(tunnelOut < helperIn)
+        let texts = progress.texts
+        let downloaded = try #require(texts.firstIndex(of: "Downloading and checking the helper"))
+        let started = try #require(texts.firstIndex(of: "Starting the helper on this Mac"))
+        let stages = texts.compactMap { PoolMoveStage(progress: $0) }
+        #expect(downloaded < started && stages == [.prepare, .prepare, .connect, .remove])
         let installed = try #require(
             harness.recorder.commands.firstIndex { $0.executable == "/bin/sh" && $0.arguments.dropFirst().first == "install" })
         let bootout = try #require(

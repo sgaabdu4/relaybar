@@ -93,10 +93,10 @@ extension PoolSetup {
         do {
             report.sleep = try await prepareNewHelper(
                 host: host, secrets: secrets, script: script, sudoPassword: sudoPassword, progress: progress)
-            progress(host.map { "Connecting this Mac to \($0)" } ?? "Starting the helper on this Mac")
+            if let host { progress("Connecting this Mac to \(host)") }
             try await switchHolder(host: host, secrets: secrets, progress: progress)
         } catch {
-            _ = await undoMove(sudoPassword: nil)
+            _ = await undoMove(sudoPassword: sudoPassword)
             throw error
         }
         try updateState { state in
@@ -241,6 +241,7 @@ extension PoolSetup {
         } else {
             progress("Downloading and checking the helper")
             try PoolInstall.install(paths: env.paths, run: env.run)
+            progress("Starting the helper on this Mac")
             load(Pool.helperLabel)
             load(Pool.updateLabel)
         }

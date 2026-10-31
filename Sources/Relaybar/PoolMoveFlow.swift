@@ -75,7 +75,7 @@ extension PoolController {
                     guard let stage = PoolMoveStage(progress: text), let index = steps.firstIndex(where: { $0.stage == stage }) else {
                         return
                     }
-                    Task { @MainActor in panel.showSteps(title: title, steps: steps.map(\.text), current: index) }
+                    Task { @MainActor in panel.advance(to: index) }
                 },
                 afterSwitch: { [weak self] in
                     guard let self else { return }
