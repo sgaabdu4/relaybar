@@ -32,7 +32,9 @@ public enum PoolTeardown {
         + "systemctl --user daemon-reload >/dev/null 2>&1; rm -rf \"$HOME/.local/share/relaybar-helper\" \"$HOME/.local/share/relaybar\"; "
         + "d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then umask 077; "
         + "t=$(mktemp \"$d/.relaybar.XXXXXX\") && awk '$NF ~ /^relaybar-client:/ { next } { print }' \"$f\" > \"$t\" "
-        + "&& { cmp -s \"$t\" \"$f\" || cat \"$t\" > \"$f\"; }; rm -f \"$t\"; fi; true"
+        + "&& { cmp -s \"$t\" \"$f\" || cat \"$t\" > \"$f\"; }; rm -f \"$t\"; fi; "
+        + "{ [ ! -e \"$HOME/.local/share/relaybar-helper\" ] && ! systemctl --user is-active --quiet relaybar-helper.service; } "
+        + "|| { echo \"failed: the helper is still installed there\" >&2; exit 1; }"
 
     public static func run(
         _ env: PoolEnvironment, sudoPassword: String? = nil, progress: (PoolStep) -> Void = { _ in }

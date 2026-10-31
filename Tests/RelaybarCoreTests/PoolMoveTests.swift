@@ -923,6 +923,63 @@ struct PoolMoveTests {
         #expect(listed.contains("Relaybar removes linuxpc and workbox from Computers first."))
     }
 
+    @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {
+        let script = PoolTeardown.remoteRemoval
+        #expect(script.contains("[ ! -e \"$HOME/.local/share/relaybar-helper\" ]"))
+        #expect(script.contains("! systemctl --user is-active --quiet relaybar-helper.service"))
+        #expect(script.hasSuffix("exit 1; }"))
+
+        let harness = try Harness()
+        try afterSwitch(harness)
+        let stuck = Switches()
+        stuck.turnOff("homebox")
+        harness.recorder.respond = { command in
+            plainScript(command) == PoolTeardown.remoteRemoval && stuck.isOff("homebox")
+                ? CommandResult(status: 1, error: "failed: the helper is still installed there") : CommandResult()
+        }
+        let setup = PoolSetup(env: harness.env())
+        let first = await setup.settleMove()
+        #expect(first.left == "homebox")
+        let kept = try #require(PoolState.load(harness.paths))
+        #expect(kept.move?.old?.ssh == "homebox" && PoolMove.action(for: kept) == .finish)
+        stuck.turnOn("homebox")
+        let done = await setup.settleMove()
+        #expect(done == PoolMoveReport())
+        #expect(PoolState.load(harness.paths)?.move == nil)
+
+        let stop = try Harness()
+        var state = PoolState(ssh: "homebox")
+        state.steps = [.keychainAccessKey, .remoteHelper, .tunnelAgent]
+        try state.save(stop.paths)
+        stop.recorder.respond = { command in
+            plainScript(command) == PoolTeardown.remoteRemoval
+                ? CommandResult(status: 1, error: "failed: the helper is still installed there") : CommandResult()
+        }
+        let report = PoolSetup(env: stop.env()).stop()
+        #expect(!report.finished && report.failed.map(\.step) == [.remoteHelper])
+        #expect(!report.undone.contains(.remoteHelper) && report.unreachable == "homebox")
+        #expect(PoolState.load(stop.paths)?.steps.contains(.remoteHelper) == true)
+    }
+
+    @Test func theRemovalScriptFailsWhenTheHelperFolderIsStillThere() throws {
+        func run(home: URL) -> Int32 {
+            PoolProcess.run(Command("/bin/sh", ["-c", PoolTeardown.remoteRemoval], environment: ["HOME": home.path])).status
+        }
+        let clean = try Harness()
+        try clean.home.write(".local/share/relaybar-helper/config.yaml", "x")
+        try clean.home.write(".local/share/relaybar/relaybar-helper.sh", "x")
+        #expect(run(home: clean.home.root) == 0)
+        #expect(!FileManager.default.fileExists(atPath: clean.home.root.appendingPathComponent(".local/share/relaybar-helper").path))
+        #expect(run(home: clean.home.root) == 0)
+
+        let stuck = try Harness()
+        try stuck.home.write(".local/share/relaybar-helper/config.yaml", "x")
+        let share = stuck.home.root.appendingPathComponent(".local/share")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: share.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: share.path) }
+        #expect(run(home: stuck.home.root) != 0)
+    }
+
     private func harnessRespondsFree(_ harness: Harness) {
         harness.recorder.respond = { _ in CommandResult(output: "000") }
     }

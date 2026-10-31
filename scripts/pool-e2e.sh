@@ -828,7 +828,7 @@ remoteStop() {
   local rhome left
   [ -n "${remoteError:-}" ] && fail "$remoteError"
   rhome="$(remote pwd)" || fail "cannot read the home folder of the container user"
-  sed -n '/static let remoteRemoval =/,/; true"$/p' "$repo/Sources/RelaybarCore/PoolTeardown.swift" |
+  sed -n '/static let remoteRemoval =/,/exit 1; }"$/p' "$repo/Sources/RelaybarCore/PoolTeardown.swift" |
     sed -e '1s/^.*remoteRemoval =//' -e 's/^[[:space:]]*+*[[:space:]]*"//' -e 's/"$//' -e 's/\\"/"/g' | tr -d '\n' > "$work/teardown.sh"
   grep -q 'disable --now' "$work/teardown.sh" || fail "cannot read the removal script from PoolTeardown.swift"
   remote sh -s < "$work/teardown.sh" > "$work/teardown.out" 2>&1 || fail "the removal script failed: $(cat "$work/teardown.out")"
