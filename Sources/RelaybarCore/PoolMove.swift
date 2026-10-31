@@ -75,7 +75,8 @@ extension PoolSetup {
     }
 
     public func move(
-        to target: PoolMoveTarget, sudoPassword: String? = nil, progress: @Sendable (String) -> Void = { _ in }
+        to target: PoolMoveTarget, sudoPassword: String? = nil, progress: @Sendable (String) -> Void = { _ in },
+        afterSwitch: @Sendable () async -> Void = {}
     ) async throws -> PoolMoveReport {
         guard let script = env.script else { throw PoolSetupError.missingScript }
         let host = try checkMove(to: target)
@@ -92,7 +93,7 @@ extension PoolSetup {
         do {
             report.sleep = try await prepareNewHelper(
                 host: host, secrets: secrets, script: script, sudoPassword: sudoPassword, progress: progress)
-            progress(host.map { "Switching this Mac to \($0)" } ?? "Switching this Mac to its own helper")
+            progress(host.map { "Connecting this Mac to \($0)" } ?? "Starting the helper on this Mac")
             try await switchHolder(host: host, secrets: secrets, progress: progress)
         } catch {
             _ = await undoMove(sudoPassword: nil)
@@ -109,6 +110,7 @@ extension PoolSetup {
             move.phase = .switched
             state.move = move
         }
+        await afterSwitch()
         let finished = await settleMove(sudoPassword: sudoPassword, progress: progress)
         var done = finished
         done.sleep = report.sleep
@@ -375,6 +377,35 @@ extension PoolSetup {
             }
         }
         return left
+    }
+}
+
+public enum PoolMoveStage: Int, CaseIterable, Sendable {
+    case prepare
+    case connect
+    case signIn
+    case computers
+    case remove
+
+    public init?(progress text: String) {
+        let prefixes: [(String, PoolMoveStage)] = [
+            ("Setting up the helper", .prepare), ("Copying the helper", .prepare), ("Writing the helper", .prepare),
+            ("Downloading and checking", .prepare), ("Connecting this Mac", .connect), ("Starting the helper", .connect),
+            ("Pointing ", .computers), ("Removing the helper", .remove),
+        ]
+        guard let found = prefixes.first(where: { text.hasPrefix($0.0) }) else { return nil }
+        self = found.1
+    }
+}
+
+extension PoolSetup {
+    public func oldComputerAnswers() -> Bool {
+        guard let state = PoolState.load(env.paths) else { return false }
+        let routes = state.hubRoutes
+        guard !routes.isEmpty else { return true }
+        return routes.contains {
+            env.run(PoolSSH.command(host: $0.host, hostName: $0.hostName, script: "true", connectTimeout: 5, limit: 15)).succeeded
+        }
     }
 }
 

@@ -234,7 +234,18 @@ struct PoolMoveTests {
         let mark = harness.recorder.commands.count
         let setup = PoolSetup(env: harness.env())
         let steps = Messages()
-        let report = try await setup.move(to: .computer("mediabox"), progress: { steps.texts.append($0) })
+        let signedIn = Messages()
+        let harnessForClosure = harness
+        let report = try await setup.move(
+            to: .computer("mediabox"), progress: { steps.texts.append($0) },
+            afterSwitch: {
+                let during = PoolState.load(harnessForClosure.paths)
+                let removed = harnessForClosure.recorder.commands.contains {
+                    remoteScript($0).contains("rm -rf") && $0.arguments.contains("homebox")
+                }
+                signedIn.texts.append("\(during?.move?.phase.rawValue ?? "none") \(during?.ssh ?? "none") \(removed)")
+            })
+        #expect(signedIn.texts == ["switched mediabox false"])
         #expect(report.sleep == .off)
         let state = try #require(PoolState.load(harness.paths))
         #expect(state.ssh == "mediabox" && state.tailscale == nil && !state.joined)
@@ -265,6 +276,12 @@ struct PoolMoveTests {
         #expect(toOld.contains { $0.contains("rm -rf \"$HOME/.local/share/relaybar-helper\"") })
         #expect(toOld.contains { $0.contains("systemctl unmask sleep.target") })
         #expect(steps.texts.contains("Setting up the helper on mediabox"))
+        #expect(steps.texts.contains("Connecting this Mac to mediabox"))
+        #expect(steps.texts.compactMap { PoolMoveStage(progress: $0) }.contains(.remove))
+        #expect(
+            PoolMoveStage(progress: "Pointing linuxpc at mediabox") == .computers
+                && PoolMoveStage(progress: "Copying the helper installer to mediabox") == .prepare)
+        #expect(PoolMoveStage(progress: "Making a key") == nil)
         let settings = try harness.home.json(t3Path)
         #expect((settings["providerInstances"] as? [String: Any])?.keys.contains("claudeAgent_all_accounts") == true)
         #expect(FileManager.default.fileExists(atPath: harness.paths.claudePlus.path))
@@ -802,6 +819,19 @@ struct PoolMoveTests {
         await #expect(throws: PoolInputError.self) { try await setup.follow(host: "-x") }
         let owner = try seeded()
         await #expect(throws: PoolSetupError.notCombining) { try await PoolSetup(env: owner.env()).follow(host: "mediabox") }
+    }
+
+    @Test func saysWhetherTheOldComputerAnswers() throws {
+        let harness = try seeded(tailscale: "100.64.0.7")
+        harness.recorder.respond = { command in
+            command.arguments.contains("HostName=100.64.0.7") ? CommandResult(status: 255) : CommandResult()
+        }
+        #expect(PoolSetup(env: harness.env()).oldComputerAnswers())
+        harness.recorder.respond = { _ in CommandResult(status: 255, error: "Connection timed out") }
+        #expect(!PoolSetup(env: harness.env()).oldComputerAnswers())
+        let local = try seeded(ssh: nil)
+        #expect(PoolSetup(env: local.env()).oldComputerAnswers())
+        #expect(!PoolSetup(env: try Harness().env()).oldComputerAnswers())
     }
 
     private func harnessRespondsFree(_ harness: Harness) {
