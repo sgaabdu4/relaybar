@@ -13,6 +13,10 @@ final class Recorder: @unchecked Sendable {
         lock.withLock { log }
     }
 
+    func removeCommands() {
+        lock.withLock { log = [] }
+    }
+
     var runner: CommandRunner {
         { [self] command in
             lock.withLock { log.append(command) }

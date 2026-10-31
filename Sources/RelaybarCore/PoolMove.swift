@@ -90,7 +90,7 @@ extension PoolSetup {
             report.sleep = try await prepareNewHelper(
                 host: host, secrets: secrets, script: script, sudoPassword: sudoPassword, progress: progress)
             progress(host.map { "Switching this Mac to \($0)" } ?? "Switching this Mac to its own helper")
-            try await switchHolder(host: host, secrets: secrets)
+            try await switchHolder(host: host, secrets: secrets, progress: progress)
         } catch {
             _ = await undoMove(sudoPassword: nil)
             throw error
@@ -207,8 +207,6 @@ extension PoolSetup {
             try makeHelperFolders()
             try updateState { $0.move?.claimed = true }
             try writeHelperFiles(secrets: secrets, script: script)
-            progress("Downloading and checking the helper")
-            try PoolInstall.install(paths: env.paths, run: env.run)
             return nil
         }
         progress("Setting up the helper on \(host)")
@@ -234,7 +232,7 @@ extension PoolSetup {
         _ = env.run(Command("/bin/launchctl", ["bootout", "\(env.domain)/\(label)"], limit: 30))
     }
 
-    private func switchHolder(host: String?, secrets: PoolSecrets) async throws {
+    private func switchHolder(host: String?, secrets: PoolSecrets, progress: @Sendable (String) -> Void) async throws {
         guard let move = PoolState.load(env.paths)?.move, let old = move.old else { return }
         if old.runsOnThisMac {
             bootOut(Pool.helperLabel)
@@ -248,6 +246,8 @@ extension PoolSetup {
                 Data(PoolTunnel.plist(paths: env.paths, destination: host).utf8), to: env.paths.agent(Pool.tunnelLabel), backup: false)
             load(Pool.tunnelLabel)
         } else {
+            progress("Downloading and checking the helper")
+            try PoolInstall.install(paths: env.paths, run: env.run)
             load(Pool.helperLabel)
             load(Pool.updateLabel)
         }

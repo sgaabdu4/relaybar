@@ -8,8 +8,9 @@ final class Backend: @unchecked Sendable {
     private var holder: String?
     private var destination: String?
     var stubborn = false
+    var refuse: String?
 
-    var answers: Bool { lock.withLock { holder != nil } }
+    var answers: Bool { lock.withLock { holder != nil && destination != refuse } }
     var served: String? { lock.withLock { destination } }
 
     func apply(_ command: Command) {
@@ -122,11 +123,17 @@ struct PoolMoveTests {
 
     private let t3Path = ".t3/userdata/settings.json"
 
-    private func wire(_ harness: Harness, _ backend: Backend, failInstallOn: String? = nil, existing: [String: String] = [:]) {
+    private func wire(
+        _ harness: Harness, _ backend: Backend, failInstallOn: String? = nil, failLocalInstall: Bool = false,
+        existing: [String: String] = [:]
+    ) {
         let paths = harness.paths
         let keychain = harness.env().keychain
         harness.recorder.respond = { command in
             backend.apply(command)
+            if command.executable == "/bin/sh", command.arguments.dropFirst().first == "install", failLocalInstall {
+                return CommandResult(status: 1, error: "failed: cannot download CLIProxyAPI\n")
+            }
             guard command.executable == "/usr/bin/ssh" else { return CommandResult() }
             let text = remoteScript(command)
             let host = command.arguments.dropLast().last ?? ""
@@ -208,6 +215,84 @@ struct PoolMoveTests {
         let settings = try harness.home.json(t3Path)
         #expect((settings["providerInstances"] as? [String: Any])?.keys.contains("claudeAgent_all_accounts") == true)
         #expect(FileManager.default.fileExists(atPath: harness.paths.claudePlus.path))
+    }
+
+    private func assertPutBack(_ harness: Harness, before: PoolState, backend: Backend, served: String, newHost: String?) throws {
+        #expect(PoolState.load(harness.paths) == before)
+        #expect(backend.answers && backend.served == served)
+        let keychain = harness.env().keychain
+        #expect(keychain.read(service: Pool.accessService) != nil && keychain.read(service: Pool.managementService) != nil)
+        let ssh = harness.recorder.commands.filter { $0.executable == "/usr/bin/ssh" }
+        let removals = ssh.filter { remoteScript($0).contains("rm -rf") }
+        if let newHost {
+            #expect(removals.count == 1 && removals.allSatisfy { $0.arguments.contains(newHost) })
+        } else {
+            #expect(removals.isEmpty)
+        }
+    }
+
+    private func moving(_ harness: Harness, _ backend: Backend, host: String?) async throws -> PoolState {
+        try await combined(harness, backend, host: host)
+        let before = try #require(PoolState.load(harness.paths))
+        harness.recorder.removeCommands()
+        return before
+    }
+
+    @Test func aFailureBeforeTheSwitchPutsEverythingBack() async throws {
+        let installFails = try Harness()
+        let backend = Backend()
+        var before = try await moving(installFails, backend, host: "homebox")
+        wire(installFails, backend, failInstallOn: "mediabox")
+        await #expect(throws: PoolInstallError.self) {
+            _ = try await PoolSetup(env: installFails.env()).move(to: .computer("mediabox"))
+        }
+        try assertPutBack(installFails, before: before, backend: backend, served: "homebox", newHost: "mediabox")
+
+        let neverAnswers = try Harness()
+        let silent = Backend()
+        before = try await moving(neverAnswers, silent, host: "homebox")
+        silent.refuse = "mediabox"
+        await #expect(throws: PoolSetupError.notAnswering) {
+            _ = try await PoolSetup(env: neverAnswers.env()).move(to: .computer("mediabox"))
+        }
+        silent.refuse = nil
+        try assertPutBack(neverAnswers, before: before, backend: silent, served: "homebox", newHost: "mediabox")
+        #expect(neverAnswers.recorder.ran("/usr/bin/ssh", containing: "systemctl unmask sleep.target") == false)
+
+        let stuck = try Harness()
+        let stubborn = Backend()
+        before = try await moving(stuck, stubborn, host: "homebox")
+        stubborn.stubborn = true
+        await #expect(throws: PoolMoveError.oldStillAnswers) { _ = try await PoolSetup(env: stuck.env()).move(to: .computer("mediabox")) }
+        try assertPutBack(stuck, before: before, backend: stubborn, served: "homebox", newHost: "mediabox")
+        #expect(stuck.recorder.commands.contains { remoteScript($0).contains("loginctl disable-linger") })
+    }
+
+    @Test func aFailureOnThisMacPutsBackTheLocalHelper() async throws {
+        let harness = try Harness()
+        let backend = Backend()
+        let before = try await moving(harness, backend, host: nil)
+        backend.refuse = "mediabox"
+        await #expect(throws: PoolSetupError.notAnswering) {
+            _ = try await PoolSetup(env: harness.env()).move(to: .computer("mediabox"))
+        }
+        backend.refuse = nil
+        try assertPutBack(harness, before: before, backend: backend, served: "this Mac", newHost: "mediabox")
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.agent(Pool.tunnelLabel).path))
+        #expect(FileManager.default.fileExists(atPath: harness.paths.agent(Pool.helperLabel).path))
+        #expect(FileManager.default.fileExists(atPath: harness.paths.config.path))
+    }
+
+    @Test func aFailureWhileMovingOntoThisMacPutsBackTheTunnel() async throws {
+        let harness = try Harness()
+        let backend = Backend()
+        let before = try await moving(harness, backend, host: "homebox")
+        wire(harness, backend, failLocalInstall: true)
+        await #expect(throws: PoolInstallError.self) { _ = try await PoolSetup(env: harness.env()).move(to: .thisMac) }
+        try assertPutBack(harness, before: before, backend: backend, served: "homebox", newHost: nil)
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.helper.path))
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.agent(Pool.helperLabel).path))
+        #expect(tunnelText(harness).contains("<string>homebox</string>"))
     }
 
     private func harnessRespondsFree(_ harness: Harness) {
