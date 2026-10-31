@@ -373,9 +373,15 @@ extension PoolSetup {
                 left.append(client.host)
                 continue
             }
+            var saved = false
             try? updateState { latest in
-                if let index = latest.linuxClients.firstIndex(where: { $0.host == client.host }) { latest.linuxClients[index] = updated }
+                guard latest.tunnelRoute?.host == route.host,
+                    let index = latest.linuxClients.firstIndex(where: { $0.host == client.host })
+                else { return }
+                latest.linuxClients[index] = updated
+                saved = true
             }
+            if !saved { left.append(client.host) }
         }
         return left
     }

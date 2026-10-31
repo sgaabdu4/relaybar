@@ -239,8 +239,12 @@ final class PoolController: NSObject {
         guard !busy, !settling, let state, state.move != nil || state.linuxClients.contains(where: \.needsRepoint) else { return }
         guard force || Date().timeIntervalSince(lastSettle) >= gap else { return }
         lastSettle = Date()
+        busy = true
         settling = true
-        defer { settling = false }
+        defer {
+            busy = false
+            settling = false
+        }
         let setup = PoolSetup(env: environment())
         var report = await setup.settleMove()
         var wrong = false
@@ -276,7 +280,7 @@ final class PoolController: NSObject {
     }
 
     func entryItems() -> [NSMenuItem] {
-        if busy {
+        if busy, !settling {
             let item = NSMenuItem(title: "Working on combined accounts…", action: nil, keyEquivalent: "")
             item.isEnabled = false
             return [item]

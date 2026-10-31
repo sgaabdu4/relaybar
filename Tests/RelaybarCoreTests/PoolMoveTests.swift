@@ -598,6 +598,33 @@ struct PoolMoveTests {
         #expect(progress.texts.contains("Pointing linuxpc at mediabox"))
     }
 
+    @Test func keepsAComputerPendingWhenTheHubChangesDuringItsRepoint() async throws {
+        let harness = try Harness()
+        var state = PoolState(ssh: "mediabox")
+        state.steps = [.keychainAccessKey, .keychainManagementSecret, .remoteHelper, .tunnelAgent, .linuxClient]
+        var client = PoolLinuxClient(host: "linuxpc", folders: [".config/relaybar"])
+        client.needsRepoint = true
+        state.linuxClients = [client]
+        try state.save(harness.paths)
+        let computers = FakeClientHost()
+        let paths = harness.paths
+        harness.recorder.respond = { command in
+            let text = remoteScript(command)
+            if text.contains("hub_key.pub") { return CommandResult(output: "ssh-ed25519 AAAAclientkey\n") }
+            if text == "command -v ssh" { return CommandResult(output: "/usr/bin/ssh\n") }
+            if text.contains("restart relaybar-tunnel.service"), var latest = PoolState.load(paths) {
+                latest.ssh = "workbox"
+                latest.linuxClients[0].needsRepoint = true
+                try? latest.save(paths)
+            }
+            return computers.answer(command) ?? CommandResult()
+        }
+        let report = await PoolSetup(env: harness.env()).settleMove()
+        #expect(report.computersLeft == ["linuxpc"])
+        let saved = try #require(PoolState.load(harness.paths))
+        #expect(saved.ssh == "workbox" && saved.linuxClients.map(\.needsRepoint) == [true])
+    }
+
     @Test func retriesAnAddedComputerThatWasOff() async throws {
         let harness = try Harness()
         let backend = Backend()
