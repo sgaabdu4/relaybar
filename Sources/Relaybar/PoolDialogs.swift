@@ -147,30 +147,19 @@ enum PoolDialogs {
     }
 
     static func moveToThisMac(hosts: [String]) -> Bool {
-        let list = hosts.joined(separator: ", ")
-        return stopAlert(
-            "Move the helper to this Mac?",
-            "A helper on this Mac cannot be reached from other computers, so \(list) would stop working. Relaybar removes \(hosts.count == 1 ? "it" : "them") from Computers first, then moves the helper. You can add \(hosts.count == 1 ? "it" : "them") again after you move the helper to a home computer.",
-            go: "Remove and Move", destructive: true)
+        stopAlert(
+            "Move the helper to this Mac?", PoolMove.thisMacWarning(computers: hosts),
+            go: hosts.isEmpty ? "Move" : "Remove and Move", destructive: true)
     }
 
-    static func moved(host: String, computers: [String], old: String?, pending: Bool, note: String?, tailscale: Bool) -> Bool {
+    static func moved(host: String?, computers: [String], old: String?, pending: Bool, note: String?, tailscale: Bool) -> Bool {
         let alert = NSAlert()
         alert.icon = badged(NSApp.applicationIconImage, symbol: "checkmark.circle.fill", color: .systemGreen)
-        alert.messageText = "Your accounts now run on \(host)"
-        let names = ["This Mac"] + computers
-        let users = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
-        var text = "\(users) \(computers.isEmpty ? "uses" : "use") \(host) now."
-        if let old {
-            text +=
-                pending
-                ? " Relaybar could not reach \(old). It removes the helper and its logins from \(old) when it is back."
-                : " Relaybar removed the helper and its logins from \(old)."
-        }
-        text += " Other Macs that use your accounts reconnect in one click."
+        alert.messageText = "Your accounts now run on \(host ?? "this Mac")"
+        var text = PoolMove.doneText(target: host, computers: computers, old: old, pending: pending)
         if let note { text += "\n\n" + note }
         alert.informativeText = text
-        if tailscale {
+        if tailscale, let host {
             let box = TailscaleBox(host: host) { NSApp.stopModal(withCode: tailscaleCode) }
             alert.accessoryView = box.view
         }

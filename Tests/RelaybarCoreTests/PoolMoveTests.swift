@@ -905,6 +905,24 @@ struct PoolMoveTests {
         #expect(!PoolSetup(env: try Harness().env()).oldComputerAnswers())
     }
 
+    @Test func movingOntoThisMacWarnsAndDoesNotPromiseAReconnect() {
+        let home = PoolMove.doneText(target: "mediabox", computers: ["linuxpc"], old: "homebox", pending: false)
+        #expect(home.contains("This Mac and linuxpc use mediabox now."))
+        #expect(home.contains("Relaybar removed the helper and its logins from homebox."))
+        #expect(home.contains("Other Macs that use your accounts reconnect in one click."))
+        let late = PoolMove.doneText(target: "mediabox", computers: [], old: "homebox", pending: true)
+        #expect(late.contains("It removes the helper and its logins from homebox when it is back."))
+        let here = PoolMove.doneText(target: nil, computers: [], old: "homebox", pending: false)
+        #expect(here.contains("This Mac runs the helper now."))
+        #expect(!here.contains("reconnect") && !here.contains("Other Macs that use"))
+        #expect(here.contains("Other Macs and computers that use these accounts stop working."))
+        let warning = PoolMove.thisMacWarning(computers: [])
+        #expect(warning.contains("Other Macs and computers that use these accounts stop working."))
+        #expect(!warning.contains("Computers first"))
+        let listed = PoolMove.thisMacWarning(computers: ["linuxpc", "workbox"])
+        #expect(listed.contains("Relaybar removes linuxpc and workbox from Computers first."))
+    }
+
     private func harnessRespondsFree(_ harness: Harness) {
         harness.recorder.respond = { _ in CommandResult(output: "000") }
     }

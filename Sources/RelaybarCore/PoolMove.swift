@@ -416,6 +416,34 @@ extension PoolSetup {
     }
 }
 
+extension PoolMove {
+    static func list(_ names: [String]) -> String {
+        names.count < 2 ? (names.first ?? "") : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+    }
+
+    public static func thisMacWarning(computers: [String]) -> String {
+        var text = "Other Macs and computers that use these accounts stop working. A helper on this Mac cannot be reached from them."
+        if !computers.isEmpty { text += " Relaybar removes \(list(computers)) from Computers first." }
+        return text + " Move the helper to a home computer to use them again."
+    }
+
+    public static func doneText(target: String?, computers: [String], old: String?, pending: Bool) -> String {
+        let cleaned: String
+        switch (old, pending) {
+        case (nil, _): cleaned = ""
+        case (let old?, true):
+            cleaned = " Relaybar could not reach \(old). It removes the helper and its logins from \(old) when it is back."
+        case (let old?, false): cleaned = " Relaybar removed the helper and its logins from \(old)."
+        }
+        guard let target else {
+            return "This Mac runs the helper now." + cleaned + " Other Macs and computers that use these accounts stop working."
+        }
+        let users = list(["This Mac"] + computers)
+        return "\(users) \(computers.isEmpty ? "uses" : "use") \(target) now." + cleaned
+            + " Other Macs that use your accounts reconnect in one click."
+    }
+}
+
 public enum PoolMoveAction: Equatable, Sendable {
     case none
     case undo

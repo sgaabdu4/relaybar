@@ -30,7 +30,7 @@ extension PoolController {
 
     private func performMove(_ target: PoolMoveTarget) async {
         guard let start = state, start.canMoveHelper, !busy else { return }
-        if target == .thisMac, !start.linuxClients.isEmpty {
+        if target == .thisMac {
             let hosts = start.linuxClients.map(\.host)
             guard PoolDialogs.moveToThisMac(hosts: hosts) else { return }
             for host in hosts { await performRemoveComputer(host) }
@@ -122,7 +122,7 @@ extension PoolController {
         let left = report.computersLeft
         let reached = computers.filter { !left.contains($0) }
         let wantsTailscale = PoolDialogs.moved(
-            host: host ?? "this Mac", computers: host == nil ? [] : reached, old: old ?? "this Mac", pending: pending,
+            host: host, computers: host == nil ? [] : reached, old: old ?? "this Mac", pending: pending,
             note: lines.isEmpty ? nil : lines.joined(separator: "\n\n"), tailscale: offer)
         if wantsTailscale { setUpTailscale() }
     }
