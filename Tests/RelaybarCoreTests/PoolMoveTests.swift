@@ -3,6 +3,40 @@ import Testing
 
 @testable import RelaybarCore
 
+final class Credentials: @unchecked Sendable {
+    private let lock = NSLock()
+    private var files: [[String: Any]]
+    private(set) var patches: [(path: String, body: [String: Any])] = []
+
+    init(_ names: [(String, String)]) {
+        files = names.map { kind, email in
+            [
+                "name": "\(kind)-\(email).json", "auth_index": "idx-\(email)", "provider": kind, "email": email, "disabled": false,
+                "status": "active", "priority": 0,
+            ]
+        }
+    }
+
+    func handler(secret: String) -> @Sendable (HTTPRequest) -> HTTPResponse? {
+        { [self] request in
+            guard request.headers["Authorization"] == "Bearer \(secret)" else { return nil }
+            return lock.withLock {
+                let path = request.url.path.replacingOccurrences(of: "/v8/management/", with: "")
+                if request.method == "GET", path == "credentials" { return ok(["files": files]) }
+                guard request.method == "PATCH", let data = request.body,
+                    let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                else { return nil }
+                patches.append((path, body))
+                if let index = files.firstIndex(where: { $0["name"] as? String == body["name"] as? String }) {
+                    if let disabled = body["disabled"] { files[index]["disabled"] = disabled }
+                    if let priority = body["priority"] { files[index]["priority"] = priority }
+                }
+                return ok([:])
+            }
+        }
+    }
+}
+
 final class Backend: @unchecked Sendable {
     private let lock = NSLock()
     private var holder: String?
@@ -439,6 +473,41 @@ struct PoolMoveTests {
         #expect(old.contains { $0.contains("rm -rf \"$HOME/.local/share/relaybar-helper\"") })
         #expect(old.contains { $0.contains("systemctl unmask sleep.target") })
         #expect(keychain.read(service: Pool.accessService) == access)
+    }
+
+    @Test func pausesTheSameAccountsAgain() async throws {
+        let harness = try seeded()
+        let secret = String(repeating: "b2", count: 32)
+        let helper = Credentials([("claude", "ann@example.com"), ("claude", "bob@example.com"), ("codex", "cy@example.com")])
+        harness.http.handler = helper.handler(secret: secret)
+        var state = try #require(PoolState.load(harness.paths))
+        state.order = ["claude": ["bob@example.com", "ann@example.com"]]
+        state.orderMode = .manual
+        try state.save(harness.paths)
+        let paused = PoolCredential(name: "x", authIndex: "i", email: "Bob@Example.com", kind: .claude, disabled: true, status: "disabled")
+        let live = PoolCredential(name: "y", authIndex: "j", email: "ann@example.com", kind: .claude, disabled: false, status: "active")
+        let members = [PoolMember(credential: paused, state: .paused), PoolMember(credential: live, state: .unavailable)]
+        let emails = PoolMove.pausedEmails(in: members)
+        #expect(emails == ["bob@example.com"])
+        try await PoolSetup(env: harness.env()).pauseAgain(emails: emails)
+        let status = helper.patches.filter { $0.path == "credentials/status" }
+        #expect(status.count == 1)
+        #expect(status[0].body["name"] as? String == "claude-bob@example.com.json" && status[0].body["disabled"] as? Bool == true)
+        let priorities = helper.patches.filter { $0.path == "credentials/fields" }
+        #expect(priorities.contains { $0.body["name"] as? String == "claude-bob@example.com.json" && $0.body["priority"] as? Int == 2 })
+        #expect(priorities.contains { $0.body["name"] as? String == "claude-ann@example.com.json" && $0.body["priority"] as? Int == 1 })
+        #expect(PoolState.load(harness.paths)?.order["claude"] == ["bob@example.com", "ann@example.com"])
+
+        let none = Credentials([("claude", "ann@example.com"), ("claude", "bob@example.com")])
+        harness.http.handler = none.handler(secret: secret)
+        try await PoolSetup(env: harness.env()).pauseAgain(emails: [])
+        #expect(none.patches.filter { $0.path == "credentials/status" }.isEmpty)
+        #expect(!none.patches.filter { $0.path == "credentials/fields" }.isEmpty)
+
+        let last = Credentials([("claude", "ann@example.com")])
+        harness.http.handler = last.handler(secret: secret)
+        try await PoolSetup(env: harness.env()).pauseAgain(emails: ["ann@example.com"])
+        #expect(last.patches.filter { $0.path == "credentials/status" }.isEmpty)
     }
 
     private func harnessRespondsFree(_ harness: Harness) {

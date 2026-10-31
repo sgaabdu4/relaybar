@@ -257,6 +257,29 @@ extension PoolSetup {
     }
 }
 
+extension PoolMove {
+    public static func pausedEmails(in members: [PoolMember]) -> [String] {
+        members.compactMap { member in
+            guard case .paused = member.state, !member.credential.email.isEmpty else { return nil }
+            return member.credential.email.lowercased()
+        }
+    }
+}
+
+extension PoolSetup {
+    public func pauseAgain(emails: [String]) async throws {
+        guard let management else { return }
+        let wanted = Set(emails.map { $0.lowercased() })
+        var credentials = try await management.credentials()
+        for credential in credentials where wanted.contains(credential.email.lowercased()) && !credential.disabled {
+            guard PoolAccounts.canPause(credential.name, in: credentials) else { continue }
+            try await management.setPaused(name: credential.name, paused: true)
+            credentials = try await management.credentials()
+        }
+        _ = try await updateOrder(members: credentials.map { PoolUsage.member($0, result: nil) })
+    }
+}
+
 public enum PoolMoveAction: Equatable, Sendable {
     case none
     case undo
