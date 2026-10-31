@@ -923,6 +923,33 @@ struct PoolMoveTests {
         #expect(listed.contains("Relaybar removes linuxpc and workbox from Computers first."))
     }
 
+    @Test func aRetryNeverRemovesTheHelperTwice() async throws {
+        let harness = try Harness()
+        try afterSwitch(harness)
+        harness.recorder.respond = { command in
+            remoteScript(command).contains("systemctl unmask") && command.stdin == nil
+                ? CommandResult(status: PoolRemote.needsPasswordStatus) : CommandResult()
+        }
+        let setup = PoolSetup(env: harness.env())
+        let first = await setup.settleMove()
+        #expect(first.needsPassword == "homebox")
+        #expect(PoolState.load(harness.paths)?.move?.old?.helperRemoved == true)
+        let removals = {
+            harness.recorder.commands.filter { plainScript($0) == PoolTeardown.remoteRemoval && $0.arguments.contains("homebox") }.count
+        }
+        #expect(removals() == 1)
+        harness.recorder.removeCommands()
+        let again = await setup.settleMove()
+        #expect(again.needsPassword == "homebox" && removals() == 0)
+        let stop = PoolSetup(env: harness.env()).stop()
+        #expect(removals() == 0 && stop.needsPassword == "homebox")
+        harness.recorder.respond = { _ in CommandResult() }
+        let done = await setup.settleMove(sudoPassword: "pw")
+        #expect(done == PoolMoveReport() && removals() == 0)
+        #expect(PoolState.load(harness.paths)?.move == nil)
+        #expect(harness.recorder.commands.contains { remoteScript($0).contains("systemctl unmask") && $0.stdin == Data("pw\n".utf8) })
+    }
+
     @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {
         let script = PoolTeardown.remoteRemoval
         #expect(script.contains("[ ! -e \"$HOME/.local/share/relaybar-helper\" ]"))

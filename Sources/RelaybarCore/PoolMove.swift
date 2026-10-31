@@ -264,7 +264,13 @@ extension PoolMove {
         }
         let oldState = old.asState
         do {
-            try PoolTeardown.undo(.remoteHelper, state: oldState, env)
+            if !old.helperRemoved {
+                try PoolTeardown.undo(.remoteHelper, state: oldState, env)
+                if var latest = PoolState.load(env.paths), latest.move?.old != nil {
+                    latest.move?.old?.helperRemoved = true
+                    try? latest.save(env.paths)
+                }
+            }
             try PoolTeardown.undo(.keepOn, state: oldState, env, sudoPassword: sudoPassword)
         } catch PoolKeepOnError.needsPassword(let host) {
             return .needsPassword(host)

@@ -112,11 +112,21 @@ public struct PoolMoveOld: Codable, Equatable, Sendable {
     public var ssh: String?
     public var tailscale: String?
     public var keepOn: PoolKeepOn
+    public var helperRemoved = false
 
-    public init(ssh: String?, tailscale: String?, keepOn: PoolKeepOn) {
+    public init(ssh: String?, tailscale: String?, keepOn: PoolKeepOn, helperRemoved: Bool = false) {
         self.ssh = ssh
         self.tailscale = tailscale
         self.keepOn = keepOn
+        self.helperRemoved = helperRemoved
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        ssh = try values.decodeIfPresent(String.self, forKey: .ssh)
+        tailscale = try values.decodeIfPresent(String.self, forKey: .tailscale)
+        keepOn = try values.decodeIfPresent(PoolKeepOn.self, forKey: .keepOn) ?? PoolKeepOn()
+        helperRemoved = try values.decodeIfPresent(Bool.self, forKey: .helperRemoved) ?? false
     }
 
     public var runsOnThisMac: Bool { ssh == nil }

@@ -37,6 +37,9 @@ struct PoolStateTests {
         #expect(state.orderMode == .automatic)
         #expect(!client.needsRepoint)
         #expect(state.move == nil)
+        #expect(!PoolMoveOld(ssh: "homebox", tailscale: nil, keepOn: PoolKeepOn()).helperRemoved)
+        let oldRecord = #"{"target":"mediabox","phase":"switched","old":{"ssh":"homebox","keepOn":{"linger":true,"masked":[]}}}"#
+        #expect(try JSONDecoder().decode(PoolMove.self, from: Data(oldRecord.utf8)).old?.helperRemoved == false)
         var manual = state
         manual.orderMode = .manual
         try manual.save(harness.paths)
