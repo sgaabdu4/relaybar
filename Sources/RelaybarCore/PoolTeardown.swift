@@ -39,6 +39,19 @@ public enum PoolTeardown {
     ) -> PoolTeardownReport {
         var report = PoolTeardownReport()
         guard var state = PoolState.load(env.paths) else { return report }
+        if state.move != nil {
+            switch PoolMove.settleForStop(state, env, sudoPassword: sudoPassword) {
+            case .done:
+                state.move = nil
+                try? state.save(env.paths)
+            case .needsPassword(let host):
+                report.needsPassword = host
+                report.failed.append((.keepOn, PoolKeepOnError.needsPassword(host).localizedDescription))
+            case .unreachable(let host):
+                report.unreachable = host
+                report.failed.append((.remoteHelper, "\(host) did not answer."))
+            }
+        }
         let reversed = Array(state.steps.reversed())
         for step in reversed.filter({ $0 == .linuxClient }) + reversed.filter({ $0 != .linuxClient }) {
             progress(step)
@@ -57,13 +70,14 @@ public enum PoolTeardown {
                 if case PoolKeepOnError.needsPassword(let host) = error { report.needsPassword = host }
             }
         }
-        if state.steps.isEmpty { PoolFile.remove(env.paths.state) }
+        if state.steps.isEmpty, state.move == nil { PoolFile.remove(env.paths.state) }
         return report
     }
 
     public static func forgetRemote(_ env: PoolEnvironment) -> PoolTeardownReport {
         guard var state = PoolState.load(env.paths) else { return PoolTeardownReport() }
         state.steps.removeAll { $0.isRemote }
+        state.move = nil
         state.keepOn = PoolKeepOn()
         state.linuxClients = []
         if state.steps.isEmpty {

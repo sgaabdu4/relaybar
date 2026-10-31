@@ -602,6 +602,116 @@ struct PoolMoveTests {
         #expect(idle == PoolMoveReport() && harness.recorder.commands.isEmpty)
     }
 
+    private func afterSwitch(_ harness: Harness) throws {
+        var state = PoolState(ssh: "mediabox")
+        state.steps = [.keychainAccessKey, .keychainManagementSecret, .remoteHelper, .tunnelAgent]
+        state.move = PoolMove(
+            target: "mediabox", phase: .switched,
+            old: PoolMoveOld(ssh: "homebox", tailscale: "100.64.0.7", keepOn: PoolKeepOn(linger: true, masked: ["sleep.target"])),
+            claimed: true)
+        try state.save(harness.paths)
+    }
+
+    private func oldComputer(_ harness: Harness, answers: @escaping @Sendable (Command) -> CommandResult) {
+        harness.recorder.respond = { command in
+            command.arguments.contains("homebox") ? answers(command) : CommandResult()
+        }
+    }
+
+    @Test func cleansTheOldComputer() async throws {
+        let harness = try Harness()
+        try afterSwitch(harness)
+        oldComputer(harness) { command in
+            command.arguments.contains("HostName=100.64.0.7") ? CommandResult(status: 255, error: "Connection timed out") : CommandResult()
+        }
+        let report = await PoolSetup(env: harness.env()).settleMove()
+        #expect(report == PoolMoveReport())
+        let ssh = harness.recorder.commands.filter { $0.executable == "/usr/bin/ssh" }
+        let removal = ssh.filter { plainScript($0) == PoolTeardown.remoteRemoval }
+        #expect(removal.count == 2)
+        #expect(removal[0].arguments.contains("HostName=100.64.0.7") && !removal[1].arguments.contains("HostName=100.64.0.7"))
+        #expect(removal.allSatisfy { $0.arguments.contains("homebox") })
+        let restore = ssh.compactMap { command -> String? in
+            let text = remoteScript(command)
+            return text.contains("systemctl unmask sleep.target") ? text : nil
+        }
+        #expect(restore.contains { $0.contains("loginctl disable-linger") })
+        #expect(!ssh.contains { $0.arguments.contains("mediabox") })
+        #expect(PoolState.load(harness.paths)?.move == nil)
+        #expect(PoolState.load(harness.paths)?.ssh == "mediabox")
+    }
+
+    @Test func cleansTheOldComputerWhenItIsBack() async throws {
+        let harness = try Harness()
+        try afterSwitch(harness)
+        let switches = Switches()
+        switches.turnOff("homebox")
+        harness.recorder.respond = { command in
+            command.arguments.contains("homebox") && switches.isOff("homebox")
+                ? CommandResult(status: 255, error: "ssh: connect to host homebox port 22: Connection timed out") : CommandResult()
+        }
+        let setup = PoolSetup(env: harness.env())
+        let first = await setup.settleMove()
+        #expect(first.left == "homebox" && first.needsPassword == nil)
+        var state = try #require(PoolState.load(harness.paths))
+        #expect(state.move?.phase == .switched && state.move?.old?.ssh == "homebox" && state.move?.old?.tailscale == "100.64.0.7")
+        #expect(PoolMove.action(for: state) == .finish)
+        let second = await setup.settleMove()
+        #expect(second.left == "homebox")
+        switches.turnOn("homebox")
+        harness.recorder.respond = { command in
+            command.arguments.contains("homebox") && remoteScript(command).contains("systemctl unmask") && command.stdin == nil
+                ? CommandResult(status: PoolRemote.needsPasswordStatus) : CommandResult()
+        }
+        let asked = await setup.settleMove()
+        #expect(asked.needsPassword == "homebox" && asked.left == nil)
+        state = try #require(PoolState.load(harness.paths))
+        #expect(state.move?.old != nil)
+        harness.recorder.respond = { _ in CommandResult() }
+        let done = await setup.settleMove(sudoPassword: "pw")
+        #expect(done == PoolMoveReport())
+        #expect(harness.recorder.commands.contains { $0.stdin == Data("pw\n".utf8) && $0.arguments.contains("homebox") })
+        state = try #require(PoolState.load(harness.paths))
+        #expect(state.move == nil && state.ssh == "mediabox")
+    }
+
+    @Test func stopAlsoCleansAPendingOldComputer() async throws {
+        let reachable = try Harness()
+        try afterSwitch(reachable)
+        let report = PoolSetup(env: reachable.env()).stop()
+        #expect(report.finished && report.unreachable == nil)
+        #expect(PoolState.load(reachable.paths) == nil)
+        let hosts = Set(reachable.recorder.commands.filter { plainScript($0) == PoolTeardown.remoteRemoval }.flatMap { $0.arguments })
+        #expect(hosts.contains("homebox") && hosts.contains("mediabox"))
+
+        let off = try Harness()
+        try afterSwitch(off)
+        off.recorder.respond = { command in
+            command.arguments.contains("homebox") ? CommandResult(status: 255, error: "Connection timed out") : CommandResult()
+        }
+        let setup = PoolSetup(env: off.env())
+        let stuck = setup.stop()
+        #expect(stuck.unreachable == "homebox" && !stuck.finished)
+        let kept = try #require(PoolState.load(off.paths))
+        #expect(kept.move?.old?.ssh == "homebox" && kept.steps.isEmpty)
+        let forgot = setup.forgetRemote()
+        #expect(forgot.finished)
+        #expect(PoolState.load(off.paths) == nil)
+
+        let preparing = try Harness()
+        var half = PoolState(ssh: "homebox")
+        half.steps = [.keychainAccessKey, .remoteHelper, .tunnelAgent]
+        half.move = PoolMove(
+            target: "mediabox", phase: .preparing, old: PoolMoveOld(ssh: "homebox", tailscale: nil, keepOn: PoolKeepOn()), claimed: true,
+            newKeepOn: PoolKeepOn(linger: true))
+        try half.save(preparing.paths)
+        let both = PoolSetup(env: preparing.env()).stop()
+        #expect(both.finished && PoolState.load(preparing.paths) == nil)
+        let removed = preparing.recorder.commands.filter { plainScript($0) == PoolTeardown.remoteRemoval }.flatMap { $0.arguments }
+        #expect(removed.contains("mediabox") && removed.contains("homebox"))
+        #expect(preparing.recorder.commands.contains { $0.arguments.contains("mediabox") && remoteScript($0).contains("disable-linger") })
+    }
+
     private func harnessRespondsFree(_ harness: Harness) {
         harness.recorder.respond = { _ in CommandResult(output: "000") }
     }
