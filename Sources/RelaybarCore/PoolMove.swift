@@ -11,6 +11,7 @@ public enum PoolMoveError: Error, Equatable, LocalizedError {
     case alreadyHere(String)
     case addedComputer(String)
     case oldStillAnswers
+    case differentSetup
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +19,7 @@ public enum PoolMoveError: Error, Equatable, LocalizedError {
         case .unfinished: return "An earlier move has not finished. Restart Relaybar, or choose Stop combining, then try again."
         case .alreadyHere(let host): return "The helper already runs on \(host). Pick another computer."
         case .addedComputer(let host): return "Remove \(host) from Computers first, then move."
+        case .differentSetup: return "That computer runs a different setup. Use Stop combining, then join it."
         case .oldStillAnswers: return "The old helper did not stop, so Relaybar did not switch. Nothing was changed. Try again."
         }
     }
@@ -403,5 +405,43 @@ extension PoolMove {
         let index = (kept.lastIndex { $0 == .keychainAccessKey || $0 == .keychainManagementSecret }).map { $0 + 1 } ?? 0
         kept.insert(contentsOf: fresh, at: index)
         return kept
+    }
+}
+
+extension PoolSetup {
+    public func findMovedHelper(hosts: [String]) async -> PoolJoinOffer? {
+        guard let state = PoolState.load(env.paths), state.joined, let access = accessKey() else { return nil }
+        let offers = await PoolJoin.findPools(hosts: hosts.filter { $0 != state.ssh }, env: env)
+        for offer in offers {
+            if let found = try? PoolJoin.readSecrets(host: offer.host, run: env.run), found.accessKey == access { return offer }
+        }
+        return nil
+    }
+
+    public func follow(host typed: String) async throws {
+        guard let previous = PoolState.load(env.paths), previous.joined else { throw PoolSetupError.notCombining }
+        guard let access = accessKey(), let management = env.keychain.read(service: Pool.managementService) else {
+            throw PoolSetupError.accessKeyMissing
+        }
+        let host = try PoolHubPicker.validate(typed)
+        let found = try PoolJoin.readSecrets(host: host, run: env.run)
+        guard found == PoolSecrets(accessKey: access, managementSecret: management) else { throw PoolMoveError.differentSetup }
+        var state = previous
+        state.ssh = host
+        state.tailscale = nil
+        let plist = env.paths.agent(Pool.tunnelLabel)
+        let before = PoolFile.contents(plist)
+        do {
+            try PoolFile.write(Data(PoolTunnel.plist(paths: env.paths, destination: host).utf8), to: plist, backup: false)
+            try state.save(env.paths)
+            load(Pool.tunnelLabel)
+            try await waitForHelper(found)
+            try await confirmHelper(found, host: host)
+        } catch {
+            try? previous.save(env.paths)
+            if let before { try? PoolFile.write(Data(before.utf8), to: plist, backup: false) }
+            load(Pool.tunnelLabel)
+            throw error
+        }
     }
 }

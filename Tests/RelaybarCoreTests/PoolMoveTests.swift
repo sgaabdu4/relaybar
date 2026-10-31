@@ -712,6 +712,98 @@ struct PoolMoveTests {
         #expect(preparing.recorder.commands.contains { $0.arguments.contains("mediabox") && remoteScript($0).contains("disable-linger") })
     }
 
+    private func joinedMac(_ secrets: PoolSecrets) throws -> (Harness, Backend) {
+        let harness = try seeded(joined: true)
+        let keychain = harness.env().keychain
+        _ = keychain.store(service: Pool.accessService, secret: secrets.accessKey)
+        _ = keychain.store(service: Pool.managementService, secret: secrets.managementSecret)
+        var state = try #require(PoolState.load(harness.paths))
+        state.steps = [.keychainAccessKey, .keychainManagementSecret, .tunnelAgent, .terminalCommands]
+        try state.save(harness.paths)
+        try PoolFile.write(
+            Data(PoolTunnel.plist(paths: harness.paths, destination: "homebox").utf8), to: harness.paths.agent(Pool.tunnelLabel),
+            backup: false)
+        let backend = Backend()
+        backend.apply(Command("/bin/launchctl", ["bootstrap", "gui/501", harness.paths.agent(Pool.tunnelLabel).path]))
+        harness.http.handler = backend.handler(accessKey: { secrets.accessKey })
+        harness.recorder.removeCommands()
+        return (harness, backend)
+    }
+
+    private func joinFile(_ secrets: PoolSecrets) -> String {
+        String(
+            decoding: json(["accessKey": secrets.accessKey, "managementSecret": secrets.managementSecret]), as: UTF8.self)
+    }
+
+    private func answerHosts(_ harness: Harness, backend: Backend, files: [String: String], home: Set<String> = []) {
+        harness.recorder.respond = { command in
+            backend.apply(command)
+            if command.arguments.first == "-G" {
+                return CommandResult(
+                    output: home.contains(command.arguments.last ?? "") ? "hostname 203.0.113.9\n" : "hostname 192.168.1.20\n")
+            }
+            let host = command.arguments.dropLast().last ?? ""
+            guard command.executable == "/usr/bin/ssh", let file = files[host] else {
+                return command.executable == "/usr/bin/ssh" ? CommandResult(status: 255, error: "Connection refused") : CommandResult()
+            }
+            return CommandResult(output: remoteScript(command).hasPrefix("test -f") ? "pool\n" : file)
+        }
+    }
+
+    @Test func aJoinedMacFindsTheMovedHelper() async throws {
+        let mine = PoolSecrets(accessKey: String(repeating: "a1", count: 32), managementSecret: String(repeating: "b2", count: 32))
+        let other = PoolSecrets(accessKey: String(repeating: "c3", count: 32), managementSecret: String(repeating: "d4", count: 32))
+        let (harness, backend) = try joinedMac(mine)
+        answerHosts(
+            harness, backend: backend,
+            files: ["workbox": joinFile(other), "mediabox": joinFile(mine), "linuxpc": "not json"], home: ["faraway"])
+        let setup = PoolSetup(env: harness.env())
+        let offer = await setup.findMovedHelper(hosts: ["homebox", "faraway", "linuxpc", "workbox", "mediabox"])
+        #expect(offer == PoolJoinOffer(host: "mediabox"))
+        #expect(!harness.recorder.commands.contains { $0.executable == "/usr/bin/security" && $0.arguments == ["-i"] })
+        let probes = harness.recorder.commands.filter { $0.arguments.first != "-G" }
+        #expect(!probes.contains { $0.arguments.contains("homebox") || $0.arguments.contains("faraway") })
+        let none = await setup.findMovedHelper(hosts: ["workbox", "linuxpc"])
+        #expect(none == nil)
+        let before = try #require(PoolState.load(harness.paths))
+        try await setup.follow(host: "mediabox")
+        let state = try #require(PoolState.load(harness.paths))
+        #expect(state.ssh == "mediabox" && state.tailscale == nil && state.joined)
+        #expect(state.steps == before.steps)
+        #expect(tunnelText(harness).contains("<string>mediabox</string>") && backend.served == "mediabox")
+        let keychain = harness.env().keychain
+        #expect(keychain.read(service: Pool.accessService) == mine.accessKey)
+        let files = try FileManager.default.subpathsOfDirectory(atPath: harness.paths.appSupport.path)
+        for file in files where !file.hasSuffix("/") {
+            let text = try? String(contentsOf: harness.paths.appSupport.appendingPathComponent(file), encoding: .utf8)
+            #expect(text?.contains(other.accessKey) != true)
+        }
+    }
+
+    @Test func aJoinedMacRefusesADifferentHelper() async throws {
+        let mine = PoolSecrets(accessKey: String(repeating: "a1", count: 32), managementSecret: String(repeating: "b2", count: 32))
+        let other = PoolSecrets(accessKey: String(repeating: "c3", count: 32), managementSecret: String(repeating: "d4", count: 32))
+        let sameKeyOtherSecret = PoolSecrets(accessKey: mine.accessKey, managementSecret: other.managementSecret)
+        let (harness, backend) = try joinedMac(mine)
+        answerHosts(
+            harness, backend: backend,
+            files: ["workbox": joinFile(other), "tricky": joinFile(sameKeyOtherSecret), "mediabox": joinFile(mine)])
+        let setup = PoolSetup(env: harness.env())
+        let before = try #require(PoolState.load(harness.paths))
+        let plist = tunnelText(harness)
+        await #expect(throws: PoolMoveError.differentSetup) { try await setup.follow(host: "workbox") }
+        await #expect(throws: PoolMoveError.differentSetup) { try await setup.follow(host: "tricky") }
+        #expect(PoolMoveError.differentSetup.errorDescription == "That computer runs a different setup. Use Stop combining, then join it.")
+        #expect(PoolState.load(harness.paths) == before && tunnelText(harness) == plist && backend.served == "homebox")
+        backend.refuse = "mediabox"
+        await #expect(throws: PoolSetupError.notAnswering) { try await setup.follow(host: "mediabox") }
+        backend.refuse = nil
+        #expect(PoolState.load(harness.paths) == before && tunnelText(harness) == plist && backend.served == "homebox")
+        await #expect(throws: PoolInputError.self) { try await setup.follow(host: "-x") }
+        let owner = try seeded()
+        await #expect(throws: PoolSetupError.notCombining) { try await PoolSetup(env: owner.env()).follow(host: "mediabox") }
+    }
+
     private func harnessRespondsFree(_ harness: Harness) {
         harness.recorder.respond = { _ in CommandResult(output: "000") }
     }
