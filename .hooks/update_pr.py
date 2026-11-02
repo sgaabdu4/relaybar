@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from gate_config import JsonValue
+from review_bypass import author_only_review_block
 from shipping import ShippingError, gh, load_policy
 from update_runner import (
     UPDATE_BRANCH,
@@ -67,7 +68,7 @@ def open_pull(root: Path) -> dict[str, JsonValue] | None:
             "--state",
             "open",
             "--json",
-            "url,title,statusCheckRollup,headRefOid,isCrossRepository",
+            "url,title,statusCheckRollup,headRefOid,isCrossRepository,mergeStateStatus",
         )
     )
     if not isinstance(rows, list):
@@ -139,6 +140,20 @@ def unfinished_update(root: Path, tip: str) -> bool:
     if ahead.returncode != 0 or int(ahead.stdout) <= 1:
         return False
     return not landed(root, tip, f"refs/heads/{UPDATE_BRANCH}")
+
+
+def merged_update(root: Path, tip: str) -> bool:
+    """The update branch holds nothing the base lacks, so it is left over from a merged update."""
+    branch = f"refs/heads/{UPDATE_BRANCH}"
+    ahead = git_lines(
+        root,
+        "rev-list",
+        "--count",
+        "--right-only",
+        "--cherry-pick",
+        f"{tip}...{branch}",
+    )
+    return ahead == ["0"] or landed(root, tip, branch)
 
 
 def fix_steps(root: Path) -> str:
@@ -243,7 +258,14 @@ def replaceable_remote(root: Path, base: str) -> str | None:
     return None
 
 
-def settle(root: Path, url: str, head: str, state: str, merge: bool) -> int:
+def settle(
+    root: Path,
+    url: str,
+    head: str,
+    state: str,
+    merge: bool,
+    pull: dict[str, JsonValue] | None,
+) -> int:
     print(f"Hard Eng update PR {url}: checks {state}.")
     if state == "failing":
         print(fix_steps(root))
@@ -254,7 +276,14 @@ def settle(root: Path, url: str, head: str, state: str, merge: bool) -> int:
             f"Not merged yet. Run `{UPDATE_COMMAND}{option}` again once the checks pass."
         )
         return 0
-    merging = ["pr", "merge", url, "--auto", merge_method(root)]
+    waiting = "--auto"
+    if (pull or {}).get("mergeStateStatus") == "BLOCKED":
+        problem = author_only_review_block(root, url, head)
+        if problem is None:
+            waiting = "--admin"
+        else:
+            print(f"Auto-merge waits for the PR's merge rules: {problem}.")
+    merging = ["pr", "merge", url, waiting, merge_method(root)]
     merging += ["--match-head-commit", head]
     if not merge:
         print(
@@ -272,10 +301,14 @@ def publish(root: Path, merge: bool = True) -> int:
     tip = fetch_base(root, base)
     current = revision_at(root, tip)
     revision = revision_at(root, f"refs/heads/{UPDATE_BRANCH}")
-    if revision is None or (
-        revision != current
-        and not unfinished_update(root, tip)
-        and not branch_current(root, tip)
+    if (
+        revision is None
+        or (revision == current and merged_update(root, tip))
+        or (
+            revision != current
+            and not unfinished_update(root, tip)
+            and not branch_current(root, tip)
+        )
     ):
         print(locked_update(root))
         revision = revision_at(root, f"refs/heads/{UPDATE_BRANCH}")
@@ -340,4 +373,4 @@ def publish(root: Path, merge: bool = True) -> int:
     )
     if pull is not None and pull.get("headRefOid") != head:
         state = "pending"
-    return settle(root, url, head, state, merge)
+    return settle(root, url, head, state, merge, pull)
