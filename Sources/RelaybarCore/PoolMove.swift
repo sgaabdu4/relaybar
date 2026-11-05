@@ -325,10 +325,13 @@ extension PoolSetup {
         guard let management else { return }
         let wanted = Set(emails.map { $0.lowercased() })
         var credentials = try await management.credentials()
-        for credential in credentials where wanted.contains(credential.email.lowercased()) && !credential.disabled {
-            guard PoolAccounts.canPause(credential.name, in: credentials) else { continue }
-            try await management.setPaused(name: credential.name, paused: true)
-            credentials = try await management.credentials()
+        var tried: Set<String> = []
+        while let next = credentials.first(where: { wanted.contains($0.email.lowercased()) && !$0.disabled && !tried.contains($0.name) }) {
+            tried.insert(next.name)
+            if PoolAccounts.canPause(next.name, in: credentials) {
+                try await management.setPaused(name: next.name, paused: true)
+                credentials = try await management.credentials()
+            }
         }
         _ = try await updateOrder(members: credentials.map { PoolUsage.member($0, result: nil) })
     }
