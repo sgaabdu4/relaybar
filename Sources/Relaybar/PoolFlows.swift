@@ -531,7 +531,10 @@ extension PoolController {
             let missing = Set(PoolAccounts.rows(accounts: current, members: members).filter { $0.state == .notInHelper }.map(\.account.id))
             let offers = PoolAccounts.offers(known: Set(saved), current: current).filter { missing.contains($0.account.id) }
             markKnown()
-            for offer in offers where PoolDialogs.offer(offer) { await signIn(offer.account) }
+            for offer in offers where PoolDialogs.offer(offer) {
+                guard state != nil else { return }
+                await signIn(offer.account)
+            }
         }
     }
 }
