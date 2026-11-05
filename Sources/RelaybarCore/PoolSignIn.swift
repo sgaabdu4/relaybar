@@ -305,9 +305,13 @@ public struct PoolSignIn: Sendable {
         else { return result }
         let wrong = logins.filter { $0.kind == row.kind && $0.email.lowercased() == key }
         await withTaskGroup(of: Void.self) { group in
-            wrong.forEach { login in group.addTask { try? await management.signOut(name: login.name) } }
+            for login in wrong { group.addTask { [management] in await Self.signOut(login.name, management: management) } }
         }
         return result
+    }
+
+    private static func signOut(_ name: String, management: PoolManagement) async {
+        try? await management.signOut(name: name)
     }
 
     public static func outcome(before: [PoolCredential], after: [PoolCredential], kind: PoolKind) -> SignInOutcome {
