@@ -92,20 +92,24 @@ public enum PoolOrder {
     }
 
     public static func apply(_ plan: PoolPlan, management: PoolManagement) async throws {
-        for change in plan.changes { try await management.setPriority(name: change.name, priority: change.priority) }
+        try await apply(plan.changes, management: management)
+    }
+
+    static func apply(_ changes: [PoolPriority], management: PoolManagement) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            changes.forEach { change in group.addTask { try await management.setPriority(name: change.name, priority: change.priority) } }
+            try await group.waitForAll()
+        }
     }
 }
 
 extension PoolSetup {
     public func updateOrder(members: [PoolMember]) async throws -> [PoolPlan] {
         guard let state = PoolState.load(env.paths), !state.joined, let management else { return [] }
-        var plans: [PoolPlan] = []
-        for kind in [PoolKind.claude, .codex] {
-            let plan = PoolOrder.plan(
-                kind: kind, members: members, saved: state.order[kind.rawValue] ?? [], mode: state.orderMode)
-            try await PoolOrder.apply(plan, management: management)
-            plans.append(plan)
+        let plans = [PoolKind.claude, .codex].map { kind in
+            PoolOrder.plan(kind: kind, members: members, saved: state.order[kind.rawValue] ?? [], mode: state.orderMode)
         }
+        try await PoolOrder.apply(plans.flatMap(\.changes), management: management)
         guard var latest = PoolState.load(env.paths) else { return plans }
         for plan in plans where latest.orderMode == state.orderMode && latest.order[plan.kind.rawValue] == state.order[plan.kind.rawValue] {
             latest.order[plan.kind.rawValue] = plan.savedOrder
