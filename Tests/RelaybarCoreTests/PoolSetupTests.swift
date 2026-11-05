@@ -90,6 +90,16 @@ struct PoolSetupTests {
         #expect(harness.trashed.urls.isEmpty)
     }
 
+    @Test func aCodexPlusOfAnotherProgramLeavesNoClaudePlus() async throws {
+        let harness = try seeded()
+        helperLifecycle(harness)
+        try FileManager.default.createDirectory(at: harness.paths.codexPlus.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("mine\n".utf8).write(to: harness.paths.codexPlus)
+        await #expect(throws: (any Error).self) { try await PoolSetup(env: harness.env()).combineOnThisMac() }
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.claudePlus.path))
+        #expect(try String(contentsOf: harness.paths.codexPlus, encoding: .utf8) == "mine\n")
+    }
+
     @Test func skipsT3WhenItIsNotInstalled() async throws {
         let harness = try seeded()
         helperLifecycle(harness)

@@ -307,10 +307,10 @@ public struct PoolSetup: Sendable {
     private func finishLocal(secrets: PoolSecrets, state: inout PoolState, progress: @Sendable (String) -> Void) async throws {
         let paths = env.paths
         progress("Setting up claude+ and codex+")
-        try PoolFile.writeOwned(PoolConfig.claudePlus(), to: paths.claudePlus, executable: true)
-        try PoolFile.writeOwned(PoolConfig.codexPlus(), to: paths.codexPlus, executable: true)
         state.record(.terminalCommands)
         try state.save(paths)
+        try PoolFile.writeOwned(PoolConfig.claudePlus(), to: paths.claudePlus, executable: true)
+        try PoolFile.writeOwned(PoolConfig.codexPlus(), to: paths.codexPlus, executable: true)
         guard env.t3Installed else { return }
         progress("Adding Claude+ and Codex+ to T3 Code")
         let t3 = env.t3
