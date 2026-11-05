@@ -87,7 +87,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func refresh(_ account: Account) {
+    func refresh(_ account: Account) {
         Task {
             await account.refresh()
             redraw()

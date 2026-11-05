@@ -108,6 +108,7 @@ final class PoolController: NSObject {
             guard started == generation else { return }
             reachable = false
             reachReason = nil
+            showUsage([:])
             return app.redraw()
         }
         do {
@@ -156,7 +157,11 @@ final class PoolController: NSObject {
     }
 
     private func showUsage(_ usage: [String: MemberState]) {
-        for account in app.accounts { account.usePool(usage[account.id]) }
+        for account in app.accounts {
+            let was = account.pooled
+            account.usePool(usage[account.id])
+            if was, !account.pooled { app.refresh(account) }
+        }
     }
 
     func status(for account: Account) -> PoolStatus? {
