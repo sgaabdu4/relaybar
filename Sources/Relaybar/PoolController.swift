@@ -150,6 +150,11 @@ final class PoolController: NSObject {
         return item
     }
 
+    func showCachedUsage() {
+        guard loaded, reachable else { return }
+        showUsage(PoolUsage.cardUsage(accounts: inputs(), members: members))
+    }
+
     private func showUsage(_ usage: [String: MemberState]) {
         for account in app.accounts { account.usePool(usage[account.id]) }
     }
