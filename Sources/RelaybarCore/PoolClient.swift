@@ -640,7 +640,11 @@ extension PoolJoin {
                 "u=$(id -un); { loginctl disable-linger \"$u\" 2>/dev/null || sudo -n loginctl disable-linger \"$u\" 2>/dev/null; }; "
                     + "[ \"$(loginctl show-user \"$u\" -p Linger --value 2>/dev/null)\" = yes ] && echo linger:stays")
         }
-        let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; true"))
+        let check =
+            "if [ ! -e \"$HOME/.config/systemd/user/relaybar-tunnel.service\" ] && [ ! -e \"\(config)/access-key\" ] "
+            + "&& ! { command -v pgrep >/dev/null 2>&1 && pgrep -f \"$HOME/.config/relaybar/hub_key\" >/dev/null 2>&1; }; then :; "
+            + "else echo \"failed: the Relaybar tunnel is still on this computer\" >&2; exit 1; fi"
+        let result = run(PoolSSH.command(host: client.host, script: steps.joined(separator: "; ") + "; " + check))
         if !result.succeeded { problem = problem ?? PoolSSHError.failed(PoolHubPicker.explain(result.error, host: client.host)) }
         if let problem { throw problem }
         removal.lingerStays = result.output.contains("linger:stays")

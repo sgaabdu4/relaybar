@@ -365,6 +365,26 @@ extension PoolJoinTests {
             })
     }
 
+    @Test func removeKeepsAComputerWhoseTunnelFilesStay() throws {
+        let fixture = try Fixture()
+        let unit = ".config/systemd/user/relaybar-tunnel.service"
+        try fixture.write(unit, "x")
+        try fixture.write(".config/relaybar/access-key", "x")
+        let units = fixture.root.appendingPathComponent(".config/systemd/user")
+        let recorder = Recorder()
+        recorder.respond = { command in
+            let script = plainScript(command)
+            guard script.contains("disable --now relaybar-tunnel.service") else { return CommandResult() }
+            return PoolProcess.run(Command("/bin/sh", ["-c", script], environment: ["HOME": fixture.root.path, "PATH": "/usr/bin:/bin"]))
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: units.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: units.path) }
+        #expect(throws: PoolSSHError.self) { try PoolJoin.removeLinuxClient(PoolLinuxClient(host: "laptop"), run: recorder.runner) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: units.path)
+        try PoolJoin.removeLinuxClient(PoolLinuxClient(host: "laptop"), run: recorder.runner)
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(unit).path))
+    }
+
     @Test func removeEndsTheT3CodeLink() async throws {
         var installed = PoolLinuxClient(host: "laptop")
         installed.t3Installed = true
