@@ -41,7 +41,10 @@ extension PoolController {
         if target == .thisMac {
             let hosts = start.linuxClients.map(\.host)
             guard PoolDialogs.moveToThisMac(hosts: hosts) else { return false }
-            for host in hosts { await removeComputerWork(host) }
+            for host in hosts {
+                await removeComputerWork(host)
+                guard state?.linuxClients.contains(where: { $0.host == host }) == false else { return false }
+            }
             guard state?.linuxClients.isEmpty == true else { return false }
         }
         let setup = PoolSetup(env: environment())
