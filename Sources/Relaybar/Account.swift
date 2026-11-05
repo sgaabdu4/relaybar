@@ -75,6 +75,7 @@ final class Account {
         case .claude(let service): result = await Fetch.claude(service: service)
         case .codex(let authFile): result = await Fetch.codex(authFile: authFile)
         }
+        guard !pooled else { return }
         apply(result)
     }
 
