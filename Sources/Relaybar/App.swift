@@ -5,18 +5,20 @@ import Sparkle
 
 @MainActor
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private var accounts: [Account] = []
+    private(set) var accounts: [Account] = []
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let toast = Toast()
     private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private var watcher: Watcher?
     private var cards: [AccountCard] = []
+    private lazy var pool = PoolController(app: self)
     private var timer: Timer?
     private var waitingForLogin: Timer?
     private var logins: [Process] = []
     private let activeGap: TimeInterval = 60
     private let idleInterval: TimeInterval = 300
-    private let claudeLogo = App.logo("claude")
-    private let codexLogo = App.logo("codex")
+    let claudeLogo = App.logo("claude")
+    let codexLogo = App.logo("codex")
 
     private static func logo(_ name: String) -> NSImage {
         Bundle.main.url(forResource: name, withExtension: "svg").flatMap(NSImage.init(contentsOf:)) ?? NSImage()
@@ -29,6 +31,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
         reload()
+        pool.start()
         timer = Timer.scheduledTimer(withTimeInterval: idleInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -36,6 +39,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func tick() {
+        pool.tick()
         let known = Set(accounts.map(\.id))
         if Set(visibleAccounts().map(\.id)) != known {
             reload()
@@ -92,7 +96,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func redraw() {
+    func redraw() {
         let parts = accounts.map { account in
             let lines = [account.session, account.weekly].compactMap { $0.map { ("\($0.left)", account.tint.color(for: $0)) } }
             return Render.image(
@@ -106,17 +110,23 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         cards = []
+        pool.menuOpened()
+        for item in pool.topItems() { menu.addItem(item) }
         for account in accounts {
             if Date().timeIntervalSince(account.lastFetch) > activeGap { refresh(account) }
-            let card = AccountCard(account: account, logo: logo(for: account), opens: appToOpen(for: account)) { path in
-                NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration())
-            }
+            let card = AccountCard(
+                account: account, logo: logo(for: account), opens: appToOpen(for: account),
+                status: { [pool] in pool.status(for: account) },
+                open: { path in
+                    NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: NSWorkspace.OpenConfiguration())
+                })
             cards.append(card)
             let item = NSMenuItem()
             item.view = card
             menu.addItem(item)
         }
-        menu.addItem(.separator())
+        if menu.items.last?.isSeparatorItem != true { menu.addItem(.separator()) }
+        for item in pool.entryItems() { menu.addItem(item) }
         menu.addItem(customizeItem())
         let add = NSMenuItem(title: "Add account", action: nil, keyEquivalent: "")
         add.submenu = NSMenu()
@@ -281,7 +291,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return path.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
     }
 
-    private func logo(for account: Account) -> NSImage {
+    func logo(for account: Account) -> NSImage {
         account.isClaude ? claudeLogo : codexLogo
     }
 
@@ -329,6 +339,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func addCodex() {
         addAccount(.codex)
+    }
+
+    func chooseAndAddAccount() {
+        let alert = NSAlert()
+        alert.messageText = "Add an account"
+        alert.informativeText = "Which tool is the account for?"
+        alert.addButton(withTitle: "Claude")
+        alert.addButton(withTitle: "Codex")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate()
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: addAccount(.claude)
+        case .alertSecondButtonReturn: addAccount(.codex)
+        default: break
+        }
     }
 
     private func addAccount(_ kind: DesktopApp.Kind) {
@@ -467,6 +492,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if !Set(self.visibleAccounts().map(\.id)).subtracting(known).isEmpty {
                     timer.invalidate()
                     self.reload()
+                    self.pool.accountAppeared()
                 } else if Date().timeIntervalSince(started) > 900 {
                     timer.invalidate()
                 }
@@ -474,7 +500,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func openTerminal(_ body: String) {
+    func openTerminal(_ body: String) {
         let shell = loginShell
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("relaybar-login-\(UUID().uuidString).command")
         do {
@@ -498,11 +524,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func show(_ title: String, _ text: String) {
+    func note(_ title: String, _ detail: String, mark: Toast.Mark) {
+        toast.show(title, detail, mark: mark, under: item.button)
+    }
+
+    func show(_ title: String, _ text: String) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text
         NSApp.activate()
+        alert.window.level = .floating
+        alert.window.orderFrontRegardless()
         alert.runModal()
     }
 

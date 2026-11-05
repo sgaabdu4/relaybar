@@ -13,6 +13,29 @@ enum T3Code {
         }
     }
 
+    static var channel: T3Channel {
+        let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
+        for folder in ["/Applications", home] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
+            guard let name = names.sorted().first(where: { $0.hasPrefix("T3 Code") && $0.hasSuffix(".app") }) else { continue }
+            let plist = NSDictionary(contentsOfFile: folder + "/" + name + "/Contents/Info.plist")
+            return T3Channel.detect(version: plist?["CFBundleShortVersionString"] as? String ?? "")
+        }
+        return .stable
+    }
+
+    static func open() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
+        for folder in ["/Applications", home] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
+            if let name = names.sorted().first(where: { $0.hasPrefix("T3 Code") && $0.hasSuffix(".app") }) {
+                let app = URL(fileURLWithPath: folder + "/" + name)
+                NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+                return
+            }
+        }
+    }
+
     static func contains(homePath: String) -> Bool {
         settings.contains(homePath: homePath)
     }
