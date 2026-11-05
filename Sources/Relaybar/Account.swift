@@ -12,6 +12,7 @@ final class Account {
     private(set) var session: Window?
     private(set) var weekly: Window?
     private(set) var stale = false
+    private(set) var pooled = false
     private(set) var lastFetch = Date.distantPast
     var refreshQueued = false
     private var retryAt = Date.distantPast
@@ -57,14 +58,24 @@ final class Account {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "color:" + id) }
     }
 
+    func usePool(_ state: MemberState?) {
+        pooled = state != nil
+        switch state {
+        case .active(let session, let weekly): apply(.ok(session: session, weekly: weekly))
+        case .paused, .signedOut, .unavailable: stale = false
+        case nil: break
+        }
+    }
+
     func refresh() async {
-        guard Date() >= retryAt else { return }
+        guard !pooled, Date() >= retryAt else { return }
         lastFetch = Date()
         let result: FetchResult
         switch provider {
         case .claude(let service): result = await Fetch.claude(service: service)
         case .codex(let authFile): result = await Fetch.codex(authFile: authFile)
         }
+        guard !pooled else { return }
         apply(result)
     }
 

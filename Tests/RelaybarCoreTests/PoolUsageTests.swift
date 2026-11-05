@@ -17,6 +17,22 @@ struct PoolUsageTests {
         .ok(session: Window(used: used, resetsAt: resets), weekly: weekly.map { Window(used: $0, resetsAt: later) })
     }
 
+    @Test func cardsOfCombinedAccountsUseTheHelpersUsage() {
+        let members = [
+            PoolUsage.member(credential("work@example.com"), result: active(20, weekly: 7)),
+            PoolUsage.member(credential("me@example.com", .codex), result: nil),
+        ]
+        let accounts = [
+            PoolAccountInput(id: "wk", kind: .claude, name: "WK", email: "Work@Example.com"),
+            PoolAccountInput(id: "cx", kind: .codex, name: "CX", email: "me@example.com"),
+            PoolAccountInput(id: "me", kind: .claude, name: "ME", email: "me@example.com"),
+        ]
+        let usage = PoolUsage.cardUsage(accounts: accounts, members: members)
+        #expect(usage["wk"] == .active(session: Window(used: 20, resetsAt: nil), weekly: Window(used: 7, resetsAt: later)))
+        #expect(usage["cx"] == .unavailable)
+        #expect(usage["me"] == nil)
+    }
+
     @Test func averagesSignedInMembers() {
         let members = [
             PoolUsage.member(credential("a@example.com"), result: active(20, resets: later, weekly: 10)),

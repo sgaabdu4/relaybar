@@ -50,6 +50,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func reload() {
         accounts = visibleAccounts()
+        pool.showCachedUsage()
         watcher = Watcher(paths: accounts.map(\.watchPath)) { [weak self] paths in
             MainActor.assumeIsolated { self?.filesChanged(paths) }
         }
@@ -61,6 +62,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for account in accounts {
             let touched = paths.filter { $0.hasPrefix(account.id + "/") }
             guard !touched.isEmpty else { continue }
+            guard !account.pooled else { continue }
             if !account.isClaude, let folder = touched.last, let result = Fetch.newestCodexLog(in: URL(fileURLWithPath: folder)) {
                 account.apply(result)
                 redraw()
@@ -85,11 +87,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func refresh(_ account: Account) {
+    func refresh(_ account: Account) {
         Task {
             await account.refresh()
             redraw()
-            if account.session == nil, account.weekly == nil {
+            if !account.pooled, account.session == nil, account.weekly == nil {
                 try? await Task.sleep(for: .seconds(15))
                 if accounts.contains(where: { $0 === account }) { refresh(account) }
             }

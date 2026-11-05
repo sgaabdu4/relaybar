@@ -62,6 +62,17 @@ public enum PoolUsage {
         return CombinedWindow(left: (total + windows.count / 2) / windows.count, resetsAt: soonest)
     }
 
+    public static func cardUsage(accounts: [PoolAccountInput], members: [PoolMember]) -> [String: MemberState] {
+        var usage: [String: MemberState] = [:]
+        for account in accounts {
+            guard let email = account.email?.lowercased(), !email.isEmpty,
+                let member = members.first(where: { $0.credential.kind == account.kind && $0.credential.email.lowercased() == email })
+            else { continue }
+            usage[account.id] = member.state
+        }
+        return usage
+    }
+
     public static func fetch(management: PoolManagement, credentials: [PoolCredential]) async -> [PoolMember] {
         await withTaskGroup(of: (Int, PoolMember).self) { group in
             for (index, credential) in credentials.enumerated() {
