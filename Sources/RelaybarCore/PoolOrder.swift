@@ -96,9 +96,19 @@ public enum PoolOrder {
     }
 
     static func apply(_ changes: [PoolPriority], management: PoolManagement) async throws {
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            changes.forEach { change in group.addTask { try await management.setPriority(name: change.name, priority: change.priority) } }
-            try await group.waitForAll()
+        let failure = await withTaskGroup(of: (any Error)?.self) { group in
+            for change in changes { group.addTask { await write(change, management: management) } }
+            return await group.first { $0 != nil } ?? nil
+        }
+        if let failure { throw failure }
+    }
+
+    private static func write(_ change: PoolPriority, management: PoolManagement) async -> (any Error)? {
+        do {
+            try await management.setPriority(name: change.name, priority: change.priority)
+            return nil
+        } catch {
+            return error
         }
     }
 }
