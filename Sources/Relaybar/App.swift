@@ -89,7 +89,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             await account.refresh()
             redraw()
-            if account.session == nil, account.weekly == nil {
+            if !account.pooled, account.session == nil, account.weekly == nil {
                 try? await Task.sleep(for: .seconds(15))
                 if accounts.contains(where: { $0 === account }) { refresh(account) }
             }

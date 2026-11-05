@@ -68,6 +68,7 @@ final class PoolController: NSObject {
     }
 
     func clearCache() {
+        showUsage([:])
         members = []
         loaded = false
         reachable = true
@@ -115,6 +116,7 @@ final class PoolController: NSObject {
             guard started == generation else { return }
             members = fetched
             loaded = true
+            showUsage(PoolUsage.cardUsage(accounts: inputs(), members: members))
             reachable = true
             reachReason = nil
             movedOffer = nil
@@ -124,6 +126,7 @@ final class PoolController: NSObject {
             guard started == generation else { return }
             reachable = false
             reachReason = reason
+            showUsage([:])
             await lookForMovedHelper()
         }
         guard started == generation else { return }
@@ -145,6 +148,10 @@ final class PoolController: NSObject {
         item.isEnabled = false
         if let reachReason { subtitle(item, reachReason) }
         return item
+    }
+
+    private func showUsage(_ usage: [String: MemberState]) {
+        for account in app.accounts { account.usePool(usage[account.id]) }
     }
 
     func status(for account: Account) -> PoolStatus? {
