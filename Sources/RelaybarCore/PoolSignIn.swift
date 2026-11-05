@@ -303,8 +303,9 @@ public struct PoolSignIn: Sendable {
         guard !accounts.contains(where: { $0.kind == row.kind && $0.email?.lowercased() == key }),
             let logins = try? await management.credentials()
         else { return result }
-        for login in logins where login.kind == row.kind && login.email.lowercased() == key {
-            try? await management.signOut(name: login.name)
+        let wrong = logins.filter { $0.kind == row.kind && $0.email.lowercased() == key }
+        await withTaskGroup(of: Void.self) { group in
+            wrong.forEach { login in group.addTask { try? await management.signOut(name: login.name) } }
         }
         return result
     }
