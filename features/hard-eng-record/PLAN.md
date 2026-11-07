@@ -4,11 +4,11 @@ Status: Complete
 
 ## Outcome + scope
 
-Hard Eng's history was rewritten on 2026-11-07 to remove private names from its plan files. The release this project records got a new ID, so Hard Eng updates would fail with "not older than". The record now names the new ID of the same release. Non-goals: a Hard Eng update, other files.
+Hard Eng's history was rewritten on 2026-11-07 to remove private names from its plan files. The release this project records got a new ID, so Hard Eng updates would fail with "not older than". The record now names the new ID of the same release. The record change makes the gate scan every file, and it found two loops in `PoolFlows.swift` that wait on each computer in turn without a named order. Each computer shows its own dialog, so they now run through `inOrder` with that reason. Non-goals: a Hard Eng update, other files.
 
 ## Repository context
 
-Owners: `.hooks/hard-eng-source.json` (installed release record).
+Owners: `.hooks/hard-eng-source.json` (installed release record); `Sources/Relaybar/PoolFlows.swift` + `InOrder.swift` (per-computer dialog loops).
 Same cause: N/A — one record; the old and new release differ only in Hard Eng plan files that are never installed.
 
 ## Decisions + authorization
@@ -21,13 +21,14 @@ Decision: change only the recorded revision; the installed files already match t
 ## Acceptance + steps
 
 - [x] The record names a release on Hard Eng main with the same installed files → N/A — proven by `python3 .hooks/hard-eng.py update` after merge, not a project test.
+- [x] The dialog loops keep their order and pass the security gate → N/A — proven by the `security` gate and the existing flow tests, not a new test.
 - [x] The project's gates still pass → N/A — proven by `python3 .hooks/hard-eng.py check` and CI, not a new test.
 
 ## Baseline + execution
 
 Result: Passed
 Evidence: the same update in another project failed on 2026-11-07 with "Recorded Hard Eng release … is not older than …"; main passed its required CI.
-Execution: one session; edit the record, full check, PR, merge on green.
+Execution: one session; edit the record, repair each gate finding as its own commit, full check, PR, merge on green.
 
 ## Risks + recovery
 
