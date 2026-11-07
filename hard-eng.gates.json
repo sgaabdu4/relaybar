@@ -51,23 +51,17 @@
         {
           "name": "tests",
           "role": "swift-tests",
-          "command": [
-            "scripts/test.sh"
-          ]
+          "command": ["scripts/test.sh"]
         },
         {
           "name": "build",
           "role": "build",
-          "command": [
-            "./build.sh"
-          ]
+          "command": ["./build.sh"]
         },
         {
           "name": "efficiency",
           "role": "efficiency",
-          "command": [
-            "scripts/efficiency.sh"
-          ]
+          "command": ["scripts/efficiency.sh"]
         }
       ]
     }
@@ -123,8 +117,6 @@
         "scan",
         "--config",
         "p/default",
-        "--exclude=.agents",
-        "--exclude=.hooks",
         "--jobs",
         "2",
         "--error",
@@ -161,10 +153,7 @@
       "name": "actionlint",
       "role": "workflows",
       "parallel": true,
-      "command": [
-        "actionlint",
-        "-no-color"
-      ]
+      "command": ["actionlint", "-no-color"]
     },
     {
       "name": "zizmor",
@@ -181,14 +170,8 @@
   ],
   "shipping": {
     "base": "main",
-    "checks": [
-      "hard-eng"
-    ],
-    "ui_paths": [
-      "Sources/Relaybar/*",
-      "Resources/*",
-      "Info.plist"
-    ],
+    "checks": ["hard-eng"],
+    "ui_paths": ["Sources/Relaybar/*", "Resources/*", "Info.plist"],
     "ci_seconds": 900,
     "pre_push_seconds": 600,
     "delivery": []

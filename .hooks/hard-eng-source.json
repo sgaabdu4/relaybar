@@ -1,3 +1,18 @@
 {
-  "revision": "9775c151a80cb992310ae0bc2c5e97d6a43f4dc2"
+  "revision": "eaadbd34d486b00abb00ab64d7f7df59886c31c7",
+  "skills": [
+    "code-review",
+    "codebase-design",
+    "e2e",
+    "he",
+    "he-build",
+    "he-learn",
+    "he-plan",
+    "he-ship",
+    "marketing-video",
+    "product-walkthrough-video",
+    "research",
+    "security-review",
+    "writing-great-skills"
+  ]
 }
