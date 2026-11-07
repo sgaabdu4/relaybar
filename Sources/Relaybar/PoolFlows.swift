@@ -327,7 +327,8 @@ extension PoolController {
             }
             var again = false
             var forgot = false
-            for host in report.unreachableComputers where !leftAlone.contains(host) {
+            let asking = report.unreachableComputers.filter { !leftAlone.contains($0) }
+            await inOrder(asking, reason: "each computer asks the user in its own dialog, one at a time") { host in
                 panel.close()
                 switch PoolDialogs.unreachable(
                     host: host, reason: report.failed.first { $0.step == .linuxClient }?.reason ?? "",
@@ -482,7 +483,7 @@ extension PoolController {
     private func releaseLinger(_ hosts: [String]) async {
         let setup = PoolSetup(env: environment())
         var stuck: [String] = []
-        for host in hosts {
+        await inOrder(hosts, reason: "each computer may ask for its password in its own dialog") { host in
             let off = await Task.detached {
                 await setup.releaseLinger(host: host) { wrong, why in
                     await MainActor.run { PoolDialogs.computerPassword(host: host, wrong: wrong, why: why) }
