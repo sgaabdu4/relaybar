@@ -139,7 +139,11 @@ extension PoolSetup {
 
     public func setOrder(kind: PoolKind, emails: [String]) throws {
         guard var state = PoolState.load(env.paths) else { return }
-        state.order[kind.rawValue] = emails.map { $0.lowercased() }
+        var order = emails.map { $0.lowercased() }
+        for (index, email) in (state.order[kind.rawValue] ?? []).enumerated() where !order.contains(email) {
+            order.insert(email, at: min(index, order.count))
+        }
+        state.order[kind.rawValue] = order
         try state.save(env.paths)
     }
 }

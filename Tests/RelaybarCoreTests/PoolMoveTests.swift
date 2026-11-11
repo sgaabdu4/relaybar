@@ -562,6 +562,15 @@ struct PoolMoveTests {
         #expect(PoolState.load(harness.paths)?.pausing == ["claude:ann@example.com"])
     }
 
+    @Test func savingTheOrderKeepsAnAccountNotSignedInYet() throws {
+        let harness = try seeded()
+        var state = try #require(PoolState.load(harness.paths))
+        state.order = ["claude": ["wk@example.com", "me@example.com", "bob@example.com"]]
+        try state.save(harness.paths)
+        try PoolSetup(env: harness.env()).setOrder(kind: .claude, emails: ["Bob@example.com", "me@example.com"])
+        #expect(PoolState.load(harness.paths)?.order["claude"] == ["wk@example.com", "bob@example.com", "me@example.com"])
+    }
+
     @Test func pausesOnlyTheSameKindAndWaitsForAccountsNotSignedInYet() async throws {
         let harness = try seeded()
         let secret = String(repeating: "b2", count: 32)
