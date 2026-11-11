@@ -349,7 +349,6 @@ extension PoolSetup {
         }
         let done = Set(credentials.filter(\.disabled).map(PoolMove.key))
         try updateState { $0.pausing.removeAll { done.contains($0) } }
-        _ = try await updateOrder(members: credentials.map { PoolUsage.member($0, result: nil) })
     }
 }
 

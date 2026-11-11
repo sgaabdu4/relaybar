@@ -542,16 +542,13 @@ struct PoolMoveTests {
         let status = helper.patches.filter { $0.path == "credentials/status" }
         #expect(status.count == 1)
         #expect(status[0].body["name"] as? String == "claude-bob@example.com.json" && status[0].body["disabled"] as? Bool == true)
-        let priorities = helper.patches.filter { $0.path == "credentials/fields" }
-        #expect(priorities.contains { $0.body["name"] as? String == "claude-bob@example.com.json" && $0.body["priority"] as? Int == 2 })
-        #expect(priorities.contains { $0.body["name"] as? String == "claude-ann@example.com.json" && $0.body["priority"] as? Int == 1 })
+        #expect(helper.patches.filter { $0.path == "credentials/fields" }.isEmpty)
         #expect(PoolState.load(harness.paths)?.order["claude"] == ["bob@example.com", "ann@example.com"])
 
         let none = Credentials([("claude", "ann@example.com"), ("claude", "bob@example.com")])
         harness.http.handler = none.handler(secret: secret)
         try await PoolSetup(env: harness.env()).pauseAgain()
-        #expect(none.patches.filter { $0.path == "credentials/status" }.isEmpty)
-        #expect(!none.patches.filter { $0.path == "credentials/fields" }.isEmpty)
+        #expect(none.patches.isEmpty)
 
         let last = Credentials([("claude", "ann@example.com")])
         harness.http.handler = last.handler(secret: secret)
