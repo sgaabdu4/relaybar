@@ -1040,6 +1040,26 @@ struct PoolMoveTests {
         _ = PoolSetup(env: harness.env()).stop()
         _ = await PoolSetup(env: harness.env()).settleMove()
         #expect(!harness.recorder.commands.contains { plainScript($0) == PoolTeardown.remoteRemoval && $0.arguments.contains("mediabox") })
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.agent(Pool.tunnelLabel).path))
+        #expect(!harness.recorder.commands.contains { $0.executable == "/bin/launchctl" && $0.arguments.first == "bootstrap" })
+
+        let local = try Harness()
+        var here = PoolState()
+        here.steps = [.keychainAccessKey, .keychainManagementSecret, .helperFolder, .helperAgent, .updateAgent]
+        here.move = PoolMove(
+            target: "mediabox", phase: .preparing, old: PoolMoveOld(ssh: nil, tailscale: nil, keepOn: PoolKeepOn()), claimed: true,
+            newKeepOn: PoolKeepOn(masked: ["sleep.target"]))
+        try here.save(local.paths)
+        local.recorder.respond = { command in
+            remoteScript(command).contains("systemctl unmask") && command.stdin == nil
+                ? CommandResult(status: PoolRemote.needsPasswordStatus) : CommandResult()
+        }
+        _ = PoolSetup(env: local.env()).stop()
+        local.recorder.respond = { _ in CommandResult() }
+        local.recorder.removeCommands()
+        _ = await PoolSetup(env: local.env()).settleMove()
+        #expect(!local.recorder.commands.contains { $0.executable == "/bin/launchctl" && $0.arguments.first == "bootstrap" })
+        #expect(PoolState.load(local.paths) == nil)
     }
 
     @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {

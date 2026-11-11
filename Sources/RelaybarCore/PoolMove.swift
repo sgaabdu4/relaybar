@@ -186,12 +186,13 @@ extension PoolSetup {
             if FileManager.default.fileExists(atPath: env.paths.agent(Pool.tunnelLabel).path) {
                 try? PoolTeardown.undo(.tunnelAgent, state: state, env)
             }
+            guard state.steps.contains(.helperAgent) else { return }
             let answering = await api.isUp()
             if !answering {
                 load(Pool.helperLabel)
                 load(Pool.updateLabel)
             }
-        } else if let route = old.asState.tunnelRoute {
+        } else if state.steps.contains(.tunnelAgent), let route = old.asState.tunnelRoute {
             let expected = PoolTunnel.plist(paths: env.paths, destination: route.host, hostName: route.hostName)
             let answering = await api.isUp()
             if PoolFile.contents(env.paths.agent(Pool.tunnelLabel)) != expected || !answering {
