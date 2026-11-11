@@ -74,12 +74,12 @@ extension PoolController {
         let steps = Self.moveSteps(host: host, computers: host == nil ? [] : computers, old: old)
         let panel = PoolProgressPanel()
         panel.showSteps(title: title, steps: steps.map(\.text), current: 0)
-        let paused = loaded ? PoolMove.pausedEmails(in: members) : []
+        let paused = loaded ? PoolMove.pausedAccounts(in: members) : []
         let notes = MoveNotes()
         var report = PoolMoveReport()
         let worked = await attempt(host: host, title: title, panel: panel) {
             report = try await setup.move(
-                to: target,
+                to: target, paused: paused,
                 progress: { text in
                     guard let stage = PoolMoveStage(progress: text), let index = steps.firstIndex(where: { $0.stage == stage }) else {
                         return
@@ -88,8 +88,7 @@ extension PoolController {
                 },
                 afterSwitch: { [weak self] in
                     guard let self else { return }
-                    notes.unsigned = await self.signInAgain(
-                        panel: panel, setup: setup, steps: steps, title: title, paused: paused)
+                    notes.unsigned = await self.signInAgain(panel: panel, setup: setup, steps: steps, title: title)
                 })
         }
         guard worked else {
@@ -137,16 +136,13 @@ extension PoolController {
         return wantsTailscale
     }
 
-    private func signInAgain(panel: PoolProgressPanel, setup: PoolSetup, steps: [MoveStep], title: String, paused: [String]) async
-        -> [String]
-    {
+    private func signInAgain(panel: PoolProgressPanel, setup: PoolSetup, steps: [MoveStep], title: String) async -> [String] {
         generation += 1
         clearCache()
         let ended = await signInAll(panel: panel, setup: setup, canStop: false)
         let next = (steps.firstIndex { $0.stage == .signIn } ?? 0) + 1
         panel.showSteps(title: title, steps: steps.map(\.text), current: min(next, steps.count - 1))
-        let again = paused
-        await Task.detached { try? await setup.pauseAgain(emails: again) }.value
+        await Task.detached { try? await setup.pauseAgain() }.value
         markKnown()
         return ended.unsigned
     }

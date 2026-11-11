@@ -180,6 +180,7 @@ public struct PoolState: Codable, Equatable, Sendable {
     public var order: [String: [String]] = [:]
     public var orderMode = PoolOrderMode.automatic
     public var move: PoolMove?
+    public var pausing: [String] = []
 
     public init(ssh: String? = nil, joined: Bool = false) {
         self.ssh = ssh
@@ -201,6 +202,7 @@ public struct PoolState: Codable, Equatable, Sendable {
         order = try values.decodeIfPresent([String: [String]].self, forKey: .order) ?? [:]
         orderMode = (try? values.decodeIfPresent(PoolOrderMode.self, forKey: .orderMode)) ?? .automatic
         move = try? values.decodeIfPresent(PoolMove.self, forKey: .move)
+        pausing = (try? values.decodeIfPresent([String].self, forKey: .pausing)) ?? []
     }
 
     public var runsOnThisMac: Bool { ssh == nil }
