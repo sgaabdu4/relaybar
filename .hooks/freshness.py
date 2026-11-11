@@ -10,12 +10,16 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from gate_config import Gate, JsonObject
+from tool_setup import RELEASE_AGE_SECONDS
 
 VERSION_LINE = re.compile(r"\S+ v\S+")
 DIGIT_RUN = re.compile(r"\d+")
 RELEASE_VERSION = re.compile(r"(\d+(?:\.\d+)*)(?:\.post(\d+))?")
+PUB_PIN = re.compile(
+    r"\b([a-z][a-z0-9_]*) (\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]*[0-9A-Za-z])?)"
+)
 
-WAIT = timedelta(days=2)
+WAIT = timedelta(seconds=RELEASE_AGE_SECONDS)
 MAX_HOLD_DAYS = 14
 HOLD_KEYS = {"package", "version", "reason", "until"}
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -50,17 +54,20 @@ def newest(candidates: list[str]) -> str | None:
     return max(((k, v) for k, v in keyed if k is not None), default=(None, None))[1]
 
 
-def pub_eligible(name: str, fetch: Fetch, cutoff: datetime, ceiling: str) -> str | None:
+def pub_versions(name: str, fetch: Fetch) -> list[JsonObject]:
     package = fetch(f"https://pub.dev/api/packages/{urllib.parse.quote(name)}")
     if not isinstance(package, dict) or not isinstance(package.get("versions"), list):
         raise TypeError(f"pub.dev returned an unreadable record for {name}")
+    return [item for item in package["versions"] if not item.get("retracted")]
+
+
+def pub_eligible(name: str, fetch: Fetch, cutoff: datetime, ceiling: str) -> str | None:
     return newest(
         [
-            item["version"]
-            for item in package["versions"]
-            if not item.get("retracted")
-            and released_before(item["published"], cutoff)
-            and not newer(item["version"], ceiling)
+            str(item["version"])
+            for item in pub_versions(name, fetch)
+            if released_before(item["published"], cutoff)
+            and not newer(str(item["version"]), ceiling)
         ]
     )
 
@@ -141,11 +148,13 @@ UV_ROW = re.compile(
 def uv_rows(text: str) -> list[tuple[str, str]]:
     if not VERSION_LINE.match(text):
         raise ValueError("uv tree printed no dependency tree")
-    return [
-        (match["name"], match["current"])
-        for line in text.splitlines()
-        if (match := UV_ROW.match(line))
-    ]
+    return list(
+        dict.fromkeys(
+            (match["name"].partition("[")[0], match["current"])
+            for line in text.splitlines()
+            if (match := UV_ROW.match(line))
+        )
+    )
 
 
 def poetry_rows(text: str) -> list[Stale]:
@@ -160,7 +169,7 @@ def poetry_rows(text: str) -> list[Stale]:
 
 
 UPGRADES = {
-    "bun": "bun update --latest {names}",
+    "bun": "bun update {recursive}--latest {names}",
     "dart": "dart pub upgrade --major-versions {names}",
     "flutter": "flutter pub upgrade --major-versions {names}",
     "uv": "uv add [--group <group>] {minimums}",
@@ -185,13 +194,14 @@ def stale_dependencies(
     return behind(uv_rows(text), lambda name: pypi_eligible(name, fetch, cutoff))
 
 
-def bun_waiting(directory: Path) -> Callable[[str], bool]:
+def bun_waiting(directory: Path, recursive: bool) -> Callable[[str], bool]:
     """A release Bun cannot install yet, because a dependency it pins is younger than the wait."""
 
     def waiting(name: str) -> bool:
         age = f"--minimum-release-age={int(WAIT.total_seconds())}"
         done = subprocess.run(
-            ["bun", "update", "--latest", name, "--dry-run", age],
+            ["bun", "update", *(["-r"] if recursive else []), "--latest", name]
+            + ["--dry-run", age],
             cwd=directory,
             capture_output=True,
             text=True,
@@ -202,6 +212,53 @@ def bun_waiting(directory: Path) -> Callable[[str], bool]:
         return done.returncode != 0 and blocked in done.stdout + done.stderr
 
     return waiting
+
+
+def pub_waiting(
+    tool: str, directory: Path, fetch: Fetch, now: datetime
+) -> Callable[[str], bool]:
+    """A release pub cannot resolve yet, because each pin that blocks it has only younger fixes."""
+    cutoff = now - WAIT
+
+    def fixed_only_later(name: str, pinned: str) -> bool:
+        fixes = [
+            item
+            for item in pub_versions(name, fetch)
+            if newer(str(item["version"]), pinned)
+        ]
+        return bool(fixes) and not any(
+            released_before(item["published"], cutoff) for item in fixes
+        )
+
+    def waiting(name: str) -> bool:
+        done = subprocess.run(
+            [tool, "pub", "upgrade", "--major-versions", name, "--dry-run"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        message = done.stdout + done.stderr
+        if done.returncode == 0 or "version solving failed" not in message:
+            return False
+        pins = {
+            found[1]: found[2]
+            for found in PUB_PIN.finditer(message)
+            if found[1] != name
+        }
+        return bool(pins) and all(fixed_only_later(*pin) for pin in pins.items())
+
+    return waiting
+
+
+def freshness_waiting(gate: Gate, directory: Path) -> Callable[[str], bool] | None:
+    tool = Path(gate["command"][0]).name
+    if tool == "bun":
+        return bun_waiting(directory, "-r" in gate["command"])
+    if tool in {"dart", "flutter"}:
+        return pub_waiting(tool, directory, fetch_json, datetime.now(UTC))
+    return None
 
 
 def held(stale: Stale, holds: list[JsonObject], today: date) -> bool:
@@ -256,19 +313,20 @@ def validate_freshness(
         raise ValueError(f"{tool} output is unreadable: {error!r}") from error
     holds: list[JsonObject] = gate.get("holds", [])
     stale = [item for item in stale if not held(item, holds, now.date())]
-    if tool == "bun" and waiting is not None:
+    if waiting is not None:
         early = [item for item in stale if waiting(item[0])]
         for name, _, target in early:
             print(f"{name} {target} needs a dependency that is not 2 days old yet")
         stale = [item for item in stale if item not in early]
     if stale:
-        names = " ".join(name for name, _, _ in stale)
+        names = " ".join(dict.fromkeys(name for name, _, _ in stale))
+        recursive = "-r " if "-r" in gate["command"] else ""
         latest = " ".join(f"{name}@latest" for name, _, _ in stale)
         minimums = " ".join(f"'{name}>={target}'" for name, _, target in stale)
         raise ValueError(
             "Outdated direct dependencies: "
             + "; ".join(f"{n} {c} → {t}" for n, c, t in stale)
-            + f". Run `{UPGRADES[tool].format(names=names, latest=latest, minimums=minimums)}` in a "
+            + f". Run `{UPGRADES[tool].format(recursive=recursive, names=names, latest=latest, minimums=minimums)}` in a "
             "separate PR first (baseline repair)."
         )
     print("Every direct dependency is on its newest release at least 2 days old")

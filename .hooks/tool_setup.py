@@ -15,13 +15,20 @@ import tempfile
 import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO
 
 from fallow_report import native_scanner_command
-from gate_config import Group
-from project_setup import package_script_invocation
+from gate_config import Gate, GateConfig, Group, has_workflows, require_roles
+from project_setup import (
+    is_deployment_file,
+    package_script_invocation,
+    project_shell_scripts,
+    require_listed_shell_scripts,
+)
 
+RELEASE_AGE_SECONDS = 2 * 24 * 60 * 60
 DIGIT_RUN = re.compile(r"\d+")
 TOOL_VERSION = re.compile(r"\d[\w.+-]*")
 VERSION_NUMBER = re.compile(r"\d+(?:\.\d+)+")
@@ -50,6 +57,29 @@ PACKAGES = {
     "k6": "aqua:grafana/k6",
 }
 MANAGED_PYTHON_SCANNERS = {"ruff", "pyrefly", "vulture", "semgrep", "zizmor", "poetry"}
+ROLE_TOOLS: dict[str, dict[str, tuple[str, ...]]] = {
+    "python": {
+        "format": ("ruff", "format"),
+        "lint": ("ruff", "check"),
+        "complexity": ("ruff", "check"),
+        "annotations": ("ruff", "check"),
+        "types": ("pyrefly", "check"),
+        "dead-code": ("vulture",),
+    },
+    "javascript": {
+        "format-lint": ("biome", "ci"),
+        "focused-tests": ("biome", "lint"),
+        "typing-style": ("biome", "lint"),
+        "types": ("tsc",),
+    },
+    "dart": {"format": ("dart", "format"), "types": ("dart", "analyze")},
+    "swift": {"format-lint": ("swift", "format", "lint")},
+    "shared": {
+        "workflows": ("actionlint",),
+        "ci-security": ("zizmor",),
+        "shell": ("shellcheck",),
+    },
+}
 SCANNER_VERSIONS: dict[str, str] = {}
 # The platform package installs without the npm-only preinstall of @jdxcode/mise.
 MISE_PACKAGE = "@jdxcode/mise-{}-{}".format(
@@ -62,11 +92,12 @@ MISE_LATEST = MISE_PACKAGE + "@latest"
 MISE_BINARY = Path("node_modules", MISE_PACKAGE, "bin/mise")
 CHECKOUT = Path(__file__).resolve().parents[1]
 TOOL_OWNER = "HARD_ENG_TOOL_OWNER"
+RESTARTED = "HARD_ENG_RESTARTED"
 VISIBLE_TEMP = Path("/tmp")
 HELD: list[IO[str]] = []
 NOT_INSTALLED = (
     "Tools are not installed yet and cannot be fetched now: {error}. "
-    "Connect once or run the full check (python3 .hooks/hard-eng.py check) to install them."
+    "Connect once or run the full check (`python3 .hooks/hard-eng.py check`; during a build, `python3 .hooks/hard-eng.py check --plan-stage Ready`) to install them."
 )
 
 
@@ -76,21 +107,59 @@ def quick_mode() -> bool:
 
 def ensure_python_runtime() -> None:
     """Run the installed CLI with its YAML dependency without changing host Python."""
+    if os.environ.pop(RESTARTED, None):
+        # uv run set VIRTUAL_ENV to its throwaway; Poetry would sync and run gates there.
+        os.environ.pop("VIRTUAL_ENV", None)
     if importlib.util.find_spec("yaml") is None:
-        os.execvp(
-            "uv",
-            [
+        os.environ[RESTARTED] = "1"
+        try:
+            os.execvp(
                 "uv",
-                "run",
-                "--no-project",
-                "--with",
-                "pyyaml",
-                "--python",
-                sys.executable,
-                "python",
-                *sys.argv,
-            ],
+                [
+                    "uv",
+                    "run",
+                    "--no-project",
+                    "--with",
+                    "pyyaml",
+                    "--python",
+                    sys.executable,
+                    "python",
+                    *sys.argv,
+                ],
+            )
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                "uv is not on PATH; Hard Eng needs it. Install uv, then run again."
+            ) from error
+
+
+def require_shared_roles(
+    root: Path, config: GateConfig, files: list[Path], secrets: bool
+) -> set[str]:
+    """Files decide the mandatory shared roles; a gate that names a role's tool fills it."""
+    required = {"secrets-files"} if secrets else set()
+    if secrets and config.get("scan_git_history", True):
+        required.add("secrets-history")
+    if has_workflows(root, files):
+        required.update({"workflows", "ci-security"})
+    if next(project_shell_scripts(root, files), None) is not None:
+        required.add("shell")
+    if any(is_deployment_file(path) for path in files):
+        required.add("deployment")
+    roles = {gate.get("role", "") for gate in config["shared"]}
+    for gate in config["shared"]:
+        command = gate["command"]
+        require_role_tool("shared", gate, command)
+        roles.update(
+            role
+            for role, tool in ROLE_TOOLS["shared"].items()
+            if Path(command[0]).name == tool[0]
         )
+        if Path(command[0]).name == "trivy" and "config" in command[1:]:
+            roles.add("deployment")
+    require_roles("shared", required, roles)
+    require_listed_shell_scripts(root, files, config["shared"])
+    return roles
 
 
 def entry_point_names(directory: Path) -> list[str]:
@@ -121,6 +190,22 @@ def with_entry_points(command: list[str], directory: Path) -> list[str]:
     return [*command, "--ignore-names", ",".join(names)]
 
 
+def require_role_tool(language: str, gate: Gate, command: list[str]) -> None:
+    """A required check that writes no report proves itself only by the tool it names."""
+    tool = ROLE_TOOLS.get(language, {}).get(str(gate.get("role")))
+    if tool is None or gate.get("report"):
+        return
+    words = [
+        Path(word.strip("'\"();")).name.split("@", 1)[0]
+        for word in " ".join(command).split()
+    ]
+    if not any(tuple(words[at : at + len(tool)]) == tool for at in range(len(words))):
+        raise ValueError(
+            f"{gate['name']}: the {gate['role']} check must run `{' '.join(tool)}`; "
+            f"this command does not name it: {' '.join(gate['command'])}"
+        )
+
+
 def uvx_scanner(command: list[str]) -> list[str]:
     """A configured `uvx ruff@latest …` gate runs like `ruff …`, so it is pinned too."""
     tool = command[1] if len(command) > 1 and command[0] == "uvx" else ""
@@ -130,7 +215,17 @@ def uvx_scanner(command: list[str]) -> list[str]:
     return command
 
 
-def managed_command(command: list[str], directory: Path | None = None) -> list[str]:
+def release_cutoff(now: datetime | None = None) -> str:
+    """Newest release time uvx may use, floored to the hour so uv's cache stays warm."""
+    moment = (now or datetime.now(UTC)) - timedelta(seconds=RELEASE_AGE_SECONDS)
+    return moment.replace(minute=0, second=0, microsecond=0).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def managed_command(
+    command: list[str], directory: Path | None = None, now: datetime | None = None
+) -> list[str]:
     command = uvx_scanner(command)
     if directory is not None:
         command = with_entry_points(
@@ -140,7 +235,8 @@ def managed_command(command: list[str], directory: Path | None = None) -> list[s
         offline = ["--offline"] if quick_mode() else []
         version = SCANNER_VERSIONS.get(command[0])
         tool = f"{command[0]}@{version or 'latest'}"
-        return ["uvx", *offline, tool, *command[1:]]
+        wait = ["--exclude-newer", release_cutoff(now)]
+        return ["uvx", *offline, *wait, tool, *command[1:]]
     return command
 
 
@@ -196,11 +292,20 @@ def provision_tools(root: Path, groups: list[Group], timeout: float) -> None:
     pin_python_scanners(sorted(executables & MANAGED_PYTHON_SCANNERS), timeout)
 
 
-def scanner_version(name: str, offline: bool, timeout: float) -> str | None:
+def scanner_version(
+    name: str, offline: bool, timeout: float, now: datetime | None = None
+) -> str | None:
     """The scanner's latest version, or None when it cannot run."""
+    wait = ["--exclude-newer", release_cutoff(now)]
     try:
         done = subprocess.run(
-            ["uvx", *(["--offline"] if offline else []), name + "@latest", "--version"],
+            [
+                "uvx",
+                *(["--offline"] if offline else []),
+                *wait,
+                name + "@latest",
+                "--version",
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -239,7 +344,7 @@ def tool_name(tool: str) -> str:
 
 def provision_batch(batch: list[str], timeout: float) -> None:
     # Two days avoids newly broken releases.
-    batch = [bun_age(tool, 172800) for tool in batch]
+    batch = [bun_age(tool, RELEASE_AGE_SECONDS) for tool in batch]
     shared = Path(os.environ.get("RUNNER_TEMP") or temporary_root()) / "hard-eng-tools"
     # Checkouts on other Hard Eng revisions rewrite these files while this one runs.
     storage = shared if "RUNNER_TEMP" in os.environ else checkout_storage(shared)
@@ -432,7 +537,7 @@ def provision_latest(
             "MISE_NPM_PACKAGE_MANAGER=bun",
             "MISE_PREFER_OFFLINE=false",
             "MISE_USE_VERSIONS_HOST=false",
-            "MISE_MINIMUM_RELEASE_AGE=2d",
+            f"MISE_MINIMUM_RELEASE_AGE={RELEASE_AGE_SECONDS // 86400}d",
             "mise",
             "--no-config",
         ]

@@ -2,7 +2,7 @@
 
 Each Hard Eng rule is defined once here, under a stable ID. Code, tests, skills and docs name the ID instead of restating the rule. `python3 .hooks/hard-eng.py check` fails on a repeated, unknown or retired ID, a `Proof: check` rule without an enforcing source and a test that name it, a `Proof: guidance` rule without a skill or `AGENTS.md` link, and a definition sentence copied into other Markdown.
 
-A project may add its own rules as `REQ-` IDs in `docs/requirements.md`, in the same format. A test names an ID in its name string (JavaScript, Dart) or the first line of its docstring (Python). Never reuse an ID; a retired entry keeps its heading and holds only `Status: Retired — use <ID>`.
+A project may add its own rules as `REQ-` IDs in `docs/requirements.md`, in the same format. An ID is a prefix and parts joined by hyphens; each part holds only capital letters and digits. An `HE-` ID has one or more parts, and a `REQ-` ID has two or more. A test names an ID in its name string (JavaScript, Dart) or the first line of its docstring (Python). Never reuse an ID; a retired entry keeps its heading and holds only `Status: Retired — use <ID>`.
 
 ## HE-REQUIREMENT-REGISTRY
 
@@ -42,7 +42,7 @@ Proof: check
 
 ## HE-NO-SWITCH-OFF
 
-A change fails when its added lines hold a Python, JavaScript, TypeScript, Dart or Swift suppression or a skipped or focused test, a Semgrep or Gitleaks inline marker in any file, or an entry in `.gitleaksignore` or `.semgrepignore`. It also fails when it removes more `assert` or `expect(` lines from test files than it adds. Paths under `.hooks/`, `.agents/` and `.claude/` are exempt, lines that existed before the change are not flagged, and there is no allow-list.
+A change fails when its added lines hold any of these: a Python, JavaScript, TypeScript, Dart or Swift suppression; a skipped or focused test; in any file, an inline ignore marker of Semgrep, Gitleaks, jscpd, Fallow, ShellCheck, zizmor or Dart coverage (`coverage:ignore`); a line that is not a comment in `.gitleaksignore`, `.gitleaks.toml` or `.semgrepignore`. A test argument that skips or focuses (Dart `skip:` or `solo:` with any value but `false`; JavaScript or TypeScript `skip:` set to `true` or a text reason, or `only: true`) is flagged only in a test file. It also fails when it removes more `assert` or `expect(` lines from test files than it adds. Paths under `.hooks/`, `.agents/` and `.claude/` are exempt, lines that existed before the change are not flagged, and there is no allow-list.
 
 Proof: check
 
@@ -66,7 +66,7 @@ Proof: guidance
 
 ## HE-NO-FOREGROUND-POLL
 
-An agent starts a long job in the background and waits for the host's exit notice; it never waits in a foreground sleep loop or a long sleep. In Claude Code, a hook denies a main-session shell command that sleeps at least 1 second inside a `while` or `until` loop, or at least 30 seconds at once. A subagent may wait in the foreground, because nothing watches its background job after its turn ends. Codex returns a long command early and waits on that command's session, not on a sleep loop.
+An agent starts a long job in the background and reads the host's exit notice when the notice comes. While the job runs, the agent does other work that is ready, and it never ends its turn only to wait when other work is ready. No hook checks those two sentences. The agent never waits in a foreground sleep loop or a long foreground sleep, and in Claude Code a hook enforces that part. The hook denies a foreground shell command of the main session that holds a `while` or `until` loop and a sleep of at least 1 second, or sleeps that add up to at least 30 seconds. The hook ignores comments. It also ignores text in quotes and heredoc bodies, with three exceptions: the text counts when `sh`, `bash`, `zsh`, `python`, `perl`, `ruby`, `node` or `ssh` runs it, when `eval` runs quoted text, or when double-quoted text holds a command substitution. A subagent may wait in the foreground, because nothing watches its background job after its turn ends. Codex has no such hook: it returns a long command early and waits on that command's session, not on a sleep loop.
 
 Proof: check
 
