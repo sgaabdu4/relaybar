@@ -159,11 +159,7 @@ extension PoolSetup {
     private func clearMove() {
         guard var state = PoolState.load(env.paths) else { return }
         state.move = nil
-        if state.steps.isEmpty {
-            PoolFile.remove(env.paths.state)
-        } else {
-            try? state.save(env.paths)
-        }
+        try? state.saveOrRemove(env.paths)
     }
 
     @discardableResult

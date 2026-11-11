@@ -76,7 +76,7 @@ public enum PoolTeardown {
                 if case PoolKeepOnError.needsPassword(let host) = error { report.needsPassword = host }
             }
         }
-        if state.steps.isEmpty, state.move == nil { PoolFile.remove(env.paths.state) }
+        try? state.saveOrRemove(env.paths)
         return report
     }
 
@@ -86,12 +86,8 @@ public enum PoolTeardown {
         state.move = nil
         state.keepOn = PoolKeepOn()
         state.linuxClients = []
-        if state.steps.isEmpty {
-            PoolFile.remove(env.paths.state)
-            return PoolTeardownReport()
-        }
-        try? state.save(env.paths)
-        return run(env)
+        try? state.saveOrRemove(env.paths)
+        return state.steps.isEmpty ? PoolTeardownReport() : run(env)
     }
 
     private static func viaRoutes(_ state: PoolState, _ env: PoolEnvironment, _ command: (PoolRoute) -> Command) -> CommandResult {

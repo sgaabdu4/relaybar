@@ -228,6 +228,14 @@ public struct PoolState: Codable, Equatable, Sendable {
         try PoolFile.write(try encoder.encode(self), to: paths.state, backup: false)
     }
 
+    public func saveOrRemove(_ paths: PoolPaths) throws {
+        if steps.isEmpty, move == nil {
+            PoolFile.remove(paths.state)
+        } else {
+            try save(paths)
+        }
+    }
+
     public mutating func record(_ step: PoolStep) {
         if !steps.contains(step) { steps.append(step) }
     }
