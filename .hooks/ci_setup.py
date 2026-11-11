@@ -11,8 +11,10 @@ from pathlib import Path
 
 from ci_cache import TOOL_DIRECTORIES, report_cache_problems
 from ci_jobs import migrate_bun_version, migrate_runner_variable, migrate_swift_runner
-from gate_config import GateConfig, Group
+from gate_config import GateConfig, Group, json_file
+from project_files import read_project_file
 from project_setup import dependency_command
+from tool_setup import RELEASE_AGE_SECONDS
 
 MISE_INSTALL_EXEC_LINE = re.compile(
     r"(?m)^(?P<indent> +)(?P<launcher>bun x (?:\S+ )+?mise --no-config) "
@@ -78,7 +80,7 @@ BOOTSTRAP_TOOLS = ["uv@latest", "python@3.12"]
 def bun_specification(root: Path, package: Group, groups: list[Group]) -> str:
     """Reuse the pin of an established workspace dependency-install owner."""
     directory = root / package["path"]
-    manifest = json.loads((directory / "package.json").read_text())
+    manifest = read_project_file(directory / "package.json", root)
     if (
         "packageManager" not in manifest
         and not (directory / "bun.lock").exists()
@@ -99,7 +101,7 @@ def bun_specification(root: Path, package: Group, groups: list[Group]) -> str:
             reverse=True,
         )
         if owners and (owners[0] / "package.json").is_file():
-            manifest = json.loads((owners[0] / "package.json").read_text())
+            manifest = read_project_file(owners[0] / "package.json", root)
     declared = manifest.get("packageManager", "bun@latest")
     if isinstance(declared, str) and not declared.startswith("bun@"):
         declared = "bun@latest"
@@ -709,7 +711,8 @@ def adapt_ci(
                 OLD_PERMISSIONS, OLD_PERMISSIONS + PERMISSIONS, 1
             )
         migrated = migrated.replace(
-            "MISE_MINIMUM_RELEASE_AGE: 0s\n", "MISE_MINIMUM_RELEASE_AGE: 2d\n"
+            "MISE_MINIMUM_RELEASE_AGE: 0s\n",
+            f"MISE_MINIMUM_RELEASE_AGE: {RELEASE_AGE_SECONDS // 86400}d\n",
         )
         if migrated != original:
             changes[name] = migrated
@@ -760,6 +763,28 @@ def adapt_ci(
         .replace(block, triggers, 1)
     )
     changes[name] = workflow_budget(root, migrate_swift_runner(config, changes[name]))
+
+
+def without_workflow_gates(root: Path, changes: dict[str, str | None]) -> str | None:
+    """The planned gates file without the workflow gates the project lacks, while no workflow file exists."""
+    planned = changes.get(GATES_FILE)
+    workflows = root / ".github/workflows"
+    if (
+        planned is None
+        or not any(name.startswith(".github/workflows/") for name in changes)
+        or any(path.is_file() for path in workflows.rglob("*"))
+    ):
+        return None
+    config = json.loads(planned)
+    held = {
+        gate["name"] for gate in json.loads((root / GATES_FILE).read_text())["shared"]
+    }
+    config["shared"] = [
+        gate
+        for gate in config["shared"]
+        if gate.get("role") not in {"workflows", "ci-security"} or gate["name"] in held
+    ]
+    return json_file(root, config)
 
 
 def add_workflow_checks(config: GateConfig) -> None:
@@ -839,6 +864,7 @@ def push_base(root: Path, base: str | None) -> str | None:
 
 
 PR_TEXT = ".github/workflows/pr-text.yml"
+GATES_FILE = "hard-eng.gates.json"
 
 
 def configure_github_ci(

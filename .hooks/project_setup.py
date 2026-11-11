@@ -6,9 +6,11 @@ import re
 import shlex
 import subprocess
 import tomllib
+from collections.abc import Iterator
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+from coverage_sources import owned_files, source_roots
 from fallow_report import fallow_report_path, validate_scanner_command
 from gate_config import (
     LANGUAGES,
@@ -20,11 +22,11 @@ from gate_config import (
     Report,
     dart_scan_includes_boundaries,
     generated_sources,
-    nonproduction_source,
     repository_files,
     typescript_packages,
 )
 from hook_chain import is_own
+from project_files import read_project_file
 
 CARET_VERSION = re.compile(r"\^?(\d+)\.(\d+)\.(\d+)")
 REGEX_SPECIAL_CHARACTER = re.compile(r"([.\[\]()*+?{}|^$\\])")
@@ -84,10 +86,19 @@ def validate_dart_exclusions(directory: Path, values: object) -> None:
         for root in FLUTTER_PLATFORM_ROOTS
         if flutter and (directory / root).is_dir()
     )
-    if not isinstance(values, list) or any(
-        not isinstance(value, str) or value not in allowed | native for value in values
-    ):
-        raise ValueError("Dart strict analysis cannot exclude project files")
+    options = directory / "analysis_options.yaml"
+    if not isinstance(values, list):
+        raise TypeError(f"exclude in {options} must be a list of patterns")
+    refused = [
+        value
+        for value in values
+        if not isinstance(value, str) or value not in allowed | native
+    ]
+    if refused:
+        raise ValueError(
+            "Dart strict analysis cannot exclude project files: remove "
+            f"{', '.join(repr(value) for value in refused)} from exclude in {options}"
+        )
     roots = {pattern.split("/", 1)[0] for pattern in set(values) & native}
     matches = {
         path
@@ -150,6 +161,19 @@ def is_shell_script(path: Path) -> bool:
         return bool(SHELL_SHEBANG.match(source.readline(4096)))
 
 
+def project_shell_scripts(
+    root: Path, files: list[Path], listed: frozenset[str] = frozenset()
+) -> Iterator[Path]:
+    """The project's own shell scripts, one at a time; a listed one is not read whole."""
+    return (
+        path
+        for path in files
+        if is_shell_script(path)
+        and str(path.relative_to(root)) not in listed
+        and not is_own(root, path)
+    )
+
+
 def unlisted_shell_scripts(
     root: Path, files: list[Path], shared: list[Gate]
 ) -> list[str]:
@@ -164,17 +188,14 @@ def unlisted_shell_scripts(
         for gate in gates
     ):
         return []
-    listed = {
+    listed = frozenset(
         argument
         for gate in gates
         for argument in gate["command"][gate["command"].index("--") + 1 :]
-    }
+    )
     return sorted(
         str(path.relative_to(root))
-        for path in files
-        if is_shell_script(path)
-        and str(path.relative_to(root)) not in listed
-        and not is_own(root, path)
+        for path in project_shell_scripts(root, files, listed)
     )
 
 
@@ -219,6 +240,13 @@ def package_directory(arguments: list[str], directory: Path) -> tuple[list[str],
     return arguments, directory
 
 
+def gate_script_arguments(group: Group, gate: Gate, directory: Path) -> list[str]:
+    try:
+        return package_script_arguments(gate["command"], directory, bun_only=True)
+    except TypeError as error:
+        raise TypeError(f"{group['path']}: gate {gate['name']}: {error}") from error
+
+
 def package_script_invocation(
     command: list[str], directory: Path, bun_only: bool = False
 ) -> tuple[list[str], Path]:
@@ -248,10 +276,12 @@ def package_script_invocation(
         if identity in scripts_seen:
             raise ValueError("Recursive package test script")
         scripts_seen.add(identity)
-        package = json.loads((directory / "package.json").read_text())
+        package = read_project_file(directory / "package.json")
         script = package.get("scripts", {}).get(arguments[2])
         if not isinstance(script, str):
-            raise TypeError("Configured package test script is missing")
+            raise TypeError(
+                f"package script {arguments[2]} is missing from package.json"
+            )
         arguments = shlex.split(script) + arguments[3:]
         if not arguments:
             raise ValueError("Configured package test script is empty")
@@ -279,7 +309,7 @@ def native_typecheck(scripts: JsonObject, checks: list[Gate]) -> bool:
 def dependency_free(directory: Path) -> bool:
     """Bun deletes the lockfile of a package that declares nothing to install."""
     path = directory / "package.json"
-    manifest = json.loads(path.read_text()) if path.is_file() else None
+    manifest = read_project_file(path) if path.is_file() else None
     fields = (
         "dependencies",
         "devDependencies",
@@ -294,7 +324,7 @@ def dependency_free(directory: Path) -> bool:
 
 
 def javascript_manager(directory: Path) -> tuple[str, list[str], str]:
-    manifest = json.loads((directory / "package.json").read_text())
+    manifest = read_project_file(directory / "package.json")
     declared = manifest.get("packageManager")
     legacy = [
         name
@@ -338,41 +368,6 @@ def javascript_manager(directory: Path) -> tuple[str, list[str], str]:
             f"{directory}: bun.lock is required; run bun install and commit bun.lock"
         )
     return "bun", ["bun", "install", "--frozen-lockfile"], lockfile
-
-
-def source_roots(directory: Path, language: str, files: list[Path]) -> set[str]:
-    """Top-level names that hold a package's production code."""
-    extensions = {
-        "python": {".py"},
-        "javascript": {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"},
-        "dart": {".dart"},
-    }
-    sources = set()
-    for path in files:
-        if (
-            not path.is_relative_to(directory)
-            or path.suffix not in extensions[language]
-        ):
-            continue
-        relative = path.relative_to(directory)
-        if nonproduction_source(relative) or {".hooks", ".agents"} & set(
-            relative.parts
-        ):
-            continue
-        sources.add(relative.parts[0])
-    return sources
-
-
-def owned_files(
-    root: Path, packages: list[Group], files: list[Path]
-) -> dict[Path, list[Path]]:
-    """Each file belongs to the package nearest to it."""
-    owned: dict[Path, list[Path]] = {root / package["path"]: [] for package in packages}
-    for path in files:
-        owner = next((parent for parent in path.parents if parent in owned), None)
-        if owner is not None:
-            owned[owner].append(path)
-    return owned
 
 
 def adapt_sources(root: Path, package: Group, files: list[Path]) -> None:
@@ -423,7 +418,7 @@ def dependency_command(directory: Path, language: str) -> tuple[str, list[str], 
         )
     import yaml
 
-    manifest = yaml.safe_load((directory / "pubspec.yaml").read_text())
+    manifest = read_project_file(directory / "pubspec.yaml", parse=yaml.safe_load)
     dependencies = {
         **(manifest.get("dependencies") or {}),
         **(manifest.get("dev_dependencies") or {}),
@@ -443,10 +438,18 @@ def adapt_packages(root: Path, config: GateConfig) -> None:
     files = repository_files(root)
     owned = owned_files(root, config["packages"], files)
     typescript = typescript_packages(root, files)
+    tracked = set(files)
     for package in config["packages"]:
         directory = root / package["path"]
         adapt_sources(root, package, owned[directory])
-        adapt_package(directory, package)
+        lockfile = directory / adapt_package(directory, package)
+        if lockfile.is_file() and lockfile not in tracked:
+            relative = lockfile.relative_to(root)
+            raise ValueError(
+                f"{relative} is ignored by Git, so the install fails in a fresh clone. "
+                f"`git check-ignore -v {relative}` names the rule, often in .gitignore; "
+                f"remove that rule, then commit {relative}"
+            )
         adapt_boundaries(package, typescript)
         for gate in package["checks"]:
             if gate.get("role") == "security":
@@ -502,7 +505,7 @@ def adapt_boundaries(package: Group, typescript: set[str]) -> None:
 
 def workspace_members(directory: Path, language: str) -> list[str]:
     if language == "python":
-        project = tomllib.loads((directory / "pyproject.toml").read_text())
+        project = read_project_file(directory / "pyproject.toml", parse=tomllib.loads)
         workspace = project.get("tool", {}).get("uv", {}).get("workspace", {})
         return [
             *workspace.get("members", []),
@@ -511,9 +514,7 @@ def workspace_members(directory: Path, language: str) -> list[str]:
     if language == "javascript":
         if not (directory / "package.json").exists():
             return []
-        workspaces = json.loads((directory / "package.json").read_text()).get(
-            "workspaces", []
-        )
+        workspaces = read_project_file(directory / "package.json").get("workspaces", [])
         return (
             workspaces.get("packages", [])
             if isinstance(workspaces, dict)
@@ -521,7 +522,7 @@ def workspace_members(directory: Path, language: str) -> list[str]:
         )
     import yaml
 
-    manifest = yaml.safe_load((directory / "pubspec.yaml").read_text())
+    manifest = read_project_file(directory / "pubspec.yaml", parse=yaml.safe_load)
     return manifest.get("workspace", [])
 
 
@@ -647,7 +648,7 @@ def add_freshness(root: Path, source: Path, package: Group) -> None:
     checks.insert(anchor + 1, gate)
 
 
-def adapt_package(directory: Path, package: Group) -> None:
+def adapt_package(directory: Path, package: Group) -> str:
     from python_setup import python_gate_command, python_roots
 
     language = package["language"]
@@ -686,6 +687,7 @@ def adapt_package(directory: Path, package: Group) -> None:
             gate for gate in package["checks"] if gate.get("role") != "imports"
         ]
     adapt_performance(directory, package)
+    return lockfile
 
 
 def adapt_performance(directory: Path, package: Group) -> None:
@@ -947,7 +949,7 @@ def javascript_files(directory: Path, excluded: tuple[Path, ...] = ()) -> list[s
 
 
 def adapt_javascript(directory: Path, package: Group, manager: str) -> None:
-    manifest = json.loads((directory / "package.json").read_text())
+    manifest = read_project_file(directory / "package.json")
     if "check:fallow" in manifest.get("scripts", {}):
         for gate in package["checks"]:
             if gate.get("role") == "dead-code-duplicates":

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
@@ -14,8 +15,10 @@ from dependency_graph import (
     expand_dependents,
     impact_inputs,
     is_workflow,
+    readers_above,
     shared_only,
 )
+from project_files import parse_project_text, read_project_file
 
 type JsonValue = (
     str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
@@ -64,6 +67,7 @@ def json_text(
 JSONC = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.DOTALL)
 TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 ALL_ZERO_OBJECT_ID = re.compile(r"0{40}|0{64}")
+SOURCE_FILE = ".hooks/hard-eng-source.json"
 
 
 def json_layout(root: Path) -> tuple[str, int, int]:
@@ -236,28 +240,39 @@ def typescript_packages(root: Path, files: list[Path]) -> set[str]:
     return packages
 
 
+LISTED: dict[Path, tuple[frozenset[str], set[str]]] = {}
+
+
 def generated_sources(root: Path, names: list[str]) -> set[str]:
     if not names:
         return set()
-    repository = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if repository.returncode:
-        return set()  # Standalone source directories have no Git attributes.
+    listed, generated = LISTED.get(root, (frozenset(), set()))
+    if listed.issuperset(names):
+        return generated.intersection(names)
     # A live stdin pipe deadlocked against git's per-path output on macOS (issue 375).
     with tempfile.TemporaryFile() as paths:
         paths.write(("\0".join(names) + "\0").encode())
         paths.seek(0)
-        attributes = subprocess.check_output(
+        listed = subprocess.run(
             ["git", "check-attr", "-z", "--all", "--stdin"],
             cwd=root,
+            capture_output=True,
             text=True,
             stdin=paths,
-        ).split("\0")
+            check=False,
+        )
+    if listed.returncode:
+        repository = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        if repository.returncode:
+            return set()  # Standalone source directories have no Git attributes.
+        sys.stderr.write(listed.stderr)
+        listed.check_returncode()
+    attributes = listed.stdout.split("\0")
     return {
         name
         for name, key, value in zip(attributes[::3], attributes[1::3], attributes[2::3])
@@ -271,6 +286,13 @@ def dart_rule_settings(value: object) -> object:
         if not all(isinstance(rule, str) for rule in value):
             raise ValueError("Dart lint rule names must be strings")
         return {rule: True for rule in value}
+    if isinstance(value, dict):
+        for rule, enabled in value.items():
+            if enabled is False:
+                raise ValueError(
+                    f"analysis_options.yaml: {rule} is set to false, which turns off "
+                    "a lint rule of the included set; remove that entry"
+                )
     return value
 
 
@@ -298,7 +320,9 @@ def validate_dart_plugins(options: JsonObject) -> None:
         )
 
 
-def validate_file_sizes(root: Path, exceptions: dict[str, dict[str, str]]) -> None:
+def validate_file_sizes(
+    root: Path, exceptions: dict[str, dict[str, str]], listed: list[Path] | None = None
+) -> None:
     if not isinstance(exceptions, dict):
         raise TypeError("File-size exceptions must be an object")
     extensions = {
@@ -315,7 +339,8 @@ def validate_file_sizes(root: Path, exceptions: dict[str, dict[str, str]]) -> No
         ".sh",
         ".bash",
     }
-    files = [path for path in repository_files(root) if path.suffix in extensions]
+    listing = listed or repository_files(root)
+    files = [path for path in listing if path.suffix in extensions]
     names = [str(path.relative_to(root)) for path in files]
     for name, justification in exceptions.items():
         if (
@@ -407,41 +432,6 @@ def dart_scan_includes_boundaries(gate: Gate) -> bool:
     )
 
 
-def validate_dart_boundaries(
-    command: list[str], directory: Path, timeout: float
-) -> None:
-    if command[:3] != ["dart-decimate", "check", "."]:
-        return
-    from tool_setup import managed_command
-
-    settings = json.loads(
-        subprocess.check_output(
-            managed_command(["dart-decimate", "config", ".", "--format", "json"]),
-            cwd=directory,
-            text=True,
-            timeout=timeout,
-        )
-    )["config"]
-    boundaries = settings.get("boundaries")
-    if (
-        not isinstance(boundaries, list)
-        or not boundaries
-        or any(
-            not isinstance(rule, dict)
-            or not all(
-                isinstance(rule.get(key), str)
-                and rule[key].strip()
-                and not any(mark in rule[key] for mark in "*?")
-                for key in ("from", "disallow")
-            )
-            for rule in boundaries
-        )
-    ):
-        raise ValueError(
-            "Dart boundaries require nonempty project from/disallow prefixes, not globs"
-        )
-
-
 def initial_base(root: Path) -> str:
     """A new branch compares with its shipping-base merge base, else the empty tree."""
     from shipping import git, load_policy
@@ -499,7 +489,7 @@ def changed_packages(
     selected = packages_for(root, base, names, by_path)
     if isinstance(selected, set) or not prove_update:
         return selected
-    from update import SOURCE_FILE, installed_update_paths, maybe_installed
+    from update import installed_update_paths, maybe_installed
 
     other = {name for name in names if not maybe_installed(name)}
     narrowed = (
@@ -570,6 +560,7 @@ def packages_for(
         selected.update(consumers)
         if matches:
             selected.add(max(matches, key=len))
+            selected.update(readers_above(by_path, name, max(matches, key=len)))
     return selected
 
 
@@ -672,7 +663,7 @@ def validate_performance(group: Group) -> None:
     suites = [gate for gate in group["checks"] if gate.get("role") == "performance"]
     if group.get("language") and not suites and reason is None:
         raise ValueError(
-            "HE-PERFORMANCE-SUITE: Missing mandatory performance suite; configure a workload and budget "
+            f"{group['path']}: HE-PERFORMANCE-SUITE: Missing mandatory performance suite; configure a workload and budget "
             "or a reviewed performance_exception"
         )
     for gate in suites:
@@ -724,31 +715,44 @@ def validate_group(root: Path, group: Group, report_paths: set[Path]) -> int:
         "dart": {"format", "types", "tests", "dead-code-duplicates", "boundaries"},
         "swift": {"format-lint", "tests", "duplicates"},
     }.get(group.get("language", ""), set())
-    roles = {gate.get("role") for gate in group["checks"] if isinstance(gate, dict)}
+    roles = {gate.get("role", "") for gate in group["checks"] if isinstance(gate, dict)}
     if group.get("language") == "dart" and any(
         dart_scan_includes_boundaries(gate) for gate in group["checks"]
     ):
         roles.add("boundaries")
-    if required - roles:
-        raise ValueError(
-            f"{group['path']}: missing mandatory checks: {', '.join(sorted(required - roles))}"
-        )
+    require_roles(group["path"], required, roles)
+    scripts: list[list[str]] = []
     if group.get("language") == "javascript":
-        from project_setup import javascript_manager, package_script_arguments
+        from project_setup import gate_script_arguments, javascript_manager
 
         javascript_manager(directory)
-        for gate in group["checks"]:
-            package_script_arguments(gate["command"], directory, bun_only=True)
-    for gate in group["checks"]:
+        scripts = [
+            gate_script_arguments(group, gate, directory) for gate in group["checks"]
+        ]
+    from tool_setup import require_role_tool
+
+    for index, gate in enumerate(group["checks"]):
         validate_gate(gate, directory, report_paths)
+        command = scripts[index] if scripts else gate["command"]
+        require_role_tool(group.get("language", ""), gate, command)
     validate_performance(group)
     return len(group["checks"])
 
 
-def require_roles(directory: str, required: set[str], roles: set[str]) -> None:
+def require_roles(
+    directory: str, required: set[str], roles: set[str], step: str = ""
+) -> None:
     if missing := required - roles:
+        where = "the `shared` list" if directory == "shared" else f"package {directory}"
         raise ValueError(
-            f"{directory}: missing mandatory checks: {', '.join(sorted(missing))}"
+            f"{directory}: missing mandatory checks: {', '.join(sorted(missing))}; "
+            + (
+                step
+                or f"add a gate with each role to {where} in hard-eng.gates.json (package "
+                "and secret scan roles: the language template in "
+                ".agents/skills/he/templates/; other shared roles: "
+                ".agents/skills/he/references/gates.md)"
+            )
         )
 
 
@@ -775,7 +779,7 @@ def validate_manifest_groups(
                     "; declare a test-support package without language or sources,"
                     " with lockfile and vulnerability checks"
                     if test_support
-                    else ""
+                    else "; rerun setup to add its group"
                 )
             )
         if group.get("sources") or not (
@@ -791,46 +795,28 @@ def has_workflows(root: Path, files: list[Path]) -> bool:
     )
 
 
-def validate_required_checks(root: Path, config: GateConfig) -> None:
-    from project_setup import (
-        is_deployment_file,
-        is_shell_script,
-        require_listed_shell_scripts,
-    )
-
-    files = repository_files(root)
+def validate_required_checks(
+    root: Path,
+    config: GateConfig,
+    listed: list[Path] | None = None,
+    starting: bool = False,
+) -> None:
+    files = listed or repository_files(root)
     manifests = package_manifests(root, files)
     validate_manifest_groups(root, config, manifests)
-    from python_setup import require_listed_python_sources
+    from coverage_sources import require_listed_sources
     from swift_setup import require_swift_groups
+    from tool_setup import require_shared_roles
 
     require_swift_groups(root, config, files)
-    require_listed_python_sources(root, config["packages"], files)
-    if not config["packages"] and not manifests:
-        return  # Ad-hoc command groups without a supported application manifest.
-    shared_roles = {gate.get("role", "") for gate in config["shared"]}
-    required = {"secrets-files"}
-    if config.get("scan_git_history", True):
-        required.add("secrets-history")
-    if has_workflows(root, files):
-        required.update({"workflows", "ci-security"})
-    if any(is_shell_script(path) for path in files):
-        required.add("shell")
-    if any(is_deployment_file(path) for path in files):
-        required.add("deployment")
-    for gate in config["shared"]:
-        command = gate["command"]
-        shared_roles.update(
-            {
-                "actionlint": {"workflows"},
-                "zizmor": {"ci-security"},
-                "shellcheck": {"shell"},
-            }.get(Path(command[0]).name, set())
-        )
-        if Path(command[0]).name == "trivy" and "config" in command[1:]:
-            shared_roles.add("deployment")
-    require_roles("shared", required, shared_roles)
-    require_listed_shell_scripts(root, files, config["shared"])
+    # Session start keeps its speed: `check` alone judges what this round added.
+    require_listed_sources(root, config["packages"], files, python_only=starting)
+    basic = not config["packages"] and not manifests
+    if basic and starting:
+        return
+    shared_roles = require_shared_roles(root, config, files, secrets=not basic)
+    if basic:
+        return
     workspace_languages = dict(manifests)
     by_directory = {
         (
@@ -871,7 +857,6 @@ def validate_package_services(
         workspace_matches,
         workspace_members,
     )
-    from python_setup import python_roots
     from swift_setup import parent_roles
 
     directory = (root / group["path"]).resolve()
@@ -895,12 +880,14 @@ def validate_package_services(
     if not group.get("language"):
         return
     require_roles(group["path"], {"security"}, roles | shared_roles)
-    if language == "python" and python_roots(directory, group):
-        require_roles(group["path"], {"imports"}, roles)
+    if language == "python":
+        from python_setup import require_imports
+
+        require_imports(directory, group, roles)
     if language == "javascript":
         from fallow_report import owns_package_fallow
 
-        manifest = json.loads((directory / "package.json").read_text())
+        manifest = read_project_file(directory / "package.json")
         if "check:fallow" in manifest.get("scripts", {}) and not any(
             owns_package_fallow(group, gate, manifest["scripts"], package_groups)
             for gate in group["checks"]
@@ -928,7 +915,7 @@ def validate_package_services(
 
 
 def parse_config(content: str, *, require_impact_review: bool = True) -> GateConfig:
-    config = cast(GateConfig, json.loads(content))
+    config = cast(GateConfig, parse_project_text(content, "hard-eng.gates.json"))
     if (
         not isinstance(config, dict)
         or not isinstance(config.get("packages"), list)
@@ -945,7 +932,11 @@ def parse_config(content: str, *, require_impact_review: bool = True) -> GateCon
 
 
 def load_groups(
-    root: Path, base: str | None = None, *, dependents: bool = True
+    root: Path,
+    base: str | None = None,
+    *,
+    dependents: bool = True,
+    starting: bool = False,
 ) -> list[Group]:
     from plans import validate_documents
 
@@ -957,7 +948,25 @@ def load_groups(
         from shipping import load_policy
 
         load_policy(root)
-    validate_file_sizes(root, config.get("file_size_exceptions", {}))
+    listed = repository_files(root)
+    start = len(str(root)) + 1
+    names = [str(path)[start:] for path in listed]
+    LISTED[root] = frozenset(names), generated_sources(root, names)
+    try:
+        return checked_groups(root, config, listed, base, dependents, starting)
+    finally:
+        del LISTED[root]
+
+
+def checked_groups(
+    root: Path,
+    config: GateConfig,
+    listed: list[Path],
+    base: str | None,
+    dependents: bool,
+    starting: bool,
+) -> list[Group]:
+    validate_file_sizes(root, config.get("file_size_exceptions", {}), listed)
     if config.get("scan_git_history", True) is False:
         config["shared"] = [
             gate for gate in config["shared"] if gate.get("role") != "secrets-history"
@@ -970,7 +979,7 @@ def load_groups(
     count = sum(validate_group(root, group, report_paths) for group in groups)
     if not count:
         raise ValueError("No checks configured; verification cannot pass")
-    validate_required_checks(root, config)
+    validate_required_checks(root, config, listed, starting)
     from gitleaks_scan import new_commits_command
 
     for gate in config["shared"]:

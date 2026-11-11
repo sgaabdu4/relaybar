@@ -240,11 +240,6 @@ def comment_blocks(path: Path, text: str | None = None) -> list[tuple[int, int, 
 
 def installed_blocks(root: Path, base: str, name: str) -> set[tuple[str, ...]]:
     """Blocks a file held before the change that installs Hard Eng: old code its tools may touch."""
-    if (
-        not (root / ".hooks/hard-eng.py").is_file()
-        or git_file(root, base, ".hooks/hard-eng.py") is not None
-    ):
-        return set()
     text = git_file(root, base, name)
     if text is None:
         return set()
@@ -271,11 +266,14 @@ def validate_comments(root: Path, base: str | None) -> None:
         and not (root / name).is_symlink()
     )
     skipped = generated_sources(root, sources)
+    installing = (root / ".hooks/hard-eng.py").is_file() and (
+        git_file(root, base, ".hooks/hard-eng.py") is None
+    )
     found: list[str] = []
     for name in sources:
         if name in skipped:
             continue
-        older = installed_blocks(root, base, name)
+        older = installed_blocks(root, base, name) if installing else set()
         lines = (root / name).read_text(errors="replace").splitlines()
         found += [
             f"{name}:{start} holds a {length}-line comment block"
@@ -293,19 +291,30 @@ def validate_comments(root: Path, base: str | None) -> None:
 PYTHON_OFF = re.compile(
     r"#\s*(noqa|type:\s*ignore|pyrefly:\s*ignore|pyright:\s*ignore|pylint:\s*disable"
     r"|pragma:\s*no cover)|\b(pytest\.)?mark\.(skip(if)?|xfail)\b|pytest\.(skip|xfail)\("
+    r"|\bunittest\.([Ss]kip\w*|expectedFailure)\b|\bskipTest\(|\bimportorskip\("
+    r"|^\s*@skip(If|Unless)?\(|^__test__\s*=\s*False\b"
 )
 SCRIPT_OFF = re.compile(
     r"eslint-disable|@ts-(ignore|expect-error|nocheck)|biome-ignore"
-    r"|\b(it|test|describe|suite)\.(skip|only)\(|\b(xit|xdescribe|fit|fdescribe)\("
+    r"|\b(it|test|describe|suite)\.(skip|only|fixme)(If)?[.(]"
+    r"|\b(xit|xtest|xdescribe|fit|fdescribe)\("
     r"|(/\*|//)\s*(istanbul|c8|v8) ignore"
 )
-DART_OFF = re.compile(r"//\s*ignore(_for_file)?:|\bskip:(?=\s*(?!false\b)\S)|@Skip\(")
+DART_OFF = re.compile(r"//\s*ignore(_for_file)?:|@Skip\(")
 SWIFT_OFF = re.compile(
     r"swift-format-ignore|\bXCTSkip|<(Skipped|Selected)Tests>"
-    r'|"(skipped|selected)Tests"|\bskipped\s*=\s*"YES"'
+    r'|"(skipped|selected)Tests"|\bskipped\s*=\s*"YES"|\.enabled\(if:\s*false\)'
 )
-SECURITY_OFF = re.compile(r"\bno(semgrep|sem)\b|gitleaks:allow", re.IGNORECASE)
-SCAN_IGNORES = {".gitleaksignore", ".semgrepignore"}
+TEST_OFF = {
+    ".dart": r"\b(skip|solo):(?=\s*(?!false\b)\S)",
+    **dict.fromkeys(JAVASCRIPT, r"\bskip:\s*(true\b|['\"`])|\bonly:\s*true\b"),
+}
+SECURITY_OFF = re.compile(
+    r"\bno(semgrep|sem)\b|gitleaks:allow|jscpd:ignore|fallow-ignore"
+    r"|shellcheck\s+disable=|zizmor:\s*ignore|coverage:ignore-",
+    re.IGNORECASE,
+)
+SCAN_IGNORES = {".gitleaksignore", ".semgrepignore", ".gitleaks.toml"}
 UNOWNED = (".hooks/", ".agents/", ".claude/")
 
 
@@ -372,6 +381,7 @@ def diff_lines(
             "diff",
             "-U0",
             "--no-color",
+            "--no-ext-diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
             diff_base(root, base),
@@ -563,7 +573,7 @@ def lost_assertions(
 def security_switch_offs(
     root: Path, added: dict[str, list[tuple[int, str]]]
 ) -> list[str]:
-    """Inline markers and ignore entries in any file hide Semgrep or Gitleaks findings."""
+    """Inline markers and ignore entries in any file hide a scanner's findings."""
     names = sorted(name for name in added if not name.startswith(UNOWNED))
     skipped = generated_sources(root, names)
     found: list[str] = []
@@ -598,10 +608,11 @@ def validate_suppressions(root: Path, base: str | None) -> None:
         pattern = switch_off_pattern(name)
         if name in skipped or pattern is None:
             continue
+        tested = is_test_path(PurePosixPath(name)) and TEST_OFF.get(Path(name).suffix)
         found += [
             f"{name}:{number} adds {hit[0].strip()!r}"
             for number, text in added.get(name, [])
-            if (hit := pattern.search(text))
+            if (hit := pattern.search(text) or (tested and re.search(tested, text)))
         ]
         if name.endswith(".swift") and (root / name).is_file():
             traits = disabled_traits((root / name).read_text(errors="replace"))
@@ -621,8 +632,11 @@ def validate_suppressions(root: Path, base: str | None) -> None:
         found.append(
             f"tests lose {len(lost) - gained} assertion lines net "
             f"({len(lost)} removed, {gained} added); removed at {', '.join(lost)}. "
-            "To remove an unneeded test, add `Removed test: <path> :: <test name> :: "
-            "<what still proves it or why it is unneeded>` to the plan"
+            "To remove a whole test, add `Removed test: <path> :: <test name> :: "
+            "<what still proves it or why it is unneeded>` to the plan; the test name "
+            "is the function name for a Python test and the text between the quotes "
+            "for it(), test() and testWidgets(). An assertion in a test that stays "
+            "must stay or get an equal check"
         )
     if found:
         raise ValueError(

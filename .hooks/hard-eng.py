@@ -1,16 +1,45 @@
 #!/usr/bin/env python3
 """Run native gate commands and handle the three agreed hook events."""
 
-import fcntl
 import json
+import sys
+
+PYTHON_FLOOR = (3, 12)
+if sys.version_info < PYTHON_FLOOR:
+    refusal = (
+        f"Hard Eng needs Python {PYTHON_FLOOR[0]}.{PYTHON_FLOOR[1]} or later, but python3 "
+        f"here is {sys.version_info[0]}.{sys.version_info[1]}. No check or hook ran. "
+        "Put a newer python3 first on PATH."
+    )
+    event = sys.argv[1:2]
+    if event == ["stop"] and json.load(sys.stdin).get("stop_hook_active") is not True:
+        print(json.dumps({"decision": "block", "reason": refusal}))
+    elif event in (["stop"], ["session"]):
+        print(json.dumps({"systemMessage": refusal}))
+    else:
+        sys.exit(refusal)
+    sys.exit(0)
+
+if (
+    __name__ == "__main__"
+    and sys.argv[1:2] in (["session"], ["stop"])
+    and sys.argv[2:] in (["claude"], ["codex"])
+):
+    from pathlib import Path
+
+    from agent_hooks import handle_event
+
+    raise SystemExit(
+        handle_event(Path(__file__).resolve().parents[1], sys.argv[1], sys.argv[2])
+    )
+
+import fcntl
 import os
 import shlex
 import subprocess
-import sys
 import tempfile
 import threading
 import time
-import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -26,7 +55,9 @@ from ci_jobs import (
     language_filter,
     language_groups,
 )
+from dart_boundaries import validate_dart_boundaries
 from debt import OUTPUTS, remember
+from dependency_graph import SOURCE_SUFFIXES, child_groups
 from gate_config import (
     Gate,
     Group,
@@ -35,11 +66,15 @@ from gate_config import (
     dart_rule_settings,
     generated_sources,
     nonproduction_source,
-    validate_dart_boundaries,
 )
 from project_setup import package_script_arguments as test_arguments
 from project_setup import validate_dart_exclusions
-from python_setup import pytest_options
+from python_setup import (
+    leave_out_children,
+    pytest_options,
+    require_import_contract,
+    validate_pyrefly,
+)
 from tool_setup import managed_command, provision_tools
 from untrusted_input import (
     next_route_types,
@@ -71,6 +106,14 @@ ROOT = Path(__file__).resolve().parents[1]
 FAILED_GATES: list[str] = []
 RECORDING = threading.Event()
 TEST_REPORTS = {"python-tests", "lcov-tests", "dart-tests", "xcode-tests"}
+SUITE_FILTERS = {
+    "python": "--lf --last-failed --deselect --stepwise --sw --ignore --ignore-glob",
+    "javascript": "--test-only --test-name-pattern --test-skip-pattern --testNamePattern "
+    "--testPathPattern --testPathPatterns --testPathIgnorePatterns --grep --fgrep "
+    "--changed --onlyChanged --findRelatedTests --related --onlyFailures "
+    "--shard --project --selectProjects",
+    "dart": "--name --plain-name --tags --exclude-tags --total-shards --shard-index",
+}
 DART_TYPING: dict[str, dict[str, dict[str, bool] | list[str]]] = {
     "analyzer": {
         "exclude": [],
@@ -158,29 +201,7 @@ def validate_typing(
     package_root: Path | None = None,
 ) -> None:
     if language == "python":
-        native = directory / "pyrefly.toml"
-        options = (
-            tomllib.loads(native.read_text())
-            if native.exists()
-            else tomllib.loads((directory / "pyproject.toml").read_text())
-            .get("tool", {})
-            .get("pyrefly", {})
-        )
-        if (
-            options.get("preset") not in {"strict", "all"}
-            or options.get("check-unannotated-defs", True) is not True
-            or any(
-                value in (False, "ignore")
-                for value in options.get("errors", {}).values()
-            )
-            or options.get("ignore-missing-imports")
-            or options.get("replace-imports-with-any")
-            or options.get("replace-untyped-imports-with-any")
-            or options.get("sub-config")
-        ):
-            raise ValueError(
-                "Pyrefly requires strict checking without disabled diagnostics or Any import substitutions"
-            )
+        validate_pyrefly(directory, ROOT)
     elif language == "dart":
         validate_dart_typing(directory, sources, package_root)
 
@@ -221,6 +242,7 @@ def reject_test_filters(
     if language == "swift":
         return swift_setup.reject_test_filters(command)
     arguments = test_arguments(command, directory)
+    short_flags: tuple[str, ...] = ("-n", "-N", "-t", "-x")
     if language == "python":
         short_flags = ()
         for index, argument in enumerate(arguments):
@@ -230,28 +252,9 @@ def reject_test_filters(
                 arguments += pytest_options(directory)
                 short_flags = ("-k", "-m")
                 break
-        long_flags = {"--lf", "--last-failed", "--deselect", "--stepwise", "--sw"}
     elif language == "javascript":
-        long_flags = {
-            "--test-only",
-            "--test-name-pattern",
-            "--test-skip-pattern",
-            "--testNamePattern",
-            "--testPathPattern",
-            "--testPathPatterns",
-            "--testPathIgnorePatterns",
-            "--grep",
-            "--fgrep",
-            "--changed",
-            "--onlyChanged",
-            "--findRelatedTests",
-            "--related",
-            "--onlyFailures",
-        }
         short_flags = ("-t", "-g", "-f")
-    else:
-        long_flags = {"--name", "--plain-name", "--tags", "--exclude-tags"}
-        short_flags = ("-n", "-N", "-t", "-x")
+    long_flags = SUITE_FILTERS.get(language or "", SUITE_FILTERS["dart"]).split()
     for argument in arguments:
         if (
             argument.split("=", 1)[0] in long_flags
@@ -266,14 +269,8 @@ def reject_test_filters(
 def production_files(
     directory: Path, group: Group, *, include_tests: bool = False
 ) -> set[Path]:
-    extensions = {
-        "python": {".py"},
-        "javascript": {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"},
-        "dart": {".dart"},
-        "swift": {".swift"},
-    }
     language, sources = group.get("language"), group.get("sources")
-    if language not in extensions or not isinstance(sources, list) or not sources:
+    if language not in SOURCE_SUFFIXES or not isinstance(sources, list) or not sources:
         raise ValueError(
             "Test packages must declare their language and production sources"
         )
@@ -287,7 +284,7 @@ def production_files(
                 f"Production source must exist inside its package: {source}"
             )
         for file in [root] if root.is_file() else root.rglob("*"):
-            if file.is_file() and file.suffix in extensions[language]:
+            if file.is_file() and file.suffix in SOURCE_SUFFIXES[language]:
                 if file.name.endswith((".d.ts", ".d.mts", ".d.cts")) or (
                     not include_tests
                     and nonproduction_source(file.relative_to(directory))
@@ -377,6 +374,7 @@ def prepare_command(
             expected = production_files(directory, group)
             validate_typescript(ROOT, command, directory, expected, timeout)
     validate_dart_boundaries(command, ROOT / group["path"], timeout)
+    require_import_contract(ROOT / group["path"], group, gate)
     return command
 
 
@@ -418,7 +416,8 @@ def prepare_reports(
                 raise ValueError(
                     f"HE-PERFORMANCE-SUITE: {suite} does not exist; add a test there "
                     "with a real workload and a time budget, or, after review, record a "
-                    "performance_exception and remove this check (he/references/gates.md). "
+                    "performance_exception and remove this check "
+                    "(.agents/skills/he/references/gates.md). "
                     "A new project starts without one: the first code change adds it"
                 )
     for path in paths:
@@ -437,6 +436,7 @@ def run_gate(
 ) -> bool:
     """Run a gate under its own limit and record how long a pass took."""
     from gate_times import gate_limit, record_gate_time
+    from process_group import install_key, note_install
 
     key = f"{group['path']}/{gate['name']}" + ("@related" if related_base else "")
     started = time.monotonic()
@@ -448,6 +448,7 @@ def run_gate(
         from debt import judge
 
         failed = judge(ROOT, group, gate, failed, OUTPUTS.get(name, ""))
+    note_install(install_key(group), gate.get("role"), failed)
     if failed:
         FAILED_GATES.append(key)
     else:
@@ -546,6 +547,7 @@ def run_limited_gate(
             report_path, coverage_path, directory, expected_sources = prepare_reports(
                 group, report, kind, tests, scanner, command
             )
+        command = leave_out_children(ROOT, command, group, gate)
         command, coverage_path = related_command(
             command, coverage_path, gate, groups or [group], directory, related_base
         )
@@ -581,7 +583,8 @@ def run_limited_gate(
         if scanner and report_path is not None:
             report_args = (gate, report_path, command, directory, timeout)
             scanner_result(result.returncode == 0, scanner, *report_args)
-        from reports import completed_tests, line_coverage, parallel_hint
+        from process_group import stopped_note
+        from reports import check_coverage, completed_tests, parallel_hint
 
         if (
             result.returncode == 0
@@ -592,18 +595,13 @@ def run_limited_gate(
         ):
             raise ValueError("No tests actually ran (empty or entirely skipped report)")
         if result.returncode == 0 and coverage_path is not None:
-            covered, total = line_coverage(
-                coverage_path, kind, directory, expected_sources
-            )
-            print(
-                f"Line coverage: {covered}/{total} ({100 * covered / total:.2f}%; minimum 70%)"
-            )
-            if covered * 100 < total * 70:
-                raise ValueError("HE-COVERAGE-MIN: Line coverage is below 70%")
+            check_coverage(coverage_path, kind, directory, expected_sources)
+        stop = stopped_note(result.returncode)
         print(
             f"{'PASS' if result.returncode == 0 else 'FAIL'} {gate['name']} "
             f"(exit {result.returncode}; elapsed {time.monotonic() - started:.3f}s)"
-            f" @ {group['path']}" + parallel_hint(result.returncode, tests, command),
+            f" @ {group['path']}"
+            + (stop or parallel_hint(result.returncode, tests, command)),
             flush=True,
         )
         return result.returncode != 0
@@ -626,18 +624,15 @@ def run_limited_gate(
 
 
 @contextmanager
-def check_lock(root: Path) -> Generator[None]:
+def check_lock(root: Path) -> Generator[IO[str]]:
     """Gates write fixed report paths, so one check runs per checkout at a time."""
-    name = subprocess.check_output(
-        ["git", "rev-parse", "--git-path", "hard-eng-check.lock"], cwd=root, text=True
-    ).strip()
-    with (root / name).open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+    from process_group import check_lock_file
+
+    with check_lock_file(root) as (lock, held):
+        if held:
             print("Waiting for another Hard Eng check in this checkout", flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+        yield lock
 
 
 def biome_children(group: Group, gate: Gate, groups: list[Group]) -> tuple[Path, ...]:
@@ -657,10 +652,8 @@ def biome_children(group: Group, gate: Gate, groups: list[Group]) -> tuple[Path,
         return ()
     return tuple(
         ROOT / child["path"]
-        for child in groups
-        if child["path"] != "."
-        and child.get("language") == "javascript"
-        and any(
+        for child in child_groups(group, gate.get("role"), groups)
+        if any(
             check.get("role") == gate.get("role") and check["command"] == command
             for check in child["checks"]
         )
@@ -728,6 +721,7 @@ def check(
 ) -> int:
     from ci_setup import push_base, require_ci_base
     from gate_config import load_groups, parse_config
+    from process_group import read_installed, save_installed
     from reports import quick_groups
     from shipping import gate_budget
 
@@ -737,9 +731,10 @@ def check(
     if proven_elsewhere(base):
         return 0
 
-    with check_lock(ROOT):
+    with check_lock(ROOT) as lock:
+        installed = read_installed(lock, ROOT)
         groups = load_groups(ROOT, plan_base(base, plan_stage), dependents=dependents)
-        groups = quick_groups(language_groups(groups, languages), quick)
+        groups = quick_groups(language_groups(groups, languages), quick, installed)
         from debt import require_shrink
 
         require_shrink(ROOT, base)
@@ -755,8 +750,9 @@ def check(
         provision_tools(ROOT, groups, timeout)
         related = base if related_tests else None
         started, failed = time.time(), run_gates(groups, timeout, related) is not False
+        save_installed(lock, installed, ROOT)
         failed |= verify_plan and plans.plan_skips(ROOT, base, groups, int(started))
-        plans.report_stage(failed, plan_stage, FAILED_GATES)
+        plans.report_stage(failed, plan_stage, FAILED_GATES, quick)
         return int(failed)
 
 
@@ -783,7 +779,7 @@ def deliver(args: "Namespace") -> int:
     if args.command == "hot-paths":
         from hot_paths import scan_all
 
-        return scan_all(ROOT)
+        return scan_all(ROOT, paths=args.paths)
     if args.command == "gap-issue":
         from gap_issue import file_gap
 
@@ -817,10 +813,29 @@ def adopt() -> int:
         return record(ROOT, groups, set(FAILED_GATES), OUTPUTS)
 
 
+def check_command(args: "Namespace") -> int:
+    from process_group import exit_when_stopped
+    from tool_setup import ensure_python_runtime
+
+    ensure_python_runtime()
+    exit_when_stopped()
+    return check(
+        base=args.base,
+        plan_stage=args.plan_stage,
+        dependents=not args.without_dependents,
+        related_tests=args.related_tests,
+        quick=args.quick,
+        languages=language_filter(args),
+    )
+
+
 def main() -> int:
     import argparse
 
-    if "pre-push" in (Path(sys.argv[0]).name, *sys.argv[1:2]):
+    if "pre-push" in (Path(sys.argv[0]).name, *sys.argv[1:2]) and not {
+        "-h",
+        "--help",
+    } & set(sys.argv[1:]):
         return pre_push()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.set_defaults(apply=False, merge=True)
@@ -863,8 +878,9 @@ def main() -> int:
         "--runs", type=int, help="Use the newest N runs instead of --days"
     )
     commands.add_parser(
-        "hot-paths", help="List known slow patterns across the whole repository"
-    )
+        "hot-paths",
+        help="List known slow patterns in the named files, else the whole repository",
+    ).add_argument("paths", nargs="*")
     mutating = commands.add_parser(
         "mutation",
         help="Report changed lines whose tests miss small deliberate bugs",
@@ -919,17 +935,7 @@ def main() -> int:
         hook.add_argument("agent", choices=("claude", "codex"))
     args = parser.parse_args()
     if args.command == "check":
-        from tool_setup import ensure_python_runtime
-
-        ensure_python_runtime()
-        return check(
-            base=args.base,
-            plan_stage=args.plan_stage,
-            dependents=not args.without_dependents,
-            related_tests=args.related_tests,
-            quick=args.quick,
-            languages=language_filter(args),
-        )
+        return check_command(args)
     if args.command == "impact":
         return impact(args.base, language_filter(args))
     if args.command == "mutation":

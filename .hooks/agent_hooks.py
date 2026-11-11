@@ -22,7 +22,6 @@ COPILOT_HOOK_COMMAND = re.compile(
     r'\.hard-eng/(?:bootstrap|hook)\.sh"? copilot(?: [a-z]+)?'
 )
 
-GATE_OUTPUT_LIMIT = 8000
 # The HE Build handoff line, not a quoted or negated mention of it.
 SHIP_CLAIM = re.compile(r"^[*_ ]*Ready for ship[*_]*\s*[—–-]", re.MULTILINE)
 
@@ -239,19 +238,21 @@ def owned_hook_entry(
 
 
 HOOK_TIMEOUTS = {"session": 60, "stop": 3600}
-POLL_COMMAND = 'python3 "$(git rev-parse --show-toplevel 2>/dev/null)/.hooks/polling.py" 2>/dev/null || true'
+OLD_TOOL_COMMAND = 'python3 "$(git rev-parse --show-toplevel 2>/dev/null)/.hooks/{}.py" 2>/dev/null || true'
+TOOL_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.hooks/{}.py" 2>/dev/null || true'
+POLL_COMMAND = TOOL_COMMAND.format("polling")
 POLL_HOOK: JsonObject = {
     "matcher": "Bash",
     "hooks": [{"type": "command", "command": POLL_COMMAND, "timeout": 5}],
 }
-PREVIEW_COMMAND = 'python3 "$(git rev-parse --show-toplevel 2>/dev/null)/.hooks/previews.py" 2>/dev/null || true'
+PREVIEW_COMMAND = TOOL_COMMAND.format("previews")
 PREVIEW_HOOK: JsonObject = {
     "matcher": "Artifact",
     "hooks": [{"type": "command", "command": PREVIEW_COMMAND, "timeout": 5}],
 }
 CLAUDE_TOOL_HOOKS = [POLL_HOOK, PREVIEW_HOOK]
 # Its own script: the hard-eng.py entry point loads every gate module first.
-FAILURE_COMMAND = 'python3 "$(git rev-parse --show-toplevel 2>/dev/null)/.hooks/failures.py" 2>/dev/null || true'
+FAILURE_COMMAND = TOOL_COMMAND.format("failures")
 FAILURE_HOOK: JsonObject = {
     "hooks": [{"type": "command", "command": FAILURE_COMMAND, "timeout": 5}]
 }
@@ -259,6 +260,15 @@ CODEX_HOOK_STATUS = {
     "session": "Hard Eng: updating project setup",
     "stop": "Hard Eng: verifying changes",
 }
+
+
+def _old_tool_entry(script: str, matcher: str | None) -> JsonObject:
+    handler: JsonObject = {
+        "type": "command",
+        "command": OLD_TOOL_COMMAND.format(script),
+        "timeout": 5,
+    }
+    return {"matcher": matcher, "hooks": [handler]} if matcher else {"hooks": [handler]}
 
 
 def _remove_owned_entry(hooks: JsonObject, native: str, owned: JsonObject) -> None:
@@ -286,6 +296,13 @@ def remove_routine_hooks(current: JsonObject, agent: str, command: str) -> None:
             "hooks": [{"type": "command", "command": call, "timeout": 10}]
         }
         _remove_owned_entry(hooks, native, owned)
+    if agent == "claude":
+        for native, script, matcher in (
+            ("PreToolUse", "polling", "Bash"),
+            ("PreToolUse", "previews", "Artifact"),
+            ("PostToolUseFailure", "failures", None),
+        ):
+            _remove_owned_entry(hooks, native, _old_tool_entry(script, matcher))
     if agent == "codex":
         for event in CODEX_HOOK_STATUS:
             _remove_owned_entry(
@@ -495,8 +512,12 @@ def gate_status(root: Path) -> str:
     from update import SOURCE_FILE, install_paths
 
     try:
-        load_groups(root)
+        load_groups(root, starting=True)
         status = "Gates: ok."
+    except ModuleNotFoundError as error:
+        if error.name != "yaml":
+            raise
+        status = "Gates: not checked at session start — this python3 has no PyYAML; `check` installs it and runs them."
     except (
         OSError,
         ValueError,
@@ -504,7 +525,9 @@ def gate_status(root: Path) -> str:
         KeyError,
         subprocess.SubprocessError,
     ) as error:
-        status = "Gates: not runnable — " + " ".join(str(error).split())
+        first, _, rest = str(error).strip().partition("\n")
+        more = " (`python3 .hooks/hard-eng.py check` prints the rest)" if rest else ""
+        status = "Gates: not runnable — " + " ".join(first.split()) + more
     try:
         pending: list[str] = [
             line[3:]
@@ -565,12 +588,14 @@ def session_context(root: Path, payload: JsonObject) -> str:
 
     if note := restore_note(root):
         messages.append(note)
+    if os.name == "posix":
+        from process_group import start_process_scan, stop_idle_codex_brokers
+
+        scan = start_process_scan()
     messages.append(gate_status(root))
     if os.name == "posix":
-        from process_group import stop_idle_codex_brokers
-
         try:
-            brokers, processes = stop_idle_codex_brokers()
+            brokers, processes = stop_idle_codex_brokers(scan())
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             messages.append(f"Idle Codex broker cleanup failed: {error}")
             brokers = processes = 0
@@ -596,9 +621,7 @@ def completion_notice(agent: str | None, output: str) -> JsonObject:
     if agent not in {"claude", "codex"}:
         return {}
     lines = output.splitlines()
-    if lines and lines[-1].startswith(
-        ("Hard Eng: planning checks passed", "Hard Eng: build checks passed")
-    ):
+    if lines and lines[-1].startswith("Hard Eng: ") and " checks passed" in lines[-1]:
         return {"systemMessage": lines[-1]}
     return {}
 
@@ -648,29 +671,33 @@ def passed_notice(
     return {"systemMessage": notice} if notice else completion_notice(agent, output)
 
 
-def bounded(text: str, *, tail: bool = False) -> str:
-    if len(text) <= GATE_OUTPUT_LIMIT:
-        return text
-    note = "\n[gate output cut; rerun check for the full log]\n"
-    return note + text[-GATE_OUTPUT_LIMIT:] if tail else text[:GATE_OUTPUT_LIMIT] + note
-
-
 def failure_summary(log: str) -> str:
     """Failed gate names, then the first failing gate's output from its start."""
+    from debt import bounded, keep_debt_lines
+
     failures = FAILED_COMMAND_LINE.findall(log)
+    failures = [f for f in failures if f"\nDEBT {f[0]} @ {f[1]}:" not in log]
     if not failures:
         return bounded(log, tail=True)
-    heading = "Failed gates: " + ", ".join(dict.fromkeys(n for n, _ in failures)) + "\n"
+    named = {p for _, p in failures} - {".", ""}
+    labels = [f"{n} @ {p}" if named else n for n, p in failures]
+    heading = "Failed gates: " + ", ".join(dict.fromkeys(labels)) + "\n"
     name, package = failures[0]
     owner = re.escape(f"{package}/" if package else "") or r"(?:\S*/)?"
     start = re.search(rf"OUTPUT {owner}{re.escape(name)}[^\n]*\n", log)
     if start is None:
         return heading + bounded(log, tail=True)
     body = log[start.end() :]
-    tail = f"[^\n]* @ {re.escape(package)}(?!\\S)" if package else ""
-    finished = re.escape(name) + r"(?: \(exit|:)" + tail
+    where = f" @ {re.escape(package)}" if package else r"(?: @ \S+)?"
+    finished = re.escape(name) + r"(?: \(exit|:)[^\n]*" + where + r"(?!\S)"
     end = re.search(rf"(?m)^(?:CHECK|OUTPUT) \S*/\S+|(?:PASS|FAIL) {finished}", body)
-    return heading + bounded(body[: end.start() if end else None])
+    cut = end.start() if end else len(body)
+    beyond = rf"(?m)^FAIL {re.escape(name)}{where}: (?:findings beyond|\d+ recorded lines are fixed).*\n(?:  .*\n)*"
+    return (
+        heading
+        + bounded(keep_debt_lines(body[:cut], log))
+        + "".join(re.findall(beyond, body[cut:])[:1])
+    )
 
 
 def show_decisions(root: Path, names: list[str], state: Path | None) -> str:
@@ -695,35 +722,46 @@ def show_decisions(root: Path, names: list[str], state: Path | None) -> str:
     )
 
 
+def check_is_running(root: Path) -> bool:
+    from process_group import check_lock_file
+
+    with check_lock_file(root) as (_, held):
+        return held
+
+
 def run_check(root: Path, base: str, building: bool) -> tuple[int, str]:
     with tempfile.TemporaryFile() as log:
-        check = subprocess.Popen(
-            [
-                sys.executable,
-                str(root / ".hooks/hard-eng.py"),
-                "check",
-                "--quick",
-                "--base",
-                base,
-                *(["--plan-stage", "Ready"] if building else []),
-            ],
-            cwd=root,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        check: subprocess.Popen[bytes] | None = None
 
         def stop_check(signum: int, _frame: object) -> None:
+            if check is None:
+                raise SystemExit(128 + signum)
             with suppress(ProcessLookupError, PermissionError):
                 os.killpg(check.pid, signum)
 
         # An interrupted Stop hook must not leave the check's tools running.
         previous = signal.signal(signal.SIGTERM, stop_check)
         try:
+            check = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(root / ".hooks/hard-eng.py"),
+                    "check",
+                    "--quick",
+                    "--base",
+                    base,
+                    *(["--plan-stage", "Ready"] if building else []),
+                ],
+                cwd=root,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
             returncode = check.wait(timeout=3500)
         except subprocess.TimeoutExpired:
             stop_check(signal.SIGKILL, None)
-            check.wait()
+            if check is not None:
+                check.wait()
             raise
         finally:
             signal.signal(signal.SIGTERM, previous)
@@ -898,6 +936,12 @@ def checked_changes(
                 "systemMessage": "Hard Eng: unchanged since last passing check; not rerun."
             },
         )
+    if check_is_running(root):
+        step = "check --plan-stage Ready" if building else "check"
+        return {
+            "decision": "block",
+            "reason": f"Hard Eng: another Hard Eng check holds this checkout's lock, so this turn's changes are not checked; that check may predate your last edits. You started it after your last edit → read its exit notice + fix its findings. Else → start `python3 .hooks/hard-eng.py {step}` in the background (it waits its turn) + read its exit notice. Don't claim done.",
+        }
     returncode, output = run_check(root, base, building)
     decisions = show_decisions(root, changed.splitlines(), state)
     if returncode == 0:

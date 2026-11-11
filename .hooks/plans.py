@@ -2,10 +2,16 @@
 
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from gate_config import ALL_ZERO_OBJECT_ID, Group, changed_files, repository_files
-from shipping import DELIVERY_TARGET_LINE, ShippingError, load_policy, target_problem
+from gate_config import (
+    ALL_ZERO_OBJECT_ID,
+    SOURCE_FILE,
+    Group,
+    changed_files,
+    repository_files,
+)
 
 BACKTICKED_TEXT = re.compile(r"`([^`]+)`")
 NOT_APPLICABLE_PROOF = re.compile(r"\bN/A — \S")
@@ -51,6 +57,8 @@ SECTIONS = (
     "Verification",
 )
 STAGES = ("Draft", "Ready", "Complete")
+BUILD_STEP = "During the build, run this check with --plan-stage Ready"
+DRAFT_STEP = f"; files other than plans changed, so get approval for the plan and set its Status to Ready before you build. {BUILD_STEP}"
 HANDOFFS = ("Clarification", "Approval")
 PLACEHOLDERS = re.compile(
     r"(?im)\[TODO:|^\s*(?:#\s+|[\w +]+:\s*)?(?:TODO(?::[^\n]*)?|TBD|<(?!https?://)[^>\n]+>)\s*$"
@@ -66,12 +74,33 @@ def is_plan_path(path: Path) -> bool:
 CAPTURES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".mov", ".webm"}
 
 
+def plan_files(root: Path) -> list[Path]:
+    names = subprocess.check_output(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            ":(icase)plan.md",
+            ":(icase,glob)features/**/plan.md",
+        ],
+        cwd=root,
+        text=True,
+    )
+    return [
+        root / name
+        for name in sorted(set(names.split("\0")) - {""})
+        if is_plan_path(Path(name))
+        and (root / name).is_file()
+        and not (root / name).is_symlink()
+    ]
+
+
 def plan_folders(root: Path) -> set[Path]:
-    return {
-        path.parent.relative_to(root)
-        for path in repository_files(root)
-        if is_plan_path(path.relative_to(root))
-    } - {Path(".")}
+    return {path.parent.relative_to(root) for path in plan_files(root)} - {Path(".")}
 
 
 def is_plan_capture(name: str, folders: set[Path]) -> bool:
@@ -96,13 +125,19 @@ def is_documentation(path: Path, owner_language: str | None = None) -> bool:
     return is_plan_path(path) or (markdown and not site)
 
 
-def report_stage(failed: bool, stage: str | None, gates: list[str]) -> None:
+def report_stage(
+    failed: bool, stage: str | None, gates: list[str], quick: bool = False
+) -> None:
     if failed:
         where = f" in {', '.join(sorted(gates))}" if gates else ""
         print(f"Hard Eng: verification failed{where}; the next stage is blocked.")
     elif stage == "Ready":
         print(
             "Hard Eng: planning checks passed — ready for build within the authorized scope."
+        )
+    elif stage == "Complete" and quick:
+        print(
+            "Hard Eng: quick checks passed; the full check runs the tests and the other gates."
         )
     elif stage == "Complete":
         print(
@@ -267,9 +302,7 @@ def draft_handoff(sections: dict[str, str]) -> tuple[str | None, str | None, lis
 
 
 def planning_feedback(root: Path, changed: set[str]) -> tuple[str, bool]:
-    paths = [
-        path for path in repository_files(root) if is_plan_path(path.relative_to(root))
-    ]
+    paths = plan_files(root)
     selected = [path for path in paths if str(path.relative_to(root)) in changed]
     messages = []
     unfinished = False
@@ -308,9 +341,7 @@ def planning_feedback(root: Path, changed: set[str]) -> tuple[str, bool]:
 
 def build_in_progress(root: Path, changed: set[str]) -> bool:
     """Ready plans with pending verification are mid-build, not finished."""
-    paths = [
-        path for path in repository_files(root) if is_plan_path(path.relative_to(root))
-    ]
+    paths = plan_files(root)
     selected = [path for path in paths if str(path.relative_to(root)) in changed]
     try:
         contents = [path.read_text() for path in selected or paths]
@@ -328,6 +359,50 @@ def build_in_progress(root: Path, changed: set[str]) -> bool:
         )
     except (OSError, ValueError, KeyError):
         return False
+
+
+def touched_since_update(path: Path) -> bool:
+    """A long-lived branch differs from its base in every plan; only edits after the last Hard Eng update count."""
+    root = path.parent
+    try:
+        if _git_output(root, "status", "--porcelain", "--", path.name).strip():
+            return True
+        updated = _git_output(
+            root, "log", "-1", "--format=%cI", "--", f":/{SOURCE_FILE}"
+        ).strip()
+        written = _git_output(
+            root, "log", "-1", "--format=%aI", "--", path.name
+        ).strip()
+    except (subprocess.CalledProcessError, OSError):
+        return True
+    return (
+        not updated
+        or not written
+        or datetime.fromisoformat(written) > datetime.fromisoformat(updated)
+    )
+
+
+def newer_fields(
+    sections: dict[str, str],
+    status: str,
+    *,
+    legacy: bool,
+    changed: bool,
+    path: Path,
+) -> None:
+    """Old Complete plans skip Same cause; Single source and Retro bind only edited plans."""
+    if not legacy:
+        field(sections["Repository context"], "Same cause")
+        acceptance_tests(sections)
+    if not changed:
+        return
+    try:
+        field(sections["Repository context"], "Single source")
+        if status == "Complete":
+            field(sections["Verification"], "Retro")
+    except ValueError:
+        if status != "Complete" or touched_since_update(path):
+            raise
 
 
 def validate_plan(path: Path, *, changed: bool = True) -> str:
@@ -349,9 +424,7 @@ def validate_plan(path: Path, *, changed: bool = True) -> str:
     errors = readiness_errors(sections, status, legacy=legacy)
     if errors:
         raise ValueError("; ".join(errors))
-    if not legacy:
-        field(sections["Repository context"], "Same cause")
-        acceptance_tests(sections)
+    newer_fields(sections, status, legacy=legacy, changed=changed, path=path)
     if status == "Complete":
         markers = CHECKBOX_LABEL.findall(content)
         if any(marker.lower() != "x" for marker in markers):
@@ -415,13 +488,10 @@ def missing_tests(root: Path, references: list[tuple[str, str]]) -> list[str]:
 def _validate_shipping(root: Path, path: Path, status: str) -> None:
     content = path.read_text()
     if status in {"Ready", "Complete"} and DELIVERY_TARGET_FIELD.search(content):
-        policy = load_policy(root)
-        target = DELIVERY_TARGET_LINE.search(plan_sections(content)["Verification"])
-        if (
-            policy is not None
-            and target
-            and (problem := target_problem(target[1], policy["delivery"]))
-        ):
+        from shipping import plan_target_problem
+
+        verification = plan_sections(content)["Verification"]
+        if problem := plan_target_problem(root, verification):
             raise ValueError(problem)
 
 
@@ -467,6 +537,8 @@ def _git_output(root: Path, *args: str) -> str:
 
 
 def release_references(root: Path) -> tuple[str, ...]:
+    from shipping import ShippingError, load_policy
+
     try:
         policy = load_policy(root, required=False)
     except ShippingError:
@@ -498,34 +570,14 @@ def applicable_plans(root: Path, paths: list[Path], changed: set[str]) -> list[P
     ]
 
 
-def _revision(root: Path, reference: str) -> str | None:
-    try:
-        return _git_output(
-            root, "rev-parse", "--verify", "-q", f"{reference}^{{commit}}"
-        )
-    except (subprocess.CalledProcessError, OSError):
-        return None
-
-
-def released_plans(root: Path, base: str | None) -> set[str]:
-    """Plans changed since the release base, so a feature check sees what the release checks."""
-    tips = {_revision(root, reference) for reference in release_references(root)}
-    point = default_branch_point(root)
-    if point is None or _revision(root, base or "HEAD") in tips:
-        return set()
-    return {
-        name for name in changed_files(root, point) or () if is_plan_path(Path(name))
-    }
-
-
 def plan_tests(root: Path, base: str | None) -> set[str]:
     """Test names that the active plans' acceptance lines depend on."""
+    from change_size import released_plans
+
     changed = (changed_files(root, base or "HEAD") or set()) | released_plans(
         root, base
     )
-    paths = [
-        path for path in repository_files(root) if is_plan_path(path.relative_to(root))
-    ]
+    paths = plan_files(root)
     names = set()
     for path in applicable_plans(root, paths, changed):
         content = path.read_text()
@@ -551,34 +603,41 @@ def plan_skips(root: Path, base: str | None, groups: list[Group], since: float) 
 def validate_plans(
     root: Path, base: str | None = None, stage: str | None = None
 ) -> str:
-    from change_size import plan_not_needed
+    from change_size import (
+        judged_point,
+        moved_plans,
+        plan_not_needed,
+        released_plans,
+        update_only,
+    )
 
     explicit_stage = stage is not None
+    typed = base is None
+    base = base or judged_point(root)
     changed = changed_files(root, base or "HEAD")
     if changed is None:
         raise ValueError("Cannot verify plan scope; fetch or supply a valid Git --base")
     if stage is None:
         stage = "Draft" if planning_only(root, changed) else "Complete"
-    if base is not None and not explicit_stage and changed:
-        from change_size import update_written
-
-        # Unrelated open plans must not block a verified Hard Eng update branch.
-        if not changed - update_written(root, base):
-            print(
-                "Plan: only files the verified Hard Eng update wrote; no plan needed."
-            )
-            return stage
+    # Unrelated open plans must not block a verified Hard Eng update branch.
+    if (
+        base is not None
+        and not explicit_stage
+        and changed
+        and update_only(root, base, changed)
+    ):
+        print("Plan: only files the verified Hard Eng update wrote; no plan needed.")
+        return stage
     changed |= released_plans(root, base)
-    paths = [
-        path for path in repository_files(root) if is_plan_path(path.relative_to(root))
-    ]
+    changed -= moved_plans(root, base, changed)
+    paths = plan_files(root)
     applicable = applicable_plans(root, paths, changed)
-    if not applicable and explicit_stage:
+    if not applicable and explicit_stage and not changed:
         applicable = paths
     if (
         (changed != set() or explicit_stage)
         and not applicable
-        and (explicit_stage or not plan_not_needed(root))
+        and not plan_not_needed(root)
     ):
         raise ValueError(
             "repository changes need an applicable PLAN.md; use the HE Plan template"
@@ -593,8 +652,10 @@ def validate_plans(
             # A Draft plan claims no implementation, so it may ride along with finished work.
             if status == "Draft" and reached:
                 continue
+            steps = {"Draft": DRAFT_STEP, "Ready": f". {BUILD_STEP}" * typed}
+            step = steps[status] if stage == "Complete" and not explicit_stage else ""
             raise ValueError(
-                f"{path.relative_to(root)}: plan is {status}; this check requires {stage}"
+                f"{path.relative_to(root)}: plan is {status}; this check requires {stage}{step}"
             )
         effective_stage = min(effective_stage, status, key=STAGES.index)
     return stage if explicit_stage or not applicable else effective_stage
@@ -715,7 +776,9 @@ REQUIREMENT_FILES = (
     ".agents/skills/he/references/requirements.md",
     "docs/requirements.md",
 )
-REQUIREMENT_ID = re.compile(r"\b(?:HE|REQ)-[A-Z0-9]+(?:-[A-Z0-9]+)+\b")
+REQUIREMENT_ID = re.compile(
+    r"\b(?:HE-[A-Z0-9]+(?:-[A-Z0-9]+)*|REQ-[A-Z0-9]+(?:-[A-Z0-9]+)+)\b"
+)
 TEST_CALL = re.compile(r"""\b(?:test|it|testWidgets)\(\s*(['"])(.+?)\1""")
 PYTHON_TEST = re.compile(r"^\s*(?:async\s+)?def\s+(test\w*)")
 Reference = tuple[str, int, str]
@@ -732,6 +795,11 @@ def registry_entries(root: Path) -> tuple[dict[str, tuple[str, str]], list[str]]
             heading, _, body = chunk.partition("\n")
             requirement = heading.split(" — ", 1)[0].strip()
             if not REQUIREMENT_ID.fullmatch(requirement):
+                if requirement.startswith(("HE-", "REQ-")):
+                    errors.append(
+                        f"{name}: heading {requirement} is not a valid requirement ID; "
+                        "see the ID format at the top of the Hard Eng requirements"
+                    )
                 continue
             if requirement in entries:
                 errors.append(f"{requirement} is defined more than once")
@@ -765,7 +833,7 @@ def requirement_references(root: Path) -> list[tuple[str, int, str]]:
             "-n",
             "-z",
             "-E",
-            r"(HE|REQ)-[A-Z0-9]+(-[A-Z0-9]+)+",
+            r"(HE|REQ)-[A-Z0-9]",
         )
     except subprocess.CalledProcessError as error:
         if error.returncode == 1:
@@ -812,9 +880,7 @@ def requirement_tests(root: Path) -> dict[str, list[Reference]]:
 def unproven_requirements(
     root: Path, entries: dict[str, tuple[str, str]], references: list[Reference]
 ) -> list[str]:
-    installed = (root / ".hooks/hard-eng-source.json").is_file() or not (
-        root / "setup.py"
-    ).is_file()
+    installed = (root / SOURCE_FILE).is_file() or not (root / "setup.py").is_file()
     tests = requirement_tests(root)
     enforced: set[str] = set()
     linked: set[str] = set()
@@ -872,7 +938,8 @@ def validate_requirements(root: Path) -> None:
     for path, line, text in references:
         for requirement in REQUIREMENT_ID.findall(text):
             proof = entries.get(requirement, ("unknown", ""))[0]
-            if proof in {"unknown", "retired"}:
+            # A one-part token such as a codec name is an ID only when the registry holds it.
+            if proof == "retired" or proof == "unknown" and requirement.count("-") > 1:
                 errors.append(f"{path}:{line} names {proof} {requirement}")
     errors += unproven_requirements(root, entries, references)
     errors += copied_requirements(root, entries)

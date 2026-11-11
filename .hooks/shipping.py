@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from agent_hooks import reject_attribution
 from gate_config import JsonValue
+from project_files import read_project_file
 from ship_evidence import attachment_urls
 
 REPOSITORY_NAME_PART = re.compile(r"[A-Za-z0-9_.-]+")
@@ -310,14 +311,18 @@ def load_policy(root: Path, required: bool = True) -> ShippingPolicy | None:
             raise ShippingError("hard-eng.gates.json is required for shipping")
         return None
     try:
-        payload = json.loads(path.read_text())
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ShippingError("hard-eng.gates.json is invalid") from error
+        payload = read_project_file(path, root)
+    except (OSError, ValueError) as error:
+        raise ShippingError(str(error)) from error
     if not isinstance(payload, dict):
         raise ShippingError("hard-eng.gates.json must be an object")
     if "shipping" not in payload:
         if required:
-            raise ShippingError("shipping policy is required")
+            raise ShippingError(
+                "shipping policy is required. Add a `shipping` block to "
+                "hard-eng.gates.json; the block is described in "
+                ".agents/skills/he-ship/references/checks.md"
+            )
         return None
     raw = payload["shipping"]
     if not isinstance(raw, dict):
@@ -590,10 +595,19 @@ def _check_attachment(root: Path, url: str) -> None:
         raise ShippingError("UI evidence URL is not an allowed GitHub attachment")
     # Signed attachment redirects can reject HEAD; keep binary data out of stdout.
     request = ("api", "--method", "GET", "--include", "--silent")
-    response = gh(root, *request, "-H", "Range: bytes=0-0", url)
+    try:
+        response = gh(root, *request, "-H", "Range: bytes=0-0", url)
+    except ShippingError:
+        # GitHub can time out ranged requests while a plain GET succeeds.
+        try:
+            response = gh(root, *request, url)
+        except ShippingError as error:
+            raise ShippingError(
+                f"UI evidence attachment is unavailable: {url} ({error})"
+            ) from error
     statuses = HTTP_STATUS_LINE.findall(response)
     if not statuses or not 200 <= int(statuses[-1]) < 300:
-        raise ShippingError("UI evidence attachment is unavailable")
+        raise ShippingError(f"UI evidence attachment is unavailable: {url}")
     content_types = CONTENT_TYPE_HEADER.findall(response)
     content_type = content_types[-1].lower() if content_types else ""
     if not content_type.startswith(("image/", "video/")):
@@ -649,8 +663,15 @@ def origin_repository(remote_url: str) -> str:
 
 
 def _clean(root: Path) -> None:
-    if git(root, "status", "--porcelain", "-uall", "--ignore-submodules=none").strip():
-        raise ShippingError("shipping requires a clean task checkout")
+    status = git(root, "status", "--porcelain", "-uall", "--ignore-submodules=none")
+    names = [line[3:] for line in status.splitlines()]
+    if names:
+        more = f" and {len(names) - 5} more" if len(names) > 5 else ""
+        raise ShippingError(
+            "shipping requires a clean task checkout; these files changed: "
+            + ", ".join(names[:5])
+            + more
+        )
 
 
 def _plan_target(root: Path, plan: Path) -> tuple[Path, str]:
@@ -688,6 +709,15 @@ def target_problem(target: str, delivery: list[Delivery]) -> str | None:
     if target.lower() == "merge" and delivery:
         return "configured delivery checks need Delivery target: Deploy"
     return None
+
+
+def plan_target_problem(root: Path, verification: str) -> str | None:
+    """Why the delivery target in a plan's Verification does not fit the shipping policy."""
+    policy = load_policy(root)
+    target = DELIVERY_TARGET_LINE.search(verification)
+    if policy is None or not target:
+        return None
+    return target_problem(target[1], policy["delivery"])
 
 
 def _delivery_scope(
@@ -801,6 +831,8 @@ def _ready_state(
             "PR body needs a line that starts `Undo:` and lists the undo steps"
         )
     _current_with_base(root, identity, pull.base_ref, pull.head_sha)
+    if pull.mergeable is not True or pull.mergeable_state != "clean":
+        _checks(root, "/".join(identity[:2]), pull.head_sha, policy)
     bypass = pull.mergeable is True and pull.mergeable_state == "blocked"
     if bypass:
         from review_bypass import bypass_problem
@@ -810,7 +842,6 @@ def _ready_state(
             raise ShippingError(f"PR mergeability is not clean: {problem}")
     elif pull.mergeable is not True or pull.mergeable_state != "clean":
         raise ShippingError("PR mergeability is not clean")
-    _clean(root)
     return bypass
 
 
@@ -822,7 +853,9 @@ def _delivery(root: Path, policy: ShippingPolicy, revision: str, pr_url: str) ->
         try:
             stdout = _run(root, command[0], tuple(command[1:]), _DELIVERY_TIMEOUT, env)
         except ShippingError as error:
-            raise ShippingError(f"delivery check failed: {item['name']}") from error
+            raise ShippingError(
+                f"delivery check failed: {item['name']}: {error}"
+            ) from error
         value = _json(stdout, f"delivery check {item['name']}")
         data = _object(value, f"delivery check {item['name']}")
         if data.get("status") != "passed" or data.get("revision") != revision:
@@ -842,6 +875,7 @@ def verify(root: Path, plan: Path | None, pr_url: str, stage: str) -> Shipment:
     url = f"https://github.com/{owner}/{name}/pull/{number}"
     if repository != f"{owner}/{name}".lower():
         raise ShippingError("PR URL repository does not match origin")
+    _clean(resolved_root)
     resolved_plan, target = _delivery_scope(resolved_root, plan, policy["delivery"])
     if problem := target_problem(target, policy["delivery"]):
         raise ShippingError(problem)
@@ -858,7 +892,6 @@ def verify(root: Path, plan: Path | None, pr_url: str, stage: str) -> Shipment:
         )
         revision, merged_sha = pull.head_sha, None
     else:
-        _clean(resolved_root)
         revision = _delivered(resolved_root, pull, policy["base"], origin_url)
         merged_sha = revision
     if policy["ui_paths"]:
