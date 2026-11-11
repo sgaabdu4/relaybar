@@ -106,7 +106,7 @@ extension PoolSetup {
             state.tailscale = nil
             state.keepOn = move.newKeepOn
             state.steps = steps
-            state.pausing = paused
+            state.pausing += paused.filter { !state.pausing.contains($0) }
             for index in state.linuxClients.indices { state.linuxClients[index].needsRepoint = true }
             move.phase = .switched
             state.move = move

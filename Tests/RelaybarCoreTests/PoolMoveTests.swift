@@ -230,6 +230,7 @@ struct PoolMoveTests {
         before.order = ["claude": ["ann@example.com"]]
         before.orderMode = .manual
         before.linuxClients = [PoolLinuxClient(host: "linuxpc")]
+        before.pausing = ["codex:cx@example.com"]
         try before.save(harness.paths)
         let mark = harness.recorder.commands.count
         let setup = PoolSetup(env: harness.env())
@@ -246,8 +247,8 @@ struct PoolMoveTests {
                 signedIn.texts.append(
                     "\(during?.move?.phase.rawValue ?? "none") \(during?.ssh ?? "none") \(removed) \(during?.pausing ?? [])")
             })
-        #expect(signedIn.texts == ["switched mediabox false [\"claude:wk@example.com\"]"])
-        #expect(PoolState.load(harness.paths)?.pausing == ["claude:wk@example.com"])
+        #expect(signedIn.texts == ["switched mediabox false [\"codex:cx@example.com\", \"claude:wk@example.com\"]"])
+        #expect(PoolState.load(harness.paths)?.pausing == ["codex:cx@example.com", "claude:wk@example.com"])
         #expect(report.sleep == .off)
         let state = try #require(PoolState.load(harness.paths))
         #expect(state.ssh == "mediabox" && state.tailscale == nil && !state.joined)
