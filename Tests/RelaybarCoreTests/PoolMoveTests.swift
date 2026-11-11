@@ -790,6 +790,17 @@ struct PoolMoveTests {
         #expect(forgot.finished)
         #expect(PoolState.load(off.paths) == nil)
 
+        let later = try Harness()
+        try afterSwitch(later)
+        later.recorder.respond = { command in
+            command.arguments.contains("homebox") ? CommandResult(status: 255, error: "Connection timed out") : CommandResult()
+        }
+        _ = PoolSetup(env: later.env()).stop()
+        #expect(PoolState.load(later.paths)?.move != nil)
+        later.recorder.respond = { _ in CommandResult() }
+        let settled = await PoolSetup(env: later.env()).settleMove()
+        #expect(settled == PoolMoveReport())
+        #expect(PoolState.load(later.paths) == nil)
 
         let preparing = try Harness()
         var half = PoolState(ssh: "homebox")

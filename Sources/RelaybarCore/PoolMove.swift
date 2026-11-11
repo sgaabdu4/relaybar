@@ -152,8 +152,18 @@ extension PoolSetup {
                 return report
             }
         }
-        try? updateState { $0.move = nil }
+        clearMove()
         return report
+    }
+
+    private func clearMove() {
+        guard var state = PoolState.load(env.paths) else { return }
+        state.move = nil
+        if state.steps.isEmpty {
+            PoolFile.remove(env.paths.state)
+        } else {
+            try? state.save(env.paths)
+        }
     }
 
     @discardableResult
@@ -163,7 +173,7 @@ extension PoolSetup {
         PoolMove.removeLocalNew(move, state: state, env)
         if let old = move.old { await putBack(old, state: state) }
         switch PoolMove.removeRemoteNew(move, env, sudoPassword: sudoPassword) {
-        case .done: try? updateState { $0.move = nil }
+        case .done: clearMove()
         case .needsPassword(let host): report.needsPassword = host
         case .unreachable(let host): report.left = host
         }
