@@ -41,8 +41,11 @@ public enum PoolOrder {
             return member.credential.priority == target ? nil : PoolPriority(name: member.credential.name, priority: target)
         }
         let inUse = effective.first(where: serving)
+        var seen: Set<String> = []
+        let kept = saved.map { $0.lowercased() }.filter { seen.insert($0).inserted }
         return PoolPlan(
-            kind: kind, savedOrder: base.map { $0.credential.email.lowercased() }, effective: effective, inUse: inUse, changes: changes)
+            kind: kind, savedOrder: kept + added.map { $0.credential.email.lowercased() }, effective: effective, inUse: inUse,
+            changes: changes)
     }
 
     private static func weeklyReset(_ member: PoolMember, now: Date) -> Date? {

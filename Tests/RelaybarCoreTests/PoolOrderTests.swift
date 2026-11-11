@@ -34,6 +34,15 @@ struct PoolOrderTests {
         #expect(PoolOrder.move("a@example.com", to: -4, in: ["b@example.com"]) == ["a@example.com", "b@example.com"])
     }
 
+    @Test func keepsTheSpotOfAnAccountThatIsNotSignedInYet() {
+        let saved = ["wk@example.com", "me@example.com"]
+        let waiting = PoolOrder.plan(kind: .claude, members: [member("me@example.com")], saved: saved, mode: .manual)
+        #expect(waiting.savedOrder == saved)
+        let back = PoolOrder.plan(
+            kind: .claude, members: [member("me@example.com"), member("wk@example.com")], saved: waiting.savedOrder, mode: .manual)
+        #expect(emails(back) == ["wk@example.com", "me@example.com"])
+    }
+
     @Test func movesANearlyUsedAccountDown() {
         let members = [
             member("a@example.com", session: 95), member("b@example.com"), member("c@example.com", weekly: 91.2),
