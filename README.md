@@ -20,9 +20,9 @@ See how much of each Claude and Codex limit is left, live, for every account on 
 
 ## Watch it work
 
-Add a Claude account, sign in, open its own desktop app and use it in T3 Code. All names are sample accounts.
+See the limits of each account, add a second account, then combine them so T3 Code and Terminal use them as one. All names are sample accounts.
 
-https://github.com/user-attachments/assets/65b1f635-a769-4021-8cd1-288c8367ca0d
+https://github.com/user-attachments/assets/f0c0e5cb-938e-400f-9646-fde2bbc38fcd
 
 ## Why Relaybar
 

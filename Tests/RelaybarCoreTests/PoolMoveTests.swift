@@ -230,6 +230,7 @@ struct PoolMoveTests {
         before.order = ["claude": ["ann@example.com"]]
         before.orderMode = .manual
         before.linuxClients = [PoolLinuxClient(host: "linuxpc")]
+        before.pausing = ["codex:cx@example.com"]
         try before.save(harness.paths)
         let mark = harness.recorder.commands.count
         let setup = PoolSetup(env: harness.env())
@@ -237,15 +238,17 @@ struct PoolMoveTests {
         let signedIn = Messages()
         let harnessForClosure = harness
         let report = try await setup.move(
-            to: .computer("mediabox"), progress: { steps.texts.append($0) },
+            to: .computer("mediabox"), paused: ["claude:wk@example.com"], progress: { steps.texts.append($0) },
             afterSwitch: {
                 let during = PoolState.load(harnessForClosure.paths)
                 let removed = harnessForClosure.recorder.commands.contains {
                     remoteScript($0).contains("rm -rf") && $0.arguments.contains("homebox")
                 }
-                signedIn.texts.append("\(during?.move?.phase.rawValue ?? "none") \(during?.ssh ?? "none") \(removed)")
+                signedIn.texts.append(
+                    "\(during?.move?.phase.rawValue ?? "none") \(during?.ssh ?? "none") \(removed) \(during?.pausing ?? [])")
             })
-        #expect(signedIn.texts == ["switched mediabox false"])
+        #expect(signedIn.texts == ["switched mediabox false [\"codex:cx@example.com\", \"claude:wk@example.com\"]"])
+        #expect(PoolState.load(harness.paths)?.pausing == ["codex:cx@example.com", "claude:wk@example.com"])
         #expect(report.sleep == .off)
         let state = try #require(PoolState.load(harness.paths))
         #expect(state.ssh == "mediabox" && state.tailscale == nil && !state.joined)
@@ -530,27 +533,68 @@ struct PoolMoveTests {
         let paused = PoolCredential(name: "x", authIndex: "i", email: "Bob@Example.com", kind: .claude, disabled: true, status: "disabled")
         let live = PoolCredential(name: "y", authIndex: "j", email: "ann@example.com", kind: .claude, disabled: false, status: "active")
         let members = [PoolMember(credential: paused, state: .paused), PoolMember(credential: live, state: .unavailable)]
-        let emails = PoolMove.pausedEmails(in: members)
-        #expect(emails == ["bob@example.com"])
-        try await PoolSetup(env: harness.env()).pauseAgain(emails: emails)
+        let keys = PoolMove.pausedAccounts(in: members)
+        #expect(keys == ["claude:bob@example.com"])
+        state.pausing = keys
+        try state.save(harness.paths)
+        try await PoolSetup(env: harness.env()).pauseAgain()
+        #expect(PoolState.load(harness.paths)?.pausing == [])
         let status = helper.patches.filter { $0.path == "credentials/status" }
         #expect(status.count == 1)
         #expect(status[0].body["name"] as? String == "claude-bob@example.com.json" && status[0].body["disabled"] as? Bool == true)
-        let priorities = helper.patches.filter { $0.path == "credentials/fields" }
-        #expect(priorities.contains { $0.body["name"] as? String == "claude-bob@example.com.json" && $0.body["priority"] as? Int == 2 })
-        #expect(priorities.contains { $0.body["name"] as? String == "claude-ann@example.com.json" && $0.body["priority"] as? Int == 1 })
+        #expect(helper.patches.filter { $0.path == "credentials/fields" }.isEmpty)
         #expect(PoolState.load(harness.paths)?.order["claude"] == ["bob@example.com", "ann@example.com"])
 
         let none = Credentials([("claude", "ann@example.com"), ("claude", "bob@example.com")])
         harness.http.handler = none.handler(secret: secret)
-        try await PoolSetup(env: harness.env()).pauseAgain(emails: [])
-        #expect(none.patches.filter { $0.path == "credentials/status" }.isEmpty)
-        #expect(!none.patches.filter { $0.path == "credentials/fields" }.isEmpty)
+        try await PoolSetup(env: harness.env()).pauseAgain()
+        #expect(none.patches.isEmpty)
 
         let last = Credentials([("claude", "ann@example.com")])
         harness.http.handler = last.handler(secret: secret)
-        try await PoolSetup(env: harness.env()).pauseAgain(emails: ["ann@example.com"])
+        state = try #require(PoolState.load(harness.paths))
+        state.pausing = ["claude:ann@example.com"]
+        try state.save(harness.paths)
+        try await PoolSetup(env: harness.env()).pauseAgain()
         #expect(last.patches.filter { $0.path == "credentials/status" }.isEmpty)
+        #expect(PoolState.load(harness.paths)?.pausing == ["claude:ann@example.com"])
+    }
+
+    @Test func savingTheOrderKeepsAnAccountNotSignedInYet() throws {
+        let harness = try seeded()
+        var state = try #require(PoolState.load(harness.paths))
+        state.order = ["claude": ["wk@example.com", "me@example.com", "bob@example.com"]]
+        try state.save(harness.paths)
+        try PoolSetup(env: harness.env()).setOrder(kind: .claude, emails: ["Bob@example.com", "me@example.com"])
+        #expect(PoolState.load(harness.paths)?.order["claude"] == ["wk@example.com", "bob@example.com", "me@example.com"])
+    }
+
+    @Test func pausesOnlyTheSameKindAndWaitsForAccountsNotSignedInYet() async throws {
+        let harness = try seeded()
+        let secret = String(repeating: "b2", count: 32)
+        let paused = PoolCredential(name: "x", authIndex: "i", email: "WK@example.com", kind: .claude, disabled: true, status: "disabled")
+        let codex = PoolCredential(name: "y", authIndex: "j", email: "wk@example.com", kind: .codex, disabled: false, status: "active")
+        let members = [PoolMember(credential: paused, state: .paused), PoolMember(credential: codex, state: .unavailable)]
+        let keys = PoolMove.pausedAccounts(in: members)
+        #expect(keys == ["claude:wk@example.com"])
+        var state = try #require(PoolState.load(harness.paths))
+        state.pausing = keys
+        try state.save(harness.paths)
+
+        let early = Credentials([("claude", "me@example.com"), ("codex", "wk@example.com"), ("codex", "cx@example.com")])
+        harness.http.handler = early.handler(secret: secret)
+        try await PoolSetup(env: harness.env()).pauseAgain()
+        #expect(early.patches.filter { $0.path == "credentials/status" }.isEmpty)
+        #expect(PoolState.load(harness.paths)?.pausing == keys)
+
+        let later = Credentials([
+            ("claude", "me@example.com"), ("claude", "wk@example.com"), ("codex", "wk@example.com"), ("codex", "cx@example.com"),
+        ])
+        harness.http.handler = later.handler(secret: secret)
+        try await PoolSetup(env: harness.env()).pauseAgain()
+        let status = later.patches.filter { $0.path == "credentials/status" }
+        #expect(status.count == 1 && status.first?.body["name"] as? String == "claude-wk@example.com.json")
+        #expect(PoolState.load(harness.paths)?.pausing == [])
     }
 
     private func clientCommands(_ harness: Harness, _ host: String) -> [Command] {
@@ -752,6 +796,18 @@ struct PoolMoveTests {
         let forgot = setup.forgetRemote()
         #expect(forgot.finished)
         #expect(PoolState.load(off.paths) == nil)
+
+        let later = try Harness()
+        try afterSwitch(later)
+        later.recorder.respond = { command in
+            command.arguments.contains("homebox") ? CommandResult(status: 255, error: "Connection timed out") : CommandResult()
+        }
+        _ = PoolSetup(env: later.env()).stop()
+        #expect(PoolState.load(later.paths)?.move != nil)
+        later.recorder.respond = { _ in CommandResult() }
+        let settled = await PoolSetup(env: later.env()).settleMove()
+        #expect(settled == PoolMoveReport())
+        #expect(PoolState.load(later.paths) == nil)
 
         let preparing = try Harness()
         var half = PoolState(ssh: "homebox")
@@ -984,6 +1040,26 @@ struct PoolMoveTests {
         _ = PoolSetup(env: harness.env()).stop()
         _ = await PoolSetup(env: harness.env()).settleMove()
         #expect(!harness.recorder.commands.contains { plainScript($0) == PoolTeardown.remoteRemoval && $0.arguments.contains("mediabox") })
+        #expect(!FileManager.default.fileExists(atPath: harness.paths.agent(Pool.tunnelLabel).path))
+        #expect(!harness.recorder.commands.contains { $0.executable == "/bin/launchctl" && $0.arguments.first == "bootstrap" })
+
+        let local = try Harness()
+        var here = PoolState()
+        here.steps = [.keychainAccessKey, .keychainManagementSecret, .helperFolder, .helperAgent, .updateAgent]
+        here.move = PoolMove(
+            target: "mediabox", phase: .preparing, old: PoolMoveOld(ssh: nil, tailscale: nil, keepOn: PoolKeepOn()), claimed: true,
+            newKeepOn: PoolKeepOn(masked: ["sleep.target"]))
+        try here.save(local.paths)
+        local.recorder.respond = { command in
+            remoteScript(command).contains("systemctl unmask") && command.stdin == nil
+                ? CommandResult(status: PoolRemote.needsPasswordStatus) : CommandResult()
+        }
+        _ = PoolSetup(env: local.env()).stop()
+        local.recorder.respond = { _ in CommandResult() }
+        local.recorder.removeCommands()
+        _ = await PoolSetup(env: local.env()).settleMove()
+        #expect(!local.recorder.commands.contains { $0.executable == "/bin/launchctl" && $0.arguments.first == "bootstrap" })
+        #expect(PoolState.load(local.paths) == nil)
     }
 
     @Test func aCleanupThatLeavesTheHelperIsNotRecordedAsDone() async throws {

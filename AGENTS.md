@@ -26,3 +26,7 @@
 - Failing check → fix the project, never offer to weaken it. Broken Hard Eng `.hooks/`, `.agents/skills/he*` or setup → tell user, check [issues](https://github.com/sgaabdu4/hard-eng/issues) for duplicates, if approved, file: Problem, Reproduction, revision, Suggestion; apply publication privacy.
 - Follow `.agents/skills/he/SKILL.md`; commands: `python3 .hooks/hard-eng.py --help`.
 <!-- hard-eng:end -->
+
+# Project rules
+
+- Combine accounts: review each new move, Stop or sign-in path against [REQ-POOL-RECOVERY](docs/requirements.md#req-pool-recovery).

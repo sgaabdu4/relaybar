@@ -75,7 +75,7 @@ extension PoolSetup {
     }
 
     public func move(
-        to target: PoolMoveTarget, sudoPassword: String? = nil, progress: @Sendable (String) -> Void = { _ in },
+        to target: PoolMoveTarget, sudoPassword: String? = nil, paused: [String] = [], progress: @Sendable (String) -> Void = { _ in },
         afterSwitch: @Sendable () async -> Void = {}
     ) async throws -> PoolMoveReport {
         guard let script = env.script else { throw PoolSetupError.missingScript }
@@ -106,6 +106,7 @@ extension PoolSetup {
             state.tailscale = nil
             state.keepOn = move.newKeepOn
             state.steps = steps
+            state.pausing += paused.filter { !state.pausing.contains($0) }
             for index in state.linuxClients.indices { state.linuxClients[index].needsRepoint = true }
             move.phase = .switched
             state.move = move
@@ -151,8 +152,14 @@ extension PoolSetup {
                 return report
             }
         }
-        try? updateState { $0.move = nil }
+        clearMove()
         return report
+    }
+
+    private func clearMove() {
+        guard var state = PoolState.load(env.paths) else { return }
+        state.move = nil
+        try? state.saveOrRemove(env.paths)
     }
 
     @discardableResult
@@ -162,7 +169,7 @@ extension PoolSetup {
         PoolMove.removeLocalNew(move, state: state, env)
         if let old = move.old { await putBack(old, state: state) }
         switch PoolMove.removeRemoteNew(move, env, sudoPassword: sudoPassword) {
-        case .done: try? updateState { $0.move = nil }
+        case .done: clearMove()
         case .needsPassword(let host): report.needsPassword = host
         case .unreachable(let host): report.left = host
         }
@@ -175,12 +182,13 @@ extension PoolSetup {
             if FileManager.default.fileExists(atPath: env.paths.agent(Pool.tunnelLabel).path) {
                 try? PoolTeardown.undo(.tunnelAgent, state: state, env)
             }
+            guard state.steps.contains(.helperAgent) else { return }
             let answering = await api.isUp()
             if !answering {
                 load(Pool.helperLabel)
                 load(Pool.updateLabel)
             }
-        } else if let route = old.asState.tunnelRoute {
+        } else if state.steps.contains(.tunnelAgent), let route = old.asState.tunnelRoute {
             let expected = PoolTunnel.plist(paths: env.paths, destination: route.host, hostName: route.hostName)
             let answering = await api.isUp()
             if PoolFile.contents(env.paths.agent(Pool.tunnelLabel)) != expected || !answering {
@@ -312,28 +320,32 @@ extension PoolMove {
         return removeRemoteNew(move, env, sudoPassword: sudoPassword)
     }
 
-    public static func pausedEmails(in members: [PoolMember]) -> [String] {
+    public static func pausedAccounts(in members: [PoolMember]) -> [String] {
         members.compactMap { member in
             guard case .paused = member.state, !member.credential.email.isEmpty else { return nil }
-            return member.credential.email.lowercased()
+            return key(member.credential)
         }
+    }
+
+    static func key(_ credential: PoolCredential) -> String {
+        credential.kind.rawValue + ":" + credential.email.lowercased()
     }
 }
 
 extension PoolSetup {
-    public func pauseAgain(emails: [String]) async throws {
-        guard let management else { return }
-        let wanted = Set(emails.map { $0.lowercased() })
+    public func pauseAgain() async throws {
+        guard let management, let wanted = PoolState.load(env.paths)?.pausing else { return }
         var credentials = try await management.credentials()
         var tried: Set<String> = []
-        while let next = credentials.first(where: { wanted.contains($0.email.lowercased()) && !$0.disabled && !tried.contains($0.name) }) {
+        while let next = credentials.first(where: { wanted.contains(PoolMove.key($0)) && !$0.disabled && !tried.contains($0.name) }) {
             tried.insert(next.name)
             if PoolAccounts.canPause(next.name, in: credentials) {
                 try await management.setPaused(name: next.name, paused: true)
                 credentials = try await management.credentials()
             }
         }
-        _ = try await updateOrder(members: credentials.map { PoolUsage.member($0, result: nil) })
+        let done = Set(credentials.filter(\.disabled).map(PoolMove.key))
+        try updateState { $0.pausing.removeAll { done.contains($0) } }
     }
 }
 

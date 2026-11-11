@@ -112,7 +112,10 @@ final class PoolController: NSObject {
             return app.redraw()
         }
         do {
-            let credentials = try await management.credentials()
+            var credentials = try await management.credentials()
+            if state?.pausing.isEmpty == false, (try? await setup.pauseAgain()) != nil {
+                credentials = try await management.credentials()
+            }
             let fetched = await PoolUsage.fetch(management: management, credentials: credentials)
             guard started == generation else { return }
             members = fetched
