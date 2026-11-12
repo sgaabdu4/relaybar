@@ -4,7 +4,6 @@ import json
 import re
 import subprocess
 import urllib.parse
-import urllib.request
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -12,7 +11,7 @@ from pathlib import Path
 from gate_config import Gate, JsonObject
 from tool_setup import RELEASE_AGE_SECONDS
 
-VERSION_LINE = re.compile(r"\S+ v\S+")
+VERSION_LINE = re.compile(r"\S+(?: v\S+|(?=\n[├└]──))")
 DIGIT_RUN = re.compile(r"\d+")
 RELEASE_VERSION = re.compile(r"(\d+(?:\.\d+)*)(?:\.post(\d+))?")
 PUB_PIN = re.compile(
@@ -28,6 +27,8 @@ Stale = tuple[str, str, str]
 
 
 def fetch_json(url: str) -> object:
+    import urllib.request
+
     request = urllib.request.Request(url, headers={"User-Agent": "hard-eng-freshness"})
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.load(response)
@@ -72,7 +73,10 @@ def pub_eligible(name: str, fetch: Fetch, cutoff: datetime, ceiling: str) -> str
     )
 
 
-def pypi_eligible(name: str, fetch: Fetch, cutoff: datetime) -> str | None:
+def pypi_eligible(
+    name: str, fetch: Fetch, cutoff: datetime, ceiling: str
+) -> str | None:
+    """The ceiling is uv's latest: it obeys the project's Python range, a newer release may not."""
     package = fetch(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
     if not isinstance(package, dict) or not isinstance(package.get("releases"), dict):
         raise TypeError(f"PyPI returned an unreadable record for {name}")
@@ -82,6 +86,7 @@ def pypi_eligible(name: str, fetch: Fetch, cutoff: datetime) -> str | None:
             for version, files in package["releases"].items()
             if files
             and not all(item.get("yanked") for item in files)
+            and not newer(version, ceiling)
             and released_before(
                 min(item["upload_time_iso_8601"] for item in files), cutoff
             )
@@ -122,7 +127,7 @@ def bun_rows(text: str) -> list[Stale]:
         elif columns and len(cells) == len(columns):
             row = dict(zip(columns, cells, strict=True))
             latest = row["Latest"].removesuffix("*").strip()
-            if newer(latest, row["Current"]):
+            if not row["Package"].endswith("(peer)") and newer(latest, row["Current"]):
                 rows.append((row["Package"].partition(" ")[0], row["Current"], latest))
     return rows
 
@@ -145,12 +150,12 @@ UV_ROW = re.compile(
 )
 
 
-def uv_rows(text: str) -> list[tuple[str, str]]:
+def uv_rows(text: str) -> list[tuple[str, str, str]]:
     if not VERSION_LINE.match(text):
         raise ValueError("uv tree printed no dependency tree")
     return list(
         dict.fromkeys(
-            (match["name"].partition("[")[0], match["current"])
+            (match["name"].partition("[")[0], match["current"], match["latest"])
             for line in text.splitlines()
             if (match := UV_ROW.match(line))
         )
@@ -168,12 +173,11 @@ def poetry_rows(text: str) -> list[Stale]:
     ]
 
 
+PUB_UPGRADE = ("pub", "upgrade", "--major-versions", "--unlock-transitive")
 UPGRADES = {
-    "bun": "bun update {recursive}--latest {names}",
-    "dart": "dart pub upgrade --major-versions {names}",
-    "flutter": "flutter pub upgrade --major-versions {names}",
-    "uv": "uv add [--group <group>] {minimums}",
-    "poetry": "poetry add {latest}",
+    "bun": "bun update {recursive}--latest --minimum-release-age={age} {names}",
+    "dart": f"dart {' '.join(PUB_UPGRADE)} {{names}}",
+    "flutter": f"flutter {' '.join(PUB_UPGRADE)} {{names}}",
 }
 
 
@@ -191,7 +195,12 @@ def stale_dependencies(
             [(name, current) for name, (current, _) in rows.items()],
             lambda name: pub_eligible(name, fetch, cutoff, rows[name][1]),
         )
-    return behind(uv_rows(text), lambda name: pypi_eligible(name, fetch, cutoff))
+    rows = uv_rows(text)
+    installable = {name: latest for name, _, latest in rows}
+    return behind(
+        [(name, current) for name, current, _ in rows],
+        lambda name: pypi_eligible(name, fetch, cutoff, installable[name]),
+    )
 
 
 def bun_waiting(directory: Path, recursive: bool) -> Callable[[str], bool]:
@@ -232,7 +241,7 @@ def pub_waiting(
 
     def waiting(name: str) -> bool:
         done = subprocess.run(
-            [tool, "pub", "upgrade", "--major-versions", name, "--dry-run"],
+            [tool, *PUB_UPGRADE, name, "--dry-run"],
             cwd=directory,
             capture_output=True,
             text=True,
@@ -302,6 +311,7 @@ def validate_freshness(
     fetch: Fetch = fetch_json,
     now: datetime | None = None,
     waiting: Callable[[str], bool] | None = None,
+    directory: Path = Path(),
 ) -> None:
     now = now or datetime.now(UTC)
     tool = Path(gate["command"][0]).name
@@ -311,6 +321,10 @@ def validate_freshness(
         raise ValueError(f"Registry unreachable: {error}") from error
     except (KeyError, TypeError, ValueError, AttributeError) as error:
         raise ValueError(f"{tool} output is unreadable: {error!r}") from error
+    if tool == "poetry":
+        from poetry_freshness import poetry_targets
+
+        stale = poetry_targets(directory, stale)
     holds: list[JsonObject] = gate.get("holds", [])
     stale = [item for item in stale if not held(item, holds, now.date())]
     if waiting is not None:
@@ -321,12 +335,21 @@ def validate_freshness(
     if stale:
         names = " ".join(dict.fromkeys(name for name, _, _ in stale))
         recursive = "-r " if "-r" in gate["command"] else ""
-        latest = " ".join(f"{name}@latest" for name, _, _ in stale)
-        minimums = " ".join(f"'{name}>={target}'" for name, _, target in stale)
+        step = UPGRADES.get(tool, "").format(
+            recursive=recursive, names=names, age=RELEASE_AGE_SECONDS
+        )
+        step = f"Run `{step}` in a separate PR first (baseline repair)."
+        if tool == "uv":
+            from uv_freshness import uv_steps
+
+            step = uv_steps(directory, path.read_text(), stale)
+        if tool == "poetry":
+            from poetry_freshness import poetry_steps
+
+            step = poetry_steps(directory, stale)
         raise ValueError(
             "Outdated direct dependencies: "
             + "; ".join(f"{n} {c} → {t}" for n, c, t in stale)
-            + f". Run `{UPGRADES[tool].format(recursive=recursive, names=names, latest=latest, minimums=minimums)}` in a "
-            "separate PR first (baseline repair)."
+            + f". {step}"
         )
     print("Every direct dependency is on its newest release at least 2 days old")

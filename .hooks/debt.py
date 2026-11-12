@@ -14,9 +14,16 @@ WORD_CHARACTER = re.compile(r"\w")
 DIGIT_RUN = re.compile(r"\d+")
 COUNTED_WORDS = re.compile(r"(?<!\w)N((?: \w+){1,2})")
 WORD = re.compile(r"\w+")
+SPACE_RUN = re.compile(r"[ \t]+")
 TIME = re.compile(r"(?<!\w)N(?:\.N)?(?:ns|[µu]s|ms|s)(?!\w)")
+RULE_FOLDER = re.compile(r"[\w.-]*hard-eng-rules\.")
 CODE_FRAME = re.compile(r"[> ]*(?:N[ ]*)*[│|]")
 
+SUMMARY = re.compile(r"\W*Some (?:errors|warnings) were emitted while running checks")
+# Ruff's fix advice for a finding, and its count of fixes: they change with the code near an old finding.
+RUFF_HINT = re.compile(
+    r"help: |note: |- |N \+ |N (?:\w+ )?fix |\[\*\] N fixabl|No fixes available"
+)
 DEBT_FILE = "hard-eng.debt.json"
 GATE_OUTPUT_LIMIT = 8000
 DEBT_LINE = re.compile(r"(?m)^DEBT (\S+) @ (\S+):.*$")
@@ -86,6 +93,10 @@ def remember(group: Group, gate: Gate, text: str) -> str:
     return text
 
 
+def lacks_suite(gate: Gate, output: str) -> bool:
+    return gate.get("role") == "performance" and MISSING_SUITE in output
+
+
 def recordable(gate: Gate) -> bool:
     kind = gate.get("report", {}).get("type")
     return gate.get("role") not in NEVER and (
@@ -103,17 +114,23 @@ def real_lines(root: Path, group: Group, gate: Gate, output: str) -> list[str]:
     return [line for line in cleaned if line and not RUNNER_LINES.match(line)]
 
 
+def stable_rules(line: str) -> str:
+    """Semgrep names a rule from the folder of its rules file; the temp folder is no part of the rule."""
+    return RULE_FOLDER.sub("agents.skills.he.semgrep.", line)
+
+
 def fingerprints(root: Path, group: Group, gate: Gate, output: str) -> Counter[str]:
     """Output lines with line numbers, counts and the checkout path made neutral."""
     report = gate.get("report", {})
     path = root / group["path"] / report.get("path", "")
     found: Counter[str] = Counter(
-        DIGIT_RUN.sub("N", line) for line in real_lines(root, group, gate, output)
+        DIGIT_RUN.sub("N", stable_rules(line))
+        for line in real_lines(root, group, gate, output)
     )
     extract = REPORT_FINDINGS.get(str(report.get("type")))
     if extract is not None and path.is_file():
         try:
-            found.update(extract(path))
+            found.update(map(stable_rules, extract(path)))
         except (ValueError, KeyError, TypeError, AttributeError):
             found[UNREADABLE] += 1
     return found
@@ -127,7 +144,7 @@ def neutral(line: str) -> str:
 
     return COUNTED_WORDS.sub(
         lambda counted: "N" + WORD.sub(singular, counted.group(1)),
-        TIME.sub("Ntime", ANSI.sub("", line)),
+        TIME.sub("Ntime", ANSI.sub("", stable_rules(SPACE_RUN.sub(" ", line)))),
     )
 
 
@@ -138,10 +155,20 @@ def real_forms(lines: list[str]) -> dict[str, list[str]]:
     return forms
 
 
-def by_form(lines: Counter[str]) -> Counter[str]:
+def ruff_check(command: list[str]) -> int:
+    """The place of the tool word in a `ruff check` command, or -1; only that command prints fix advice."""
+    tool = next(
+        (i for i, part in enumerate(command) if part.split("@")[0] == "ruff"), -1
+    )
+    return tool if tool >= 0 and command[tool + 1 : tool + 2] == ["check"] else -1
+
+
+def by_form(lines: Counter[str], ruff: bool = False) -> Counter[str]:
     forms: Counter[str] = Counter()
     for line, count in lines.items():
-        if not CODE_FRAME.match(form := neutral(line)):
+        form = neutral(line)
+        advice = CODE_FRAME.match(form) or SUMMARY.match(form)
+        if not (advice or (ruff and RUFF_HINT.match(form))):
             forms[form] += count
     return forms
 
@@ -200,6 +227,9 @@ def print_new(
         lines.append(
             f"  {sure_new} of these {len(candidates)} lines are new; the others are recorded:"
         )
+        lines.append(
+            "  The debt file has no line numbers. Run the tool of this check on the files of this change to find the new ones."
+        )
         lines += [f"  {line}" for line in candidates[: 20 - len(surely)]]
     cut = len(surely) + len(candidates) - 20
     print("\n".join(lines + ([f"  {cut} more lines not shown"] if cut > 0 else [])))
@@ -208,16 +238,18 @@ def print_new(
 def judge(root: Path, group: Group, gate: Gate, failed: bool, output: str) -> bool:
     """A gate with debt fails only on findings beyond it, or when listed ones are fixed."""
     debt = load(root).get(f"{group['path']}/{gate['name']}")
-    if debt is None or gate.get("role") in NEVER or MISSING_SUITE in output:
+    if debt is None or gate.get("role") in NEVER or lacks_suite(gate, output):
         return failed
     current = fingerprints(root, group, gate, output) if failed else Counter()
-    if new := by_form(current) - by_form(debt):
+    ruff = ruff_check(gate["command"]) >= 0
+    old = by_form(debt, ruff)
+    if new := by_form(current, ruff) - old:
         print(f"FAIL {gate['name']} @ {group['path']}: findings beyond {DEBT_FILE}:")
         spelling = {neutral(line): [line] for line in current}
         spelling.update(real_forms(real_lines(root, group, gate, output)))
-        print_new(new, by_form(debt), spelling)
+        print_new(new, old, spelling)
         return True
-    if fixed := by_form(debt) - by_form(current):
+    if fixed := old - by_form(current, ruff):
         print(
             f"FAIL {gate['name']} @ {group['path']}: {fixed.total()} recorded lines are fixed; run "
             f"`python3 .hooks/hard-eng.py adopt` to drop them from {DEBT_FILE}"
@@ -269,13 +301,14 @@ def record(
                 not recordable(gate)
                 or not current
                 or UNREADABLE in current
-                or MISSING_SUITE in outputs.get(key, "")
+                or lacks_suite(gate, outputs.get(key, ""))
             ):
                 refused.append(key)
                 continue
             if old is not None:
+                ruff = ruff_check(gate["command"]) >= 0
                 kept = still_found(old.get(key, Counter()), current)
-                if fresh := by_form(current) - by_form(kept):
+                if fresh := by_form(current, ruff) - by_form(kept, ruff):
                     left_out[key] = fresh.total()
                 current = kept
             if current:
@@ -308,10 +341,55 @@ def git_file(root: Path, base: str, name: str) -> str | None:
         return None
 
 
+def local_base_branch(root: Path) -> str:
+    """The local branch that `default_branch_point` took the base from; empty when it is not a local branch."""
+    from plans import _git_output, release_references
+
+    for reference in release_references(root):
+        try:
+            _git_output(root, "merge-base", "HEAD", reference)
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        try:
+            _git_output(root, "rev-parse", "--verify", "-q", f"refs/heads/{reference}")
+        except (subprocess.CalledProcessError, OSError):
+            return ""
+        return reference
+    return ""
+
+
+def lone_install_step(root: Path, base: str) -> str:
+    """The step that lets `adopt` pass when a local base branch that no remote holds is the install commit."""
+    from plans import _git_output
+
+    if (
+        _git_output(root, "rev-parse", "HEAD").strip() != base
+        or git_file(root, "HEAD~1", SOURCE_FILE) is not None
+        or not (target := local_base_branch(root))
+        or _git_output(root, "for-each-ref", f"refs/remotes/*/{target}").strip()
+    ):
+        return ""
+    start = f"; the base branch `{target}` is not on a remote yet, so the install commit is the base"
+    if _git_output(root, "rev-list", "--parents", "-n1", "HEAD").split()[1:]:
+        undo = "git reset --soft HEAD~1"
+    elif _git_output(root, "branch", "--show-current").strip() == target:
+        undo = "git update-ref -d HEAD"
+    else:
+        moved = _git_output(root, "branch", "--show-current").strip()
+        after = (
+            f"; after the commit move your branch with `git branch -f {moved} {target}`"
+            if moved
+            else ""
+        )
+        return f"{start} and holds only the install commit: switch to `{target}`, then run `adopt` again for the next step{after}"
+    return f"{start}: run `{undo}`, then `adopt`, then commit the install and the debt file together"
+
+
 def refuse_new_debt(root: Path, base: str | None) -> str | None:
     """HE-DEBT-SHRINK-ONLY: only the change that installs Hard Eng can add the debt file."""
     from plans import default_branch_point
 
+    given = base is not None
     base = base or default_branch_point(root)
     if (
         base is not None
@@ -320,6 +398,7 @@ def refuse_new_debt(root: Path, base: str | None) -> str | None:
     ):
         raise ValueError(
             f"HE-DEBT-SHRINK-ONLY: only the change that installs Hard Eng can add {DEBT_FILE}; repair the findings that `check` prints instead"
+            + ("" if given else lone_install_step(root, base))
         )
     return base
 

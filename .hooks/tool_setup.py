@@ -1,7 +1,6 @@
 """Provision current native tools before concurrent gate execution."""
 
 import fcntl
-import hashlib
 import importlib.util
 import json
 import os
@@ -32,9 +31,15 @@ RELEASE_AGE_SECONDS = 2 * 24 * 60 * 60
 DIGIT_RUN = re.compile(r"\d+")
 TOOL_VERSION = re.compile(r"\d[\w.+-]*")
 VERSION_NUMBER = re.compile(r"\d+(?:\.\d+)+")
+UV_LOST_SCANNER = " was not found in the cache and you require "
 TOOL_BRACKETS_OR_LATEST = re.compile(r"\[[^\]]*\]|@latest$")
 MISSING_MODULE_NAME = re.compile(r"Cannot find module '([^']+)'")
 NPM_LATEST_PACKAGE = re.compile(r"^(npm:[^\[]+?)(@latest)$")
+# mise names each tool that no config file lists; Hard Eng runs it with no config on purpose.
+ACTIVATION_NOTE = re.compile(
+    r"(?m)^mise WARN .* installed but not activated .*\n"
+    r"(?:To install and activate, run:\n(?: +mise use .*\n)*)?"
+)
 
 NATIVE_SCANNERS = {
     "dart-decimate": "dart-decimate",
@@ -317,17 +322,69 @@ def scanner_version(
     return found[0] if found else ""
 
 
+def shared_tool_folder() -> Path:
+    """The tool folder that every checkout on this machine shares."""
+    return Path(os.environ.get("RUNNER_TEMP") or temporary_root()) / "hard-eng-tools"
+
+
+def scanner_store() -> Path:
+    """The file, shared by every checkout, that holds the versions of one cutoff hour."""
+    shared = shared_tool_folder()
+    return shared / "scanner-versions.json"
+
+
+def stored_scanner_versions(cutoff: str) -> dict[str, str]:
+    """The versions stored for this cutoff hour; none when the file is missing or old."""
+    try:
+        stored = json.loads(scanner_store().read_text())
+        versions = stored["versions"] if stored["cutoff"] == cutoff else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(versions, dict):
+        return {}
+    return {
+        name: version
+        for name, version in versions.items()
+        if isinstance(name, str)
+        and isinstance(version, str)
+        and VERSION_NUMBER.fullmatch(version)
+    }
+
+
+def lost_scanner_note(output: str) -> str:
+    """The step for a failed quick gate whose stored scanner version left uv's cache."""
+    before, lost, _ = output.partition(UV_LOST_SCANNER)
+    if not (lost and before.split() and quick_mode()):
+        return ""
+    return NOT_INSTALLED.format(error=f"{before.split()[-1]} is not in uv's cache")
+
+
 def pin_python_scanners(names: list[str], timeout: float) -> None:
     """Resolve each scanner's latest version once, serially, so parallel gates run it
-    pinned instead of each refreshing uv's shared interpreter cache at once."""
+    pinned instead of each refreshing uv's shared interpreter cache at once.
+    A quick check reuses the versions that a lookup of the same cutoff hour stored."""
+    cutoff = release_cutoff()
+    stored = stored_scanner_versions(cutoff)
+    found = False
     for name in names:
+        if quick_mode() and name in stored:
+            SCANNER_VERSIONS[name] = stored[name]
+            continue
         version = scanner_version(name, quick_mode(), timeout)
         if version is None and quick_mode():
             version = scanner_version(name, False, timeout)
             if version is None:
                 raise ValueError(NOT_INSTALLED.format(error=f"{name} could not be run"))
         if version:
-            SCANNER_VERSIONS[name] = version
+            SCANNER_VERSIONS[name] = stored[name] = version
+            found = True
+    if found:
+        try:
+            path = scanner_store()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            replace_file(path, json.dumps({"cutoff": cutoff, "versions": stored}))
+        except OSError:
+            pass
 
 
 def bun_age(tool: str, seconds: int) -> str:
@@ -345,7 +402,7 @@ def tool_name(tool: str) -> str:
 def provision_batch(batch: list[str], timeout: float) -> None:
     # Two days avoids newly broken releases.
     batch = [bun_age(tool, RELEASE_AGE_SECONDS) for tool in batch]
-    shared = Path(os.environ.get("RUNNER_TEMP") or temporary_root()) / "hard-eng-tools"
+    shared = shared_tool_folder()
     # Checkouts on other Hard Eng revisions rewrite these files while this one runs.
     storage = shared if "RUNNER_TEMP" in os.environ else checkout_storage(shared)
     environment = os.environ.copy()
@@ -386,6 +443,8 @@ def checkout_storage(shared: Path) -> Path:
     """This checkout's tool folder, held until exit; a push snapshot uses its owner's."""
     snapshot, _, owner = os.environ.get(TOOL_OWNER, "").partition(os.pathsep)
     checkout = Path(owner) if snapshot == str(CHECKOUT) else CHECKOUT
+    import hashlib
+
     checkouts = shared / "checkouts"
     storage = checkouts / hashlib.sha256(str(checkout).encode()).hexdigest()[:16]
     if not HELD:
@@ -508,7 +567,7 @@ def run_mise(
     environment: dict[str, str],
     timeout: float,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    result = subprocess.run(
         [*command, *arguments],
         # The project's packageManager pin would otherwise pick the Bun mise drives.
         cwd=storage,
@@ -523,6 +582,8 @@ def run_mise(
             else "1h",
         },
     )
+    result.stderr = ACTIVATION_NOTE.sub("", result.stderr)
+    return result
 
 
 def provision_latest(
@@ -601,6 +662,11 @@ def bun_node(storage: Path, environment: dict[str, str]) -> None:
             "*node_modules/.bin/miniflare*|*node_modules/miniflare/*) "
             f'exec {shlex.quote(node)} "$@";; esac\n'
         )
+        # Under Bun, React Doctor waits 30 s for an idle worker before it exits.
+        script += (
+            'case "$*" in *npm-react-doctor/*|*node_modules/.bin/react-doctor*|'
+            f'*node_modules/react-doctor/*) exec {shlex.quote(node)} "$@";; esac\n'
+        )
     # Node runs a piped script when no script or -e/-p is named; Bun prints help and exits 0.
     script += (
         "piped=1\nvalue=0\n"
@@ -613,6 +679,8 @@ def bun_node(storage: Path, environment: dict[str, str]) -> None:
         f'  printf "%s\\n" "$source" | {shlex.quote(bun)} "$@" -\n  exit $?\nfi\n'
     )
     script += f'exec {shlex.quote(bun)} "$@"\n'
+    import hashlib
+
     # Another Hard Eng revision in this checkout, such as a pushed update, writes its own.
     directory = shims / hashlib.sha256(script.encode()).hexdigest()[:16]
     directory.mkdir(parents=True, exist_ok=True)

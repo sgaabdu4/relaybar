@@ -2,39 +2,43 @@
 
 import re
 import subprocess
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from gate_config import (
     ALL_ZERO_OBJECT_ID,
     SOURCE_FILE,
-    Group,
+    TEST_FOLDERS,
     changed_files,
     repository_files,
 )
+from project_files import keep
 
 BACKTICKED_TEXT = re.compile(r"`([^`]+)`")
+SMALL_SIZE = "Size: small ("
+QUICK_PASS = (
+    "Hard Eng: quick checks passed; the full check runs the tests and the other gates."
+)
+LABEL_FILLER = str.maketrans("", "", "_+/ ")
 NOT_APPLICABLE_PROOF = re.compile(r"\bN/A — \S")
 NOT_APPLICABLE_WORD = re.compile(r"(?i)\bN/A\b")
 TITLE_LINE = re.compile(r"(?m)^# \S.+$")
 DOCUMENT_TITLE = re.compile(r"(?m)^# \S[^\n]*$")
 SURFACE_FIELD = re.compile(r"(?m)^Surface:")
+UX_REFERENCE = ".agents/skills/he-plan/references/ux.md"
 E2E_FIELD = re.compile(r"(?m)^E2E:")
 NOT_APPLICABLE_WITH_TEXT = re.compile(r"N/A — \S.+")
 TEST_FILE_SUFFIX = re.compile(r"\.(?:test|spec)\.")
-SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
-LOWERCASE_TOKEN = re.compile(r"[a-z0-9%]+")
-RETIRED_STATUS = re.compile(r"(?m)^Status: Retired\b")
 NOT_APPLICABLE_REASON_SEPARATOR = re.compile(r"\s+—\s+\S")
 SECTION_HEADING = re.compile(r"(?m)^## +([^\n]+)\n")
 DOCUMENT_SECTION = re.compile(r"(?m)^##[ \t]+([^\n]+)\n")
 NOT_APPLICABLE_WITH_REASON = re.compile(r"N/A — [^\n]+")
-PROOF_KIND = re.compile(r"(?m)^Proof: (check|guidance) *$")
 SURFACE_VALUE = re.compile(r"(Existing|New|Mock) — \S.+")
 TEST_REFERENCE = re.compile(r"`([^`\s]+?)::(?:[^`\n]*::)?([^`\n]+)`")
 DECISION_SECTION = re.compile(r"(?ms)^## Decision\n(.*?)(?=^## |\Z)")
 E2E_STATUS_LINE = re.compile(r"(Required|Passed|Delivery|N/A) — (\S.*)")
-NONE_VALUE = re.compile(r"None(?:[.;:](?:\s.*)?|\s+[—–-]\s.*)?")
+NONE_VALUE = re.compile(r"(?i:none)(?:[.;:](?:\s.*)?|\s+[—–-]\s.*)?")
 DELIVERY_TARGET_FIELD = re.compile(r"(?im)^\s*(?:[-*+]\s+)?Delivery target:")
 DEPLOY_DELIVERY_TARGET = re.compile(
     r"(?im)^\s*(?:[-*+]\s+)?Delivery target:\s*Deploy\s*$"
@@ -59,6 +63,7 @@ SECTIONS = (
 STAGES = ("Draft", "Ready", "Complete")
 BUILD_STEP = "During the build, run this check with --plan-stage Ready"
 DRAFT_STEP = f"; files other than plans changed, so get approval for the plan and set its Status to Ready before you build. {BUILD_STEP}"
+OTHER_PLAN = ". If that plan is for another task, add a plan for this change."
 HANDOFFS = ("Clarification", "Approval")
 PLACEHOLDERS = re.compile(
     r"(?im)\[TODO:|^\s*(?:#\s+|[\w +]+:\s*)?(?:TODO(?::[^\n]*)?|TBD|<(?!https?://)[^>\n]+>)\s*$"
@@ -75,6 +80,10 @@ CAPTURES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".mov", ".
 
 
 def plan_files(root: Path) -> list[Path]:
+    return list(keep("listings", ("plan_files", str(root)), lambda: _plan_files(root)))
+
+
+def _plan_files(root: Path) -> list[Path]:
     names = subprocess.check_output(
         [
             "git",
@@ -136,9 +145,7 @@ def report_stage(
             "Hard Eng: planning checks passed — ready for build within the authorized scope."
         )
     elif stage == "Complete" and quick:
-        print(
-            "Hard Eng: quick checks passed; the full check runs the tests and the other gates."
-        )
+        print(QUICK_PASS)
     elif stage == "Complete":
         print(
             "Hard Eng: build checks passed — ready for ship; remote delivery is not verified by this check."
@@ -196,10 +203,18 @@ def plan_sections(content: str, *, allow_placeholders: bool = False) -> dict[str
     for heading in SECTIONS:
         if headings.count(heading) != 1 or not sections[heading].strip():
             raise ValueError(f"plan needs one filled '## {heading}' section")
-    for line in content.splitlines():
-        for marker in NOT_APPLICABLE_WORD.finditer(line):
-            if not NOT_APPLICABLE_REASON_SEPARATOR.match(line[marker.end() :]):
-                raise ValueError("plan N/A needs an inline reason: N/A — reason")
+    bare = [
+        f"line {number}: {line.strip()[:60]}"
+        for number, line in enumerate(content.splitlines(), 1)
+        if any(
+            not NOT_APPLICABLE_REASON_SEPARATOR.match(line[marker.end() :])
+            for marker in NOT_APPLICABLE_WORD.finditer(line)
+        )
+    ]
+    if bare:
+        raise ValueError(
+            f"plan N/A needs an inline reason: N/A — reason; {'; '.join(bare)}; add the reason after each N/A"
+        )
     return sections
 
 
@@ -224,7 +239,145 @@ def e2e_proof(verification: str, status: str, *, legacy: bool = False) -> None:
         )
 
 
-def ux_proof(content: str, *, legacy: bool = False) -> None:
+def usability_rules() -> list[tuple[str, list[str]]]:
+    """The Usability rule names of the UX reference, each with the unit words its Pass line counts."""
+    reference = Path(__file__).resolve().parents[1] / UX_REFERENCE
+    try:
+        lines = reference.read_text().splitlines()
+    except OSError as error:
+        raise ValueError(
+            f"UX Rules cannot read {UX_REFERENCE}: {error}; restore it with `git checkout HEAD -- {UX_REFERENCE}`"
+        ) from error
+    start = [n for n, line in enumerate(lines) if line.startswith("- Usability =")]
+    rules = []
+    for line in lines[start[0] + 1 :] if start else []:
+        if not line.startswith("  - "):
+            break
+        name, marker, rest = line[4:].partition(" (count: ")
+        if marker:
+            units = rest.partition("):")[0].split(", ")
+        else:
+            name, units = name.partition(":")[0], list[str]()
+        rules.append((name, units))
+    if not rules:
+        raise ValueError(f"{UX_REFERENCE} has no '- Usability =' list")
+    return rules
+
+
+def rule_lines(content: str) -> list[str]:
+    """The rule lines below the `Rules:` label: `-` or `*` bullets, a wrapped line joins the one above, a blank line or a field label ends them."""
+    found: list[str] = []
+    below = False
+    for raw in content.split("\n"):
+        line = raw.strip()
+        if below and not line and found:
+            break
+        if below and line[:2] in {"- ", "* "}:
+            found.append(line[2:].strip())
+        elif below and line:
+            head = raw.partition(":")[0]
+            if not found or (raw[:1].isupper() and head.replace(" ", "").isalnum()):
+                break
+            found[-1] += " " + line
+        below = below or raw.startswith("Rules:")
+    return found
+
+
+def split_rule_line(line: str) -> tuple[str, str, str, str]:
+    """The rule name without its marker, then the verdict, the text and the problem, if any."""
+    head, marked, tail = line.partition("): ")
+    before = head.partition(" (count")[0]
+    if marked and "(count" in head and ": " not in before:
+        label, rest = before, tail
+    else:
+        label, _, rest = line.partition(": ")
+    verdict, _, after = rest.partition(" ")
+    dash = after.strip()[:1] in {"—", "–", "-"}
+    text = after.strip()[1:].strip() if dash else ""
+    if verdict not in {"Pass", "Fail", "N/A"}:
+        return label, verdict, text, "needs Pass, Fail or N/A"
+    problem = "" if text else "needs text after the dash"
+    return label, verdict, text, problem if dash else "needs a dash after the verdict"
+
+
+def ux_rules(content: str) -> None:
+    """Each Usability rule gets one Pass, Fail or N/A line; a Fail cannot be a Passed record."""
+    if NOT_APPLICABLE_WITH_REASON.fullmatch(content.strip()):
+        return
+    labels = f"\n{content}".count("\nRules:")
+    if labels != 1:
+        raise ValueError(
+            f"UX Rules is missing; judge the inspected image against each Usability rule of {UX_REFERENCE} and add one line per rule; the field is a line that starts with `Rules:`"
+            if not labels
+            else f"plan needs one 'Rules:' field, found {labels}"
+        )
+    rules = dict(usability_rules())
+    given: dict[str, list[tuple[str, str]]] = {}
+    bad = []
+    for line in rule_lines(content):
+        label, verdict, text, problem = split_rule_line(line)
+        if problem:
+            bad.append(f"{label or line[:40]} {problem}")
+        given.setdefault(label, []).append((verdict, text))
+    wrong = [
+        f"{reason}: {', '.join(names)}"
+        for reason, names in (
+            ("not a rule", [label for label in given if label not in rules]),
+            ("no line", [label for label in rules if label not in given]),
+            ("two lines", [label for label, lines in given.items() if len(lines) > 1]),
+            ("bad line", bad),
+        )
+        if names
+    ]
+    if wrong:
+        raise ValueError(
+            "UX Rules needs one `- <rule>: Pass|Fail|N/A — text` line for each Usability rule; "
+            + "; ".join(wrong)
+            + f"; add a line for each rule of {UX_REFERENCE}"
+            + (
+                "; the rule lines stand in one block below `Rules:` with no empty line between them"
+                if any(w.startswith("no line") for w in wrong)
+                else ""
+            )
+        )
+    for label, ((verdict, text),) in given.items():
+        if verdict == "Fail":
+            raise ValueError(
+                f"UX Rules: {label} is Fail; fix the design, inspect it again and judge it again before it is shown"
+            )
+        if verdict == "Pass" and (absent := uncounted(text, rules[label])):
+            example = ", ".join(f"3 {unit}" for unit in rules[label])
+            raise ValueError(
+                f"UX Rules: {label} needs a number before the word {', '.join(absent)}; write the line like `- {label}: Pass — {example}`"
+            )
+
+
+def uncounted(text: str, units: list[str]) -> list[str]:
+    """The unit words that have no number directly before them in the Pass text."""
+    words = [word.strip(",.;:()") for word in text.lower().split()]
+    return [
+        unit
+        for unit in units
+        if not any(
+            word in {unit, unit.removesuffix("s")} and words[n - 1].isdigit()
+            for n, word in enumerate(words)
+            if n
+        )
+    ]
+
+
+def judged_rules(content: str, age: Callable[[], bool] | None) -> None:
+    """A Complete plan untouched since the last Hard Eng update may predate the Rules field."""
+    try:
+        ux_rules(content)
+    except ValueError:
+        if "\nRules:" in f"\n{content}" or age is None or age():
+            raise
+
+
+def ux_proof(
+    content: str, *, legacy: bool = False, age: Callable[[], bool] | None = None
+) -> None:
     if NOT_APPLICABLE_WITH_REASON.fullmatch(content.strip()):
         return
     proof(content, {"Passed"})
@@ -258,10 +411,16 @@ def ux_proof(content: str, *, legacy: bool = False) -> None:
         )
     for name in ("Capture", "Review"):
         evidence_field(content, name)
+    if not legacy:
+        judged_rules(content, age)
 
 
 def readiness_errors(
-    sections: dict[str, str], status: str = "Ready", *, legacy: bool = False
+    sections: dict[str, str],
+    status: str = "Ready",
+    *,
+    legacy: bool = False,
+    age: Callable[[], bool] | None = None,
 ) -> list[str]:
     errors = []
     for name in ("Baseline + execution", "ux_reference", "Verification"):
@@ -269,7 +428,7 @@ def readiness_errors(
             if name == "Baseline + execution":
                 proof(sections[name], {"Passed"})
             elif name == "ux_reference":
-                ux_proof(sections[name], legacy=legacy)
+                ux_proof(sections[name], legacy=legacy, age=age)
             else:
                 e2e_proof(sections[name], status, legacy=legacy)
         except ValueError as error:
@@ -301,6 +460,29 @@ def draft_handoff(sections: dict[str, str]) -> tuple[str | None, str | None, lis
     return handoff, blockers, errors
 
 
+def _draft_errors(content: str) -> tuple[list[str], bool]:
+    """What stops a Draft plan, and whether that leaves it unfinished."""
+    try:
+        sections = plan_sections(content, allow_placeholders=True)
+        handoff, blockers, errors = draft_handoff(sections)
+        if handoff == "Approval":
+            try:
+                plan_sections(content)
+            except ValueError as error:
+                errors.append(str(error))
+            errors.extend(readiness_errors(sections))
+        if not errors and handoff == "Clarification":
+            return [f"waiting for: {blockers}"], False
+        if errors:
+            return errors, True
+        errors = ["approval handoff prepared; authorization remains outside this plan"]
+        if blockers and not no_blockers(blockers):
+            errors.append(f"decisions to resolve: {blockers}")
+        return errors, False
+    except ValueError as error:
+        return [str(error)], True
+
+
 def planning_feedback(root: Path, changed: set[str]) -> tuple[str, bool]:
     paths = plan_files(root)
     selected = [path for path in paths if str(path.relative_to(root)) in changed]
@@ -310,28 +492,13 @@ def planning_feedback(root: Path, changed: set[str]) -> tuple[str, bool]:
         content = path.read_text()
         if plan_status(content) != "Draft":
             continue
-        try:
-            sections = plan_sections(content, allow_placeholders=True)
-            handoff, blockers, errors = draft_handoff(sections)
-            if handoff == "Approval":
-                try:
-                    plan_sections(content)
-                except ValueError as error:
-                    errors.append(str(error))
-                errors.extend(readiness_errors(sections))
-            if not errors and handoff == "Clarification":
-                errors = [f"waiting for: {blockers}"]
-            elif not errors and handoff == "Approval":
-                errors = [
-                    "approval handoff prepared; authorization remains outside this plan"
-                ]
-                if blockers and not no_blockers(blockers):
-                    errors.append(f"decisions to resolve: {blockers}")
-            else:
-                unfinished = True
-        except ValueError as error:
-            errors = [str(error)]
-            unfinished = True
+        errors, stuck = _draft_errors(content)
+        if stuck and not selected:
+            from change_size import held_by_base
+
+            if held_by_base(root, path):
+                continue
+        unfinished |= stuck
         messages.append(f"{path.relative_to(root)}: " + "; ".join(errors))
     notice = (
         "Hard Eng: Planning incomplete — " + " | ".join(messages) if messages else ""
@@ -382,26 +549,51 @@ def touched_since_update(path: Path) -> bool:
     )
 
 
+def reasoned(value: str, name: str) -> None:
+    lowered = value.lower()
+    if lowered.startswith("none") and not lowered[4:].strip(" \t—–-.:,;"):
+        raise ValueError(f"'{name}:' needs a reason; write `None — <reason>`")
+
+
+def claimed_tests(sections: dict[str, str]) -> dict[str, list[tuple[str, str]]]:
+    """The `path::test` names of test files in each Same cause and Retro value, by field."""
+    found: dict[str, list[tuple[str, str]]] = {}
+    for text in (sections["Repository context"], sections["Verification"]):
+        name = ""
+        for line in text.split("\n"):
+            label = line.partition(":")[0]
+            titled = "A" <= label[:1] <= "Z" and label.translate(LABEL_FILLER).isalnum()
+            if line[:1] == "#" or (titled and label != line):
+                name = label if label in {"Same cause", "Retro"} else ""
+            if name:
+                found.setdefault(name, []).extend(
+                    (path, test.split("[", 1)[0])
+                    for path, test in TEST_REFERENCE.findall(line)
+                    if _is_test(PurePosixPath(path))
+                )
+    return found
+
+
 def newer_fields(
     sections: dict[str, str],
     status: str,
     *,
     legacy: bool,
     changed: bool,
-    path: Path,
+    age: Callable[[], bool] | None,
 ) -> None:
     """Old Complete plans skip Same cause; Single source and Retro bind only edited plans."""
     if not legacy:
-        field(sections["Repository context"], "Same cause")
+        reasoned(field(sections["Repository context"], "Same cause"), "Same cause")
         acceptance_tests(sections)
     if not changed:
         return
     try:
         field(sections["Repository context"], "Single source")
         if status == "Complete":
-            field(sections["Verification"], "Retro")
+            reasoned(field(sections["Verification"], "Retro"), "Retro")
     except ValueError:
-        if status != "Complete" or touched_since_update(path):
+        if age is None or age():
             raise
 
 
@@ -421,10 +613,17 @@ def validate_plan(path: Path, *, changed: bool = True) -> str:
     if not no_blockers(field(sections["Decisions + authorization"], "Blockers")):
         raise ValueError("ready/complete plan has unresolved Blockers")
     legacy = status == "Complete" and not changed
-    errors = readiness_errors(sections, status, legacy=legacy)
+    asked: list[bool] = []
+
+    def age() -> bool:
+        asked[:] = asked or [touched_since_update(path)]
+        return asked[0]
+
+    soft = age if status == "Complete" else None
+    errors = readiness_errors(sections, status, legacy=legacy, age=soft)
     if errors:
         raise ValueError("; ".join(errors))
-    newer_fields(sections, status, legacy=legacy, changed=changed, path=path)
+    newer_fields(sections, status, legacy=legacy, changed=changed, age=soft)
     if status == "Complete":
         markers = CHECKBOX_LABEL.findall(content)
         if any(marker.lower() != "x" for marker in markers):
@@ -440,6 +639,8 @@ def acceptance_tests(
     sections: dict[str, str],
 ) -> tuple[list[tuple[str, str]], set[str]]:
     """Each acceptance checkbox names its `path::test` or requirement ID, or N/A — reason."""
+    from requirement_registry import REQUIREMENT_ID
+
     references: list[tuple[str, str]] = []
     requirements: set[str] = set()
     for line in CHECKBOX_REST.findall(sections["Acceptance + steps"]):
@@ -456,6 +657,8 @@ def acceptance_tests(
 
 
 def untested_requirements(root: Path, requirements: set[str]) -> list[str]:
+    from requirement_registry import registry_entries, requirement_tests
+
     entries, _ = registry_entries(root)
     tests = requirement_tests(root)
     return sorted(
@@ -463,6 +666,19 @@ def untested_requirements(root: Path, requirements: set[str]) -> list[str]:
         for requirement in requirements
         if entries.get(requirement, ("retired",))[0] == "retired"
         or requirement not in tests
+    )
+
+
+HASH_COMMENT_SUFFIXES = {".py", ".rb", ".sh", ".bash", ".zsh", ".pl", ".ex", ".exs"}
+
+
+def uncommented(file: Path) -> str:
+    """The file's text without whole-line comments, which cannot define a test."""
+    marker = "#" if file.suffix in HASH_COMMENT_SUFFIXES else "//"
+    return "\n".join(
+        line
+        for line in file.read_text().splitlines()
+        if not line.lstrip().startswith(marker)
     )
 
 
@@ -479,7 +695,7 @@ def missing_tests(root: Path, references: list[tuple[str, str]]) -> list[str]:
             file.is_relative_to(root.resolve())
             and _is_test(PurePosixPath(path))
             and file.is_file()
-            and re.search(definition, file.read_text())
+            and re.search(definition, uncommented(file))
         ):
             missing.append(f"{path}::{name}")
     return missing
@@ -502,10 +718,12 @@ def plan_stage(root: Path, path: Path, changed: set[str]) -> str:
         if status == "Complete" and edited:
             sections = plan_sections(path.read_text())
             references, requirements = acceptance_tests(sections)
-            if missing := missing_tests(root, references):
-                raise ValueError(
-                    "acceptance names tests that do not exist: " + ", ".join(missing)
-                )
+            named = {"acceptance": references, **claimed_tests(sections)}
+            for line, found in named.items():
+                if missing := missing_tests(root, found):
+                    raise ValueError(
+                        f"{line} names tests that do not exist: " + ", ".join(missing)
+                    )
             if untested := untested_requirements(root, requirements):
                 raise ValueError(
                     "acceptance names unknown, retired or untested requirements: "
@@ -517,13 +735,10 @@ def plan_stage(root: Path, path: Path, changed: set[str]) -> str:
     return status
 
 
-TEST_DIRECTORIES = {"tests", "test", "__tests__"}
-
-
 def _is_test(path: PurePosixPath) -> bool:
     name = path.name
     return (
-        bool(TEST_DIRECTORIES.intersection(path.parts[:-1]))
+        bool(TEST_FOLDERS.intersection(path.parts[:-1]))
         or name.startswith("test_")
         or name.endswith(("_test.py", "_test.dart", "Tests.swift"))
         or bool(TEST_FILE_SUFFIX.search(name))
@@ -537,6 +752,12 @@ def _git_output(root: Path, *args: str) -> str:
 
 
 def release_references(root: Path) -> tuple[str, ...]:
+    return keep(
+        "references", ("release_references", str(root)), lambda: _references(root)
+    )
+
+
+def _references(root: Path) -> tuple[str, ...]:
     from shipping import ShippingError, load_policy
 
     try:
@@ -553,6 +774,10 @@ def release_references(root: Path) -> tuple[str, ...]:
 
 
 def default_branch_point(root: Path) -> str | None:
+    return keep("references", ("branch_point", str(root)), lambda: _point(root))
+
+
+def _point(root: Path) -> str | None:
     for reference in release_references(root):
         try:
             return _git_output(root, "merge-base", "HEAD", reference).strip()
@@ -561,53 +786,13 @@ def default_branch_point(root: Path) -> str | None:
     return None
 
 
-def applicable_plans(root: Path, paths: list[Path], changed: set[str]) -> list[Path]:
-    applicable = [path for path in paths if str(path.relative_to(root)) in changed]
-    return applicable or [
-        path
-        for path in paths
-        if plan_status(path.read_text()) not in {None, "Complete"}
-    ]
-
-
-def plan_tests(root: Path, base: str | None) -> set[str]:
-    """Test names that the active plans' acceptance lines depend on."""
-    from change_size import released_plans
-
-    changed = (changed_files(root, base or "HEAD") or set()) | released_plans(
-        root, base
-    )
-    paths = plan_files(root)
-    names = set()
-    for path in applicable_plans(root, paths, changed):
-        content = path.read_text()
-        if plan_status(content) in {"Ready", "Complete"}:
-            sections = plan_sections(content, allow_placeholders=True)
-            references, requirements = acceptance_tests(sections)
-            names.update(name for _, name in references)
-            tests = requirement_tests(root) if requirements else {}
-            for requirement in requirements:
-                names.update(name for _, _, name in tests.get(requirement, []))
-    return names
-
-
-def plan_skips(root: Path, base: str | None, groups: list[Group], since: float) -> bool:
-    from reports import skipped_tests
-
-    skipped = sorted(plan_tests(root, base) & skipped_tests(root, groups, since))
-    if skipped:
-        print("FAIL plan acceptance tests were skipped: " + ", ".join(skipped))
-    return bool(skipped)
-
-
 def validate_plans(
     root: Path, base: str | None = None, stage: str | None = None
 ) -> str:
     from change_size import (
+        judged_plans,
         judged_point,
-        moved_plans,
         plan_not_needed,
-        released_plans,
         update_only,
     )
 
@@ -628,16 +813,18 @@ def validate_plans(
     ):
         print("Plan: only files the verified Hard Eng update wrote; no plan needed.")
         return stage
-    changed |= released_plans(root, base)
-    changed -= moved_plans(root, base, changed)
-    paths = plan_files(root)
-    applicable = applicable_plans(root, paths, changed)
+    changed, paths, applicable = judged_plans(root, base, changed)
+    asks_size = bool(changed) and not any(
+        str(path.relative_to(root)) in changed for path in paths
+    )
+    if asks_size and plan_not_needed(root):
+        return stage
     if not applicable and explicit_stage and not changed:
         applicable = paths
     if (
         (changed != set() or explicit_stage)
         and not applicable
-        and not plan_not_needed(root)
+        and (asks_size or not plan_not_needed(root))
     ):
         raise ValueError(
             "repository changes need an applicable PLAN.md; use the HE Plan template"
@@ -655,7 +842,7 @@ def validate_plans(
             steps = {"Draft": DRAFT_STEP, "Ready": f". {BUILD_STEP}" * typed}
             step = steps[status] if stage == "Complete" and not explicit_stage else ""
             raise ValueError(
-                f"{path.relative_to(root)}: plan is {status}; this check requires {stage}{step}"
+                f"{path.relative_to(root)}: plan is {status}; this check requires {stage}{step}{OTHER_PLAN * asks_size}"
             )
         effective_stage = min(effective_stage, status, key=STAGES.index)
     return stage if explicit_stage or not applicable else effective_stage
@@ -772,187 +959,13 @@ def validate_attribution(root: Path, base: str | None = None) -> None:
 
 
 CLAUDE_EMAIL = re.compile(r"noreply@anthropic\.com", re.IGNORECASE)
-REQUIREMENT_FILES = (
-    ".agents/skills/he/references/requirements.md",
-    "docs/requirements.md",
-)
-REQUIREMENT_ID = re.compile(
-    r"\b(?:HE-[A-Z0-9]+(?:-[A-Z0-9]+)*|REQ-[A-Z0-9]+(?:-[A-Z0-9]+)+)\b"
-)
-TEST_CALL = re.compile(r"""\b(?:test|it|testWidgets)\(\s*(['"])(.+?)\1""")
-PYTHON_TEST = re.compile(r"^\s*(?:async\s+)?def\s+(test\w*)")
-Reference = tuple[str, int, str]
-
-
-def registry_entries(root: Path) -> tuple[dict[str, tuple[str, str]], list[str]]:
-    """Requirement ID to its proof kind ('retired' when retired) and definition."""
-    entries: dict[str, tuple[str, str]] = {}
-    errors = []
-    for name in REQUIREMENT_FILES:
-        path = root / name
-        chunks = f"\n{path.read_text()}".split("\n## ") if path.is_file() else []
-        for chunk in chunks[1:]:
-            heading, _, body = chunk.partition("\n")
-            requirement = heading.split(" — ", 1)[0].strip()
-            if not REQUIREMENT_ID.fullmatch(requirement):
-                if requirement.startswith(("HE-", "REQ-")):
-                    errors.append(
-                        f"{name}: heading {requirement} is not a valid requirement ID; "
-                        "see the ID format at the top of the Hard Eng requirements"
-                    )
-                continue
-            if requirement in entries:
-                errors.append(f"{requirement} is defined more than once")
-                continue
-            if RETIRED_STATUS.search(body):
-                entries[requirement] = ("retired", "")
-                continue
-            proof = PROOF_KIND.search(body)
-            definition = " ".join(
-                line.strip()
-                for line in body.splitlines()
-                if line.strip() and not line.startswith(("Proof:", "Status:"))
-            )
-            if not proof or not definition:
-                errors.append(
-                    f"{requirement} needs a definition and a 'Proof: check' or "
-                    "'Proof: guidance' line"
-                )
-            entries[requirement] = (proof[1] if proof else "", definition)
-    return entries, errors
-
-
-def requirement_references(root: Path) -> list[tuple[str, int, str]]:
-    """Each tracked or new file line that names a requirement ID: path, line, text."""
-    try:
-        output = _git_output(
-            root,
-            "grep",
-            "--untracked",
-            "-I",
-            "-n",
-            "-z",
-            "-E",
-            r"(HE|REQ)-[A-Z0-9]",
-        )
-    except subprocess.CalledProcessError as error:
-        if error.returncode == 1:
-            return []
-        raise
-    found = []
-    for row in output.splitlines():
-        path, line, text = row.split("\0", 2)
-        heading = path in REQUIREMENT_FILES and text.startswith("## ")
-        if not heading:
-            found.append((path, int(line), text))
-    return found
-
-
-def covering_test(root: Path, path: str, line: int, text: str) -> str | None:
-    """The test whose name, or Python docstring first line, holds the reference."""
-    if not _is_test(PurePosixPath(path)):
-        return None
-    called = TEST_CALL.search(text)
-    if called:
-        return called[2]
-    if not text.strip().startswith(('"""', 'r"""')):
-        return None
-    lines = (root / path).read_text(errors="replace").splitlines()
-    for previous in reversed(lines[max(0, line - 6) : line - 1]):
-        defined = PYTHON_TEST.match(previous)
-        if defined:
-            return defined[1]
-    return None
-
-
-def requirement_tests(root: Path) -> dict[str, list[Reference]]:
-    """Requirement ID to each covering test: path, line, test name as reported."""
-    tests: dict[str, list[Reference]] = {}
-    for path, line, text in requirement_references(root):
-        name = covering_test(root, path, line, text)
-        if name is None:
-            continue
-        for requirement in REQUIREMENT_ID.findall(text):
-            tests.setdefault(requirement, []).append((path, line, name))
-    return tests
-
-
-def unproven_requirements(
-    root: Path, entries: dict[str, tuple[str, str]], references: list[Reference]
-) -> list[str]:
-    installed = (root / SOURCE_FILE).is_file() or not (root / "setup.py").is_file()
-    tests = requirement_tests(root)
-    enforced: set[str] = set()
-    linked: set[str] = set()
-    for path, _, text in references:
-        named = set(REQUIREMENT_ID.findall(text))
-        if path.endswith(".md"):
-            skill = path.startswith(".agents/skills/") or path.endswith("AGENTS.md")
-            linked |= named if skill else set()
-        elif path not in REQUIREMENT_FILES and not _is_test(PurePosixPath(path)):
-            enforced |= named
-    errors = []
-    for requirement, (proof, _) in entries.items():
-        if installed and requirement.startswith("HE-"):
-            continue
-        if proof == "check" and requirement not in tests:
-            errors.append(f"{requirement} has no test naming it")
-        if proof == "check" and requirement not in enforced:
-            errors.append(f"{requirement} has no enforcing source that names it")
-        if proof == "guidance" and requirement not in linked:
-            errors.append(f"{requirement} has no skill or AGENTS.md link")
-    return errors
-
-
-def normalized_words(text: str) -> str:
-    return " ".join(LOWERCASE_TOKEN.findall(text.lower()))
-
-
-def copied_requirements(root: Path, entries: dict[str, tuple[str, str]]) -> list[str]:
-    sentences = [
-        (requirement, normalized_words(sentence))
-        for requirement, (_, definition) in entries.items()
-        for sentence in SENTENCE_BOUNDARY.split(definition)
-        if len(sentence.split()) >= 8
-    ]
-    errors: list[str] = []
-    for path in repository_files(root):
-        name = path.relative_to(root).as_posix()
-        if path.suffix.lower() != ".md" or name in REQUIREMENT_FILES:
-            continue
-        content = f" {normalized_words(path.read_text(errors='replace'))} "
-        errors += [
-            f"{name} copies {requirement}; link the ID instead"
-            for requirement in sorted(
-                {found for found, sentence in sentences if f" {sentence} " in content}
-            )
-        ]
-    return errors
-
-
-def validate_requirements(root: Path) -> None:
-    entries, errors = registry_entries(root)
-    if not entries and not errors:
-        return
-    references = requirement_references(root)
-    for path, line, text in references:
-        for requirement in REQUIREMENT_ID.findall(text):
-            proof = entries.get(requirement, ("unknown", ""))[0]
-            # A one-part token such as a codec name is an ID only when the registry holds it.
-            if proof == "retired" or proof == "unknown" and requirement.count("-") > 1:
-                errors.append(f"{path}:{line} names {proof} {requirement}")
-    errors += unproven_requirements(root, entries, references)
-    errors += copied_requirements(root, entries)
-    if errors:
-        raise ValueError(
-            "HE-REQUIREMENT-REGISTRY: Requirement registry is out of date: "
-            + "; ".join(errors)
-        )
 
 
 def validate_records(root: Path, base: str | None) -> None:
     validate_decisions(root, base)
     validate_attribution(root, base)
+    from requirement_registry import validate_requirements
+
     validate_requirements(root)
 
 
