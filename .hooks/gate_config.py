@@ -3,9 +3,9 @@
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
@@ -18,50 +18,19 @@ from dependency_graph import (
     readers_above,
     shared_only,
 )
-from project_files import parse_project_text, read_project_file
+from project_files import (
+    group_locks,
+    json_text,
+    keep,
+    parse_project_text,
+    read_project_file,
+    refuse_ignored_locks,
+)
 
 type JsonValue = (
     str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
 )
 type JsonObject = dict[str, JsonValue]
-
-
-def expanded(value: object) -> bool:
-    if isinstance(value, dict):
-        return bool(value)
-    return isinstance(value, list) and any(expanded(item) for item in value)
-
-
-def json_text(
-    value: object, layout: tuple[str, int, int], indent: str = "", used: int = 0
-) -> str:
-    unit, tab, width = layout
-    if isinstance(value, list) and not expanded(value):
-        flat = json.dumps(value, separators=(", ", ": "))
-        if used + len(flat) <= width:
-            return flat
-    if not isinstance(value, (dict, list)) or not value:
-        return json.dumps(value)
-    inner = indent + unit
-    entries = (
-        [(f"{json.dumps(key)}: ", item) for key, item in value.items()]
-        if isinstance(value, dict)
-        else [("", item) for item in value]
-    )
-    last = len(entries) - 1
-    body = ",\n".join(
-        inner
-        + head
-        + json_text(
-            item,
-            layout,
-            inner,
-            len((inner + head).expandtabs(tab)) + (index < last),
-        )
-        for index, (head, item) in enumerate(entries)
-    )
-    opening, closing = "{}" if isinstance(value, dict) else "[]"
-    return f"{opening}\n{body}\n{indent}{closing}"
 
 
 JSONC = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.DOTALL)
@@ -70,22 +39,42 @@ ALL_ZERO_OBJECT_ID = re.compile(r"0{40}|0{64}")
 SOURCE_FILE = ".hooks/hard-eng-source.json"
 
 
+def biome_formatters(
+    path: Path, seen: set[Path]
+) -> tuple[dict[str, int | str], dict[str, int | str]]:
+    """The formatter and json.formatter options of a Biome file after the local files it extends."""
+    path = path.resolve()
+    if path in seen or not path.is_file():
+        return {}, {}
+    seen.add(path)
+    try:
+        text = JSONC.sub(lambda match: match[1] or "", path.read_text())
+        config = json.loads(TRAILING_COMMA.sub(r"\1", text))
+    except (OSError, ValueError):
+        return {}, {}
+    extends = config.get("extends", [])
+    formatter: dict[str, int | str] = {}
+    own: dict[str, int | str] = {}
+    for name in [extends] if isinstance(extends, str) else extends:
+        if not isinstance(name, str):
+            continue
+        inherited = biome_formatters(path.parent / name, seen)
+        formatter, own = {**formatter, **inherited[0]}, {**own, **inherited[1]}
+    return (
+        {**formatter, **config.get("formatter", {})},
+        {**own, **config.get("json", {}).get("formatter", {})},
+    )
+
+
 def json_layout(root: Path) -> tuple[str, int, int]:
     """Read the root Biome config's JSON formatting, else use Prettier's defaults."""
     for name in ("biome.json", "biome.jsonc"):
         if (root / name).is_file():
-            text = JSONC.sub(lambda match: match[1] or "", (root / name).read_text())
-            try:
-                config = json.loads(TRAILING_COMMA.sub(r"\1", text))
-            except ValueError:
-                return "\t", 2, 80
-            options = {
-                **config.get("formatter", {}),
-                **config.get("json", {}).get("formatter", {}),
-            }
-            tab = options.get("indentWidth", 2)
+            formatter, own = biome_formatters(root / name, set())
+            options = {**formatter, **own}
+            tab = int(options.get("indentWidth", 2))
             unit = "\t" if options.get("indentStyle", "tab") == "tab" else " " * tab
-            return unit, tab, options.get("lineWidth", 80)
+            return unit, tab, int(options.get("lineWidth", 80))
     return "  ", 2, 80
 
 
@@ -107,6 +96,8 @@ Gate = TypedDict(
         "parallel": NotRequired[bool],
         "report": NotRequired[Report],
         "holds": NotRequired[list[JsonObject]],
+        "shards": NotRequired[int],
+        "part": NotRequired[str],
     },
 )
 Group = TypedDict(
@@ -185,23 +176,42 @@ def fixture_manifest(root: Path, manifest: Path, manifests: list[Path]) -> bool:
     )
 
 
-def repository_files(root: Path) -> list[Path]:
+def listed_names(root: Path) -> list[str]:
     names = subprocess.check_output(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=root,
         text=True,
     )
-    return [
-        root / name
-        for name in sorted(set(names.split("\0")) - {""})
-        if (root / name).is_file() and not (root / name).is_symlink()
-    ]
+    return sorted(set(names.split("\0")) - {""})
+
+
+def regular_file(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def repository_files(root: Path, names: list[str] | None = None) -> list[Path]:
+    paths = [root / name for name in (listed_names(root) if names is None else names)]
+    return [path for path in paths if regular_file(path)]
+
+
+TEST_FOLDERS = frozenset(
+    {"test", "tests", "integration_test", "test_driver", "__tests__"}
+)
+
+
+def performance_suites(command: list[str]) -> list[str]:
+    return [argument for argument in command if Path(argument).name == "performance"]
+
+
+SKIPPED_FOLDERS = TEST_FOLDERS | {"node_modules", "vendor"}
 
 
 def nonproduction_source(relative: Path) -> bool:
     return bool(
-        {"test", "tests", "integration_test", "__tests__", "node_modules", "vendor"}
-        & set(relative.parts)
+        SKIPPED_FOLDERS & set(relative.parts)
         or relative.name.startswith("test_")
         or relative.name.endswith("Tests.swift")
         or relative.stem.endswith(("_test", ".test", ".spec"))
@@ -249,6 +259,8 @@ def generated_sources(root: Path, names: list[str]) -> set[str]:
     listed, generated = LISTED.get(root, (frozenset(), set()))
     if listed.issuperset(names):
         return generated.intersection(names)
+    import tempfile
+
     # A live stdin pipe deadlocked against git's per-path output on macOS (issue 375).
     with tempfile.TemporaryFile() as paths:
         paths.write(("\0".join(names) + "\0").encode())
@@ -279,45 +291,6 @@ def generated_sources(root: Path, names: list[str]) -> set[str]:
         if key in {"linguist-generated", "linguist-vendored"}
         and value in {"set", "true"}
     }
-
-
-def dart_rule_settings(value: object) -> object:
-    if isinstance(value, list):
-        if not all(isinstance(rule, str) for rule in value):
-            raise ValueError("Dart lint rule names must be strings")
-        return {rule: True for rule in value}
-    if isinstance(value, dict):
-        for rule, enabled in value.items():
-            if enabled is False:
-                raise ValueError(
-                    f"analysis_options.yaml: {rule} is set to false, which turns off "
-                    "a lint rule of the included set; remove that entry"
-                )
-    return value
-
-
-def validate_dart_plugins(options: JsonObject) -> None:
-    from project_setup import migrate_dart_plugins
-
-    plugins = options.get("plugins")
-    if not isinstance(plugins, dict):
-        return
-    migrated = dict(plugins)
-    updated: JsonObject = {"plugins": migrated}
-    migrate_dart_plugins(updated, Path(__file__).resolve().parents[1])
-    if updated["plugins"] != plugins:
-        versions = {
-            name: value.get("version") if isinstance(value, dict) else value
-            for name, value in plugins.items()
-        }
-        changes = ", ".join(
-            f"{name}: {versions[name]} -> {value.get('version') if isinstance(value, dict) else value}"
-            for name, value in migrated.items()
-            if value != plugins.get(name)
-        )
-        raise ValueError(
-            f"Analyzer plugin version is older than the installed canonical profile ({changes}); run the supported Hard Eng updater and verify application compatibility"
-        )
 
 
 def validate_file_sizes(
@@ -366,7 +339,17 @@ def validate_file_sizes(
         raise ValueError(
             "HE-FILE-LENGTH: Handwritten files exceed 1000 physical lines: "
             + "; ".join(failures)
+            + ". Split the file; or mark generator output with `<pattern> linguist-generated=true` in .gitattributes;"
+            + " or add a `file_size_exceptions` entry for the exact file, with `reason` and `evidence`, in hard-eng.gates.json"
         )
+
+
+def validate_shards(gate: Gate) -> None:
+    count = gate.get("shards", 2)
+    if "shards" in gate and not (
+        gate.get("role") == "tests" and type(count) is int and 2 <= count <= 16
+    ):
+        raise ValueError(f"{gate['name']}: shards must be 2 to 16 on a tests gate")
 
 
 def validate_gate(gate: Gate, directory: Path, report_paths: set[Path]) -> None:
@@ -378,6 +361,7 @@ def validate_gate(gate: Gate, directory: Path, report_paths: set[Path]) -> None:
         raise ValueError("Each check must have a nonempty name")
     if type(gate.get("parallel", False)) is not bool:
         raise ValueError("parallel must be true or false")
+    validate_shards(gate)
     report = gate.get("report", {})
     if not isinstance(report, dict):
         raise TypeError("report must be an object")
@@ -410,9 +394,19 @@ def validate_gate(gate: Gate, directory: Path, report_paths: set[Path]) -> None:
     from gitleaks_scan import validate_current_files_gate
 
     validate_current_files_gate(gate.get("role"), command)
+    validate_named_output(gate, command, directory, report)
+
+
+def validate_named_output(
+    gate: Gate, command: list[str], directory: Path, report: Report
+) -> None:
     from project_setup import validate_command_output
 
-    validate_command_output(command, directory, report)
+    try:
+        validate_command_output(command, directory, report)
+    except ValueError as error:
+        message = f"gate {gate['name']} (`{' '.join(command)}`): {error}"
+        raise ValueError(message) from error
 
 
 def dart_scan_includes_boundaries(gate: Gate) -> bool:
@@ -434,6 +428,11 @@ def dart_scan_includes_boundaries(gate: Gate) -> bool:
 
 def initial_base(root: Path) -> str:
     """A new branch compares with its shipping-base merge base, else the empty tree."""
+    return initial_point(root)[0]
+
+
+def initial_point(root: Path) -> tuple[str, bool]:
+    """The comparison base of a new branch and whether it is the empty tree."""
     from shipping import git, load_policy
 
     try:
@@ -441,13 +440,18 @@ def initial_base(root: Path) -> str:
         branch = f"refs/remotes/origin/{policy['base']}" if policy else "HEAD"
         merged = git(root, "merge-base", branch, "HEAD").strip()
         if merged != git(root, "rev-parse", "HEAD").strip():
-            return merged
+            return merged, False
     except ValueError:
         pass
-    return git(root, "hash-object", "-w", "-t", "tree", os.devnull).strip()
+    return git(root, "hash-object", "-w", "-t", "tree", os.devnull).strip(), True
 
 
 def changed_files(root: Path, base: str) -> set[str] | None:
+    names = keep("listings", ("changed", str(root), base), lambda: _changed(root, base))
+    return None if names is None else set(names)
+
+
+def _changed(root: Path, base: str) -> set[str] | None:
     try:
         if ALL_ZERO_OBJECT_ID.fullmatch(base) or (
             base == "HEAD"
@@ -604,13 +608,13 @@ def without_freshness_for_update(
     root: Path, base: str | None, groups: list[Group]
 ) -> list[Group]:
     """The Hard Eng update branch, judged from the default branch as CI does, skips freshness."""
-    from plans import default_branch_point
-    from update import installed_update_paths
-
     if base is None or not any(
         g.get("role") == "freshness" for x in groups for g in x["checks"]
     ):
         return groups
+    from plans import default_branch_point
+    from update import installed_update_paths
+
     point = default_branch_point(root)
     judged = base
     installed = installed_update_paths(root, base)
@@ -948,10 +952,11 @@ def load_groups(
         from shipping import load_policy
 
         load_policy(root)
-    listed = repository_files(root)
+    raw = listed_names(root)
+    listed = repository_files(root, raw)
     start = len(str(root)) + 1
     names = [str(path)[start:] for path in listed]
-    LISTED[root] = frozenset(names), generated_sources(root, names)
+    LISTED[root] = frozenset(raw), generated_sources(root, names)
     try:
         return checked_groups(root, config, listed, base, dependents, starting)
     finally:
@@ -977,6 +982,9 @@ def checked_groups(
     ]
     report_paths: set[Path] = set()
     count = sum(validate_group(root, group, report_paths) for group in groups)
+    refuse_ignored_locks(
+        root, group_locks(root, groups), LISTED[root][0], ask_git=False
+    )
     if not count:
         raise ValueError("No checks configured; verification cannot pass")
     validate_required_checks(root, config, listed, starting)

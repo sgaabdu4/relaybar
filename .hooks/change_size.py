@@ -6,13 +6,20 @@ from pathlib import Path, PurePosixPath
 from dependency_graph import owner_language
 from gate_config import SOURCE_FILE, Group, changed_files, parse_config
 from plans import (
+    SMALL_SIZE,
     _git_output,
     _is_test,
+    acceptance_tests,
     default_branch_point,
     is_documentation,
     is_plan_path,
+    plan_files,
+    plan_sections,
+    plan_status,
     release_references,
+    validate_plan,
 )
+from project_files import KEPT, keep, keeping
 
 NO_CHANGE = "no change"
 MAX_SMALL_LINES = 20
@@ -53,8 +60,6 @@ def _file_reason(name: str, added: str, removed: str) -> str | None:
         return f"it changes the binary file {name}"
     if _is_protected(path):
         return f"it changes {name}, which always needs a plan"
-    if _is_test(path) and int(removed):
-        return f"it removes lines from the test file {name}"
     return None
 
 
@@ -76,9 +81,10 @@ def _branch_change(root: Path, point: str) -> tuple[list[str], list[str], list[s
     return status, counts, untracked
 
 
-def _counted_lines(counts: list[str], names: set[str]) -> int | str:
-    """Changed lines in the counted files, or the first reason one of them needs a plan."""
+def _counted_lines(counts: list[str], names: set[str]) -> tuple[int, list[str]] | str:
+    """Changed lines, the test files that lose lines, or the first reason a file needs a plan."""
     total = 0
+    losing: list[str] = []
     for entry in filter(None, counts):
         added, removed, name = entry.split("\t", 2)
         if name not in names:
@@ -86,7 +92,32 @@ def _counted_lines(counts: list[str], names: set[str]) -> int | str:
         if reason := _file_reason(name, added, removed):
             return reason
         total += int(added) + int(removed)
-    return total
+        if int(removed) and _is_test(PurePosixPath(name)):
+            losing.append(name)
+    return total, sorted(losing)
+
+
+def _removed_check(root: Path, point: str, names: list[str]) -> str | None:
+    """The reason a test file loses more than import lines and empty lines, or None."""
+    from comments import DIFF, HASH, SLASH, changed_lines, import_or_empty
+
+    for name in names:
+        if Path(name).suffix not in HASH | SLASH:
+            return f"it removes lines from the test file {name}"
+    try:
+        diff = subprocess.check_output(
+            [*DIFF, point, "--", *(f":(literal){name}" for name in names)],
+            cwd=root,
+            text=True,
+            errors="replace",
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return "the change cannot be measured"
+    removed = changed_lines(diff)[1]
+    for name in names:
+        if not all(import_or_empty(text) for _, text in removed.get(name, [])):
+            return f"it removes lines from the test file {name}"
+    return None
 
 
 def configured_packages(root: Path) -> dict[str, Group]:
@@ -139,6 +170,8 @@ def update_only(root: Path, base: str, changed: set[str]) -> bool:
 
 
 def _verdict(
+    root: Path,
+    point: str,
     status: list[str],
     counts: list[str],
     untracked: list[str],
@@ -172,11 +205,13 @@ def _verdict(
     counted = _counted_lines(counts, names)
     if isinstance(counted, str):
         return False, counted
-    total = counted
+    total, losing = counted
     if len(names) > MAX_SMALL_FILES:
         return False, f"it changes {len(names)} files, more than {MAX_SMALL_FILES}"
     if total > MAX_SMALL_LINES:
         return False, f"it changes {total} lines, more than {MAX_SMALL_LINES}"
+    if losing and (reason := _removed_check(root, point, losing)):
+        return False, reason
     plural = "file" if len(names) == 1 else "files"
     return True, f"{len(names)} {plural}, {total} changed lines"
 
@@ -215,7 +250,8 @@ def size_verdict(root: Path) -> tuple[bool, str]:
     names -= update_written(root, point, names)
     if not names:
         return True, "only files the verified Hard Eng update wrote"
-    return _verdict(status, counts, untracked, names, configured_packages(root))
+    packages = configured_packages(root)
+    return _verdict(root, point, status, counts, untracked, names, packages)
 
 
 def judged_point(root: Path) -> str | None:
@@ -231,6 +267,12 @@ def judged_point(root: Path) -> str | None:
 
 
 def _revision(root: Path, reference: str) -> str | None:
+    return keep(
+        "references", ("revision", str(root), reference), lambda: _tip(root, reference)
+    )
+
+
+def _tip(root: Path, reference: str) -> str | None:
     try:
         return _git_output(
             root, "rev-parse", "--verify", "-q", f"{reference}^{{commit}}"
@@ -254,6 +296,17 @@ def released_plans(root: Path, base: str | None) -> set[str]:
     return {
         name for name in changed_files(root, point) or () if is_plan_path(Path(name))
     }
+
+
+def held_by_base(root: Path, path: Path) -> bool:
+    """A remote base holds the plan and the branch did not change it; with no remote base each plan is the branch's own."""
+    with keeping("references"):
+        remote = any(
+            _revision(root, name)
+            for name in release_references(root)
+            if name.startswith("origin/")
+        )
+        return remote and str(path.relative_to(root)) not in released_plans(root, None)
 
 
 def moved_plans(root: Path, base: str | None, changed: set[str]) -> set[str]:
@@ -287,12 +340,175 @@ def moved_plans(root: Path, base: str | None, changed: set[str]) -> set[str]:
     return moved
 
 
+def plan_words(text: str) -> list[str]:
+    """The words of a plan; every table rule counts as one form."""
+    return [
+        "---" if word.count("-") > 2 and not word.strip("-:") else word
+        for word in text.split()
+    ]
+
+
+def fails_todays_rules(path: Path) -> bool:
+    if plan_status(path.read_text()) != "Complete":
+        return False
+    try:
+        validate_plan(path)
+    except ValueError:
+        return True
+    return False
+
+
+def held_words(root: Path, reference: str, name: str) -> list[str] | None:
+    try:
+        return plan_words(_git_output(root, "show", f"{reference}:{name}"))
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+def reformatted_plans(root: Path, base: str | None, changed: set[str]) -> set[str]:
+    """Changed Complete plans that fail today's rules but keep every word of the copy that the base and the branch point hold."""
+    failing = [
+        name
+        for name in changed
+        if is_plan_path(Path(name))
+        and (root / name).is_file()
+        and fails_todays_rules(root / name)
+    ]
+    if not failing:
+        return set()
+    references = {
+        reference
+        for reference in (base or "HEAD", default_branch_point(root))
+        if reference
+    }
+    return {
+        name
+        for name in failing
+        if all(
+            held_words(root, reference, name) == plan_words((root / name).read_text())
+            for reference in references
+        )
+    }
+
+
 def plan_not_needed(root: Path) -> bool:
     small, reason = size_verdict(root)
     if reason == NO_CHANGE:
         return True
     if small:
-        print(f"Size: small ({reason}); no plan needed.")
+        print(f"{SMALL_SIZE}{reason}); no plan needed.")
     else:
         print(f"Size: big, because {reason}; a plan is needed.")
     return small
+
+
+def judged_plans(
+    root: Path, base: str | None, changed: set[str]
+) -> tuple[set[str], list[Path], list[Path]]:
+    """The changed files with released plans added and moved plans out, every plan file, and the plans that judge the change."""
+    changed = changed | released_plans(root, base)
+    changed -= moved_plans(root, base, changed)
+    skipped: set[str] = keep("references", ("reformatted", str(root)), set)
+    changed -= skipped
+    paths = plan_files(root)
+    applicable = [path for path in paths if str(path.relative_to(root)) in changed]
+    return (
+        changed,
+        paths,
+        applicable
+        or [
+            path
+            for path in paths
+            if plan_status(path.read_text()) not in {None, "Complete"}
+        ],
+    )
+
+
+def judged_stage(root: Path, base: str | None, stage: str | None) -> str:
+    """The stage that validate_plans reaches; a failing run is judged again without its reformatted old plans."""
+    from plans import validate_plans
+
+    with keeping("references"):
+        try:
+            return validate_plans(root, base, stage)
+        except ValueError:
+            point = base or judged_point(root)
+            changed = changed_files(root, point or "HEAD") or set()
+            changed |= released_plans(root, base)
+            found = reformatted_plans(root, point, changed)
+            if not found:
+                raise
+            KEPT["references"][("reformatted", str(root))] = found
+            return validate_plans(root, base, stage)
+
+
+def plan_tests(root: Path, base: str | None) -> set[str]:
+    """Test names that the active plans' acceptance lines depend on."""
+    _, _, applicable = judged_plans(
+        root, base, changed_files(root, base or "HEAD") or set()
+    )
+    from requirement_registry import requirement_tests
+
+    names = set()
+    for path in applicable:
+        content = path.read_text()
+        if plan_status(content) in {"Ready", "Complete"}:
+            sections = plan_sections(content, allow_placeholders=True)
+            references, requirements = acceptance_tests(sections)
+            names.update(name for _, name in references)
+            tests = requirement_tests(root) if requirements else {}
+            for requirement in requirements:
+                names.update(name for _, _, name in tests.get(requirement, []))
+    return names
+
+
+def plan_skips(root: Path, base: str | None, groups: list[Group], since: float) -> bool:
+    from reports import skipped_tests
+
+    skipped = sorted(plan_tests(root, base) & skipped_tests(root, groups, since))
+    if skipped:
+        print("FAIL plan acceptance tests were skipped: " + ", ".join(skipped))
+    return bool(skipped)
+
+
+MAX_PR_COMMITS = 100
+WARN_PR_COMMITS = 80
+JOIN_COMMITS = (
+    "Or join neighbour commits on the same base commit: `git diff <old head> <new head>` "
+    "must then print nothing; push with `--force-with-lease` and never pull the old "
+    "commits back in."
+)
+
+
+def commits_problem(count: int) -> str | None:
+    """The refusal when a PR holds more commits than HE-PR-COMMITS allows."""
+    if count <= MAX_PR_COMMITS:
+        return None
+    return (
+        f"PR has {count} commits; HE-PR-COMMITS allows at most {MAX_PR_COMMITS}. "
+        "Move the oldest finished commits to a PR of their own, merge it, then rebase "
+        f"the rest. {JOIN_COMMITS}"
+    )
+
+
+def commit_note(root: Path) -> None:
+    """Warn, never refuse, when the branch nears or passes the HE-PR-COMMITS cap."""
+    point = default_branch_point(root)
+    if point is None:
+        return
+    try:
+        count = int(_git_output(root, "rev-list", "--count", f"{point}..HEAD"))
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        return
+    if count < WARN_PR_COMMITS:
+        return
+    way = (
+        "Move the oldest finished commits to a PR of their own and merge it first. "
+        + JOIN_COMMITS
+        if count > MAX_PR_COMMITS
+        else "Ship this work soon, then continue on a new branch."
+    )
+    print(
+        f"Hard Eng warning: this branch has {count} commits; ship refuses a PR "
+        f"with more than {MAX_PR_COMMITS} (HE-PR-COMMITS). {way}"
+    )

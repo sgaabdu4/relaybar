@@ -13,9 +13,10 @@ from pathlib import Path
 import agent_hooks
 import hook_chain
 import source_trees
-from gate_config import SOURCE_FILE
+from gate_config import SOURCE_FILE, parse_config, repository_files
 from local_edits import refusal_reason
 from mcp_setup import retired_settings
+from project_files import keep, tell_once
 from release_history import StaleRelease, ordered
 from submodules import update_submodules
 from update_runner import (
@@ -224,8 +225,6 @@ def revision_follows(revision: str, reference: str) -> bool:
 
 
 def scaffold_files(source: Path) -> set[str]:
-    from gate_config import repository_files
-
     skills = list((source / ".agents/skills").iterdir())
     if any(skill.is_symlink() and not skill.is_dir() for skill in skills):
         raise ValueError(
@@ -333,7 +332,8 @@ def update_plan(
         timeout=60,
         check=False,
     )
-    sys.stderr.write(planned.stderr)
+    before, _, pending = planned.stderr.partition("CI setup pending:")
+    tell_once(before + pending.partition("\n")[2])
     if planned.returncode != 0:
         reason = refusal_reason(planned.stderr)
         raise ValueError(f"setup refused the update: {reason or 'no reason printed'}")
@@ -704,13 +704,8 @@ def repair_installation(root: Path, previous: str) -> str:
         and (
             not (root / name).exists()
             or retired_parent(root, name)
-            or name
-            in {
-                "AGENTS.md",
-                "CLAUDE.md",
-                "AGENTS.override.md",
-                "hard-eng.gates.json",
-            }
+            or name in RULE_FILES
+            or name in {"hard-eng.gates.json", ".github/workflows/hard-eng.yml"}
             or name == SOURCE_FILE
             and '"skills"' in (root / name).read_text(errors="replace")
             or any(old in (root / name).read_text(errors="replace") for old in retired)
@@ -821,11 +816,10 @@ def install_revision(root: Path, source: Path, old: Path, revision: str) -> str:
     return f"Updated Hard Eng to {revision}; created an isolated local commit without pushing."
 
 
+RULE_FILES = {"AGENTS.md", "CLAUDE.md", "AGENTS.override.md"}
 INSTALLED_FILES = {
     SOURCE_FILE,
-    "AGENTS.md",
-    "CLAUDE.md",
-    "AGENTS.override.md",
+    *RULE_FILES,
     ".husky/pre-push",
     ".github/workflows/hard-eng.yml",
     ".github/workflows/pr-text.yml",
@@ -930,7 +924,9 @@ def release_installed(
         if path.is_dir()
     }
     env = hook_chain.own_hooks_env(root)
-    changes, links, _, _ = update_plan(root, source, source, env)
+    key = ("tree_plan", str(root), str(source))
+    made = keep("listings", key, lambda: update_plan(root, source, source, env))
+    changes, links = made[:2]
     if (
         not names <= allowed
         or (env is not None and ".husky/pre-push" in names)
@@ -948,7 +944,7 @@ def release_installed(
     return True
 
 
-def check_scaffold_update(root: Path, base: str) -> bool:
+def check_scaffold_update(root: Path, base: str, *, sources: bool = True) -> bool:
     found = update_in_diff(root, base)
     if found is None or not all(maybe_installed(name) for name in found[2]):
         return False
@@ -962,6 +958,12 @@ def check_scaffold_update(root: Path, base: str) -> bool:
             return False
     except (subprocess.CalledProcessError, StaleRelease):
         return False
+    if sources:
+        from coverage_sources import require_listed_sources
+
+        gates = parse_config((root / "hard-eng.gates.json").read_text())
+        files = repository_files(root)
+        require_listed_sources(root, gates["packages"], files, python_only=False)
     print(
         "Scaffold-only update: source CI verified and the gate configuration accepted.",
         flush=True,
@@ -984,9 +986,10 @@ def proven_installed(
     """The installed paths among these names, when the verified release installs them exactly."""
     installed = {name for name in names if maybe_installed(name)}
     try:
-        proven = verified_revision(revision) and release_installed(
-            root, base, installed, revision, previous
-        )
-    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        proven = keep(
+            "references", ("verified", revision), lambda: verified_revision(revision)
+        ) and release_installed(root, base, installed, revision, previous)
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        source_trees.tell_unproven(error)
         return set()
     return installed if proven else set()

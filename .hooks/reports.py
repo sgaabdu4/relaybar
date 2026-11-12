@@ -15,6 +15,7 @@ from coverage_sources import (
     erased_swift,
     erased_typescript,
     lcov_coverage,
+    omit_step,
     python_coverage,
     xccov_coverage,
 )
@@ -77,21 +78,12 @@ def emit_dart_test_failure(
         print(summary)
 
 
-def parallel_hint(code: int, tests: bool, command: list[str]) -> str:
-    if code in {0, 5} or not tests or "-n auto" not in " ".join(command):
-        return ""
-    return (
-        "\nThese tests ran in parallel (-n auto). If they pass serially, isolate "
-        "the state they share, or set -n 0 in this gate's command."
-    )
-
-
 def quick_groups(
     groups: list[Group], quick: bool = True, installed: frozenset[str] = frozenset()
 ) -> list[Group]:
     if not quick:
         return groups
-    from process_group import install_key
+    from process_group import INSTALL_ROLES, install_key
 
     return [
         {
@@ -101,7 +93,7 @@ def quick_groups(
                 for gate in group["checks"]
                 if gate.get("role") in QUICK_ROLES
                 or (
-                    gate.get("role") == "lockfiles"
+                    gate.get("role") in INSTALL_ROLES
                     and install_key(group) not in installed
                 )
             ],
@@ -163,6 +155,12 @@ def validate_scanner_log(scanner: str | None, log: TextIO) -> None:
         SCANNER_LOGS[scanner](log)
 
 
+def junit_root(path: Path) -> ET.Element:
+    # Local JUnit only; ElementTree rejects external entities (test_junit_rejects_entities).
+    # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse
+    return ET.parse(path).getroot()
+
+
 def completed_tests(path: Path, kind: str) -> int:
     if kind == "dart-tests":
         if (
@@ -188,10 +186,15 @@ def completed_tests(path: Path, kind: str) -> int:
         ):
             raise ValueError("Test report does not contain a successful completed run")
         return passed
-    # Local JUnit only; ElementTree rejects external entities (test_junit_rejects_entities).
-    # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse
-    tree = ET.parse(path)
-    if tree.getroot().tag not in {"testsuites", "testsuite"}:
+    try:
+        tree = junit_root(path)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"The command passed but wrote no JUnit report ({'/'.join(path.parts[-2:])}). "
+            "Make the command of this gate write its JUnit report to the `report` path "
+            "that hard-eng.gates.json gives for this gate."
+        ) from None
+    if tree.tag not in {"testsuites", "testsuite"}:
         raise ValueError("Expected a JUnit test report")
     if tree.findall(".//failure") or tree.findall(".//error"):
         raise ValueError("Test report contains failures or errors")
@@ -214,8 +217,7 @@ def reported_skips(path: Path, kind: str) -> set[str]:
         }
     if kind == "xcode-tests":
         return set()
-    # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse
-    tree = ET.parse(path)
+    tree = junit_root(path)
     return {
         test.get("name", "").split("[", 1)[0]
         for test in tree.iter("testcase")
@@ -266,17 +268,24 @@ def expected_coverage(
         outside_lib = kind == "dart-tests" and any(
             path.parts[0] != "lib" for path in relative
         )
+        from dart_boundaries import flutter_without_test
+
         raise ValueError(
             f"Coverage report omits production files: {', '.join(map(str, relative))}. "
             "Cover them, or mark generator output with "
             "`<pattern> linguist-generated=true` in .gitattributes"
+            + (omit_step(directory, relative) if kind == "python-tests" else "")
             + (
-                ". For Dart code outside lib/: move it under lib/ and test it there."
-                " Or leave it in place and write tests under test/ that import it by a"
+                ". For Dart code outside lib/: move it under lib/ and test it there"
+                if outside_lib
+                else ""
+            )
+            + (
+                ". Or leave it in place and write tests under test/ that import it by a"
                 " relative path and use package:test/test.dart (not flutter_test). The"
                 " second way needs `test` as a dev dependency and a setup rerun, which adds"
                 " the VM test run"
-                if outside_lib
+                if outside_lib and not flutter_without_test(directory)
                 else ""
             )
         )
@@ -366,7 +375,9 @@ def validate_osv_package(
         isinstance(package.get(key), str) and package[key]
         for key in ("name", "version", "ecosystem")
     ):
-        raise ValueError("OSV report is missing package identity")
+        from python_setup import osv_identity
+
+        osv_identity(package, source["path"])
     if item.get("vulnerabilities", []) != [] or item.get("groups", []) != []:
         found = item.get("vulnerabilities")
         entries = found if isinstance(found, list) else []
@@ -484,9 +495,14 @@ def validate_semgrep(path: Path) -> None:
                 raise ValueError(
                     "Semgrep requires scanned files and executed rules (--time)"
                 )
-        if timing.get("fixpoint_timeouts", []) != []:
+        if timeouts := timing.get("fixpoint_timeouts", []):
+            paths = {(t.get("location") or {}).get("path") for t in timeouts}
+            named = ", ".join(sorted(p for p in paths if p))
             raise ValueError(
-                f"Semgrep reports analysis timeouts: {timing['fixpoint_timeouts']}"
+                f"Semgrep ran out of time on {named}. If a file holds big tables of "
+                "text constants, move them to a data module, then run the same check again"
+                if named
+                else "Semgrep ran out of time and named no file; run the same check again"
             )
         targets = timing["targets"]
         if not isinstance(targets, list) or {t["path"] for t in targets} != set(
@@ -806,7 +822,8 @@ def validate_scanner_report(
     elif scanner == "freshness":
         from freshness import freshness_waiting, validate_freshness
 
-        validate_freshness(path, gate, waiting=freshness_waiting(gate, directory))
+        waiting = freshness_waiting(gate, directory)
+        validate_freshness(path, gate, waiting=waiting, directory=directory)
     elif scanner == "fallow":
         validate_fallow(path, sdk_binaries(directory), directory)
     else:
@@ -836,6 +853,20 @@ def scanner_result(
             lines[FINDING_LIMIT:] = [f"{more} more findings in {path}"]
         for line in lines:
             print(f"{gate['name']}: {line}")
+        if scanner == "import-linter" and missing_build_system(lines, directory):
+            print(
+                f"{gate['name']}: Add a [build-system] table to pyproject.toml and run `uv sync`."
+            )
+
+
+def missing_build_system(lines: list[str], directory: Path) -> bool:
+    """Import Linter cannot find the package when uv has no build system to install it with."""
+    project = directory / "pyproject.toml"
+    return (
+        any(line.startswith("Could not find package") for line in lines)
+        and project.is_file()
+        and "[build-system]" not in project.read_text()
+    )
 
 
 def commit_sha(item: JsonObject) -> str:
