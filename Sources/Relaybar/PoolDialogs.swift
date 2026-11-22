@@ -381,7 +381,7 @@ enum PoolDialogs {
         return NSImage(size: size, flipped: false) { rect in
             icon.draw(in: rect)
             let badge = NSRect(x: 36, y: 0, width: 28, height: 28)
-            NSColor.white.setFill()
+            Theme.badgeFill.setFill()
             NSBezierPath(ovalIn: badge.insetBy(dx: 3, dy: 3)).fill()
             let config = NSImage.SymbolConfiguration(pointSize: 28, weight: .regular).applying(.init(paletteColors: [.white, color]))
             NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(config)?.draw(in: badge)

@@ -97,7 +97,7 @@ enum Render {
     }
 
     private static func drawTag(_ tag: String, color: NSColor, at origin: NSPoint) {
-        let attributes: [NSAttributedString.Key: Any] = [.font: tagFont, .foregroundColor: NSColor.black]
+        let attributes: [NSAttributedString.Key: Any] = [.font: tagFont, .foregroundColor: Theme.tagCutoutMask]
         let width = (tag as NSString).size(withAttributes: attributes).width
         let box = NSRect(x: origin.x, y: origin.y, width: ceil(width) + 3, height: ceil(tagFont.capHeight) + 3)
         let text = NSPoint(x: box.minX + (box.width - width) / 2, y: box.minY + (box.height - tagFont.capHeight) / 2 + tagFont.descender)

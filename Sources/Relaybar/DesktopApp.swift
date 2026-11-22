@@ -110,7 +110,7 @@ enum DesktopApp {
             let height = unit * 0.23
             let pill = NSRect(
                 x: tile.minX + unit * 0.09, y: tile.minY + unit * 0.09, width: max(height, text.width + unit * 0.1), height: height)
-            NSColor.white.setFill()
+            Theme.iconPillFill.setFill()
             NSBezierPath(roundedRect: pill, xRadius: height / 2, yRadius: height / 2).fill()
             (tag as NSString).draw(at: NSPoint(x: pill.midX - text.width / 2, y: pill.midY - text.height / 2), withAttributes: attributes)
             return true
