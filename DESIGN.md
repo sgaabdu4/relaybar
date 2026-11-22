@@ -1,3 +1,10 @@
+---
+platform: macOS
+toolkit: AppKit
+theme: Sources/Relaybar/Theme.swift
+library: UI-LIBRARY.md
+---
+
 # Relaybar Design
 
 ## Overview
@@ -11,6 +18,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
 - Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
 - Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo and a white pill with the tag in the darker colour. Owner: `DesktopApp.icon`.
+- Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill), `Theme.badgeFill` (alert status badge backing) and `Theme.tagCutoutMask` (menu bar tag pill cutout mask). Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
 
 ## Typography
 
@@ -28,6 +36,7 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Organisms: `AccountCard` (one account, clickable when it has an app to open); the status item image (`Render.row`).
 - Templates: the dropdown — account cards, then "Combine accounts…" or "All accounts ›" (subtitle "On homebox" or "On this Mac"), Customize, Add account, Open at login, Quit. The "All accounts" submenu has Claude and Codex section headers, one tickable row per account (states as a second line), "Change order…" (a standard `NSAlert` with an "Automatic" / "Use my order" segmented control; Automatic shows the live order read-only with one secondary line, Use my order shows the drag list), a "Computers" section (one row per added computer, each with "Remove <host>…"), "Add a computer…" and "Stop combining…".
 - Pages: the dropdown and the add, rename, remove and make-desktop-app dialogs (standard `NSAlert`). "Add a computer" adds two tick boxes with a one-line secondary subtitle each (shown only when they apply, on by default) and a small secondary note; its password prompt is an `NSAlert` with a secure field. Its setup window is a checklist (`PoolAddPanel`): a green tick for done steps, a spinner on the current step, dim upcoming steps, and a sign-in row with "Waiting for you in the browser", Copy Link, Open Again and Cancel.
+- Shared UI library index: `UI-LIBRARY.md` tracks the shared component entry (`Sources/Relaybar/AccountCard.swift`) for Hard Eng's UI single-source check.
 
 ## Do's and Don'ts
 
