@@ -25,6 +25,7 @@ Single source: `Sources/Relaybar/Theme.swift` is the single owner for shared lit
 
 Blockers: None.
 Authority: Maintainer authorization on 2026-11-22 to fix `sgaabdu4/relaybar` for Hard Eng `b5` UI Single Source of Truth and open a clean merge-ready PR to `main` (without modifying `hard-eng.gates.json` in this PR).
+Review declined: Native AppKit refactor using `N/A — unchanged` without a clean `look` record :: Visually redesigning Relaybar's existing native macOS UI (menu bar, `AccountCard`, desktop icon, `NSAlert`) to satisfy web-focused `look` rules is out of scope for this no-visual-change colour-token extraction PR; Before/After renders compiled from `origin/main` and this branch are byte-identical (`45a2a6833b26`), CI `pr-text` accepts `N/A — unchanged` beside `UI appearance: unchanged`, and this PR is opened for maintainer CI merge rather than local browser-capture `ship`.
 
 ## Acceptance + steps
 
@@ -45,13 +46,13 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 
 ## ux_reference
 
-N/A — unchanged: ![Before](../../coverage/ui-before.png) ![After](../../coverage/ui-after.png) — Relaybar AppKit surfaces (`PoolDialogs.done` badged alert, `DesktopApp.icon`, and `Render.row`) render byte-identically before and after moving three raw `NSColor` literals to `Sources/Relaybar/Theme.swift` (`Theme.iconPillFill`, `Theme.badgeFill`, `Theme.tagCutoutMask`).
+N/A — unchanged: ![Before](../../coverage/ui-before.png) ![After](../../coverage/ui-after.png) — Relaybar's `Render.row` menu bar item and `DesktopApp.icon` tile compiled directly from `origin/main` and this branch render byte-identically (SHA-256 `45a2a6833b26`) after moving three raw `NSColor` literals to `Sources/Relaybar/Theme.swift`; `PoolDialogs.badged` is `private` and verified by build and source inspection (`Theme.badgeFill == .white`).
 
 ## Verification
 
 Result: Passed
-Evidence: `b5` `ui_whole.ui_findings_whole` returned 0 findings for `TARGET_UI_LIBRARY = ["Sources/Relaybar/AccountCard.swift"]`; Before (`origin/main`) and After (branch) AppKit renders are byte-identical (SHA-256 `4bbb10637075` for the `PoolDialogs.done` badged alert; `76d91b390577` for `DesktopApp.icon`; `f65a5a0b7287` for `Render.row` + `AccountCard` + `DesktopApp.icon`); `python3 .hooks/hard-eng.py check --base origin/main` passed lockfile, format, tests (96% RelaybarCore coverage), universal build, efficiency (15 MB footprint, 0.01 s idle CPU), secrets-files, secrets-history, vulnerabilities, zizmor, actionlint, shellcheck and security (0 findings).
-E2E: Passed — `scripts/efficiency.sh` launched the built `Relaybar.app` on a fixture home and stayed within memory (15 MB vs 30 MB budget) and idle CPU (0.01 s vs 0.1 s budget) limits; offscreen AppKit renders of `Render.row`, `AccountCard`, `DesktopApp.icon` and `PoolDialogs.done`'s badged alert matched byte-for-byte against `origin/main`.
+Evidence: `b5` `ui_whole.ui_findings_whole` returned 0 findings for `TARGET_UI_LIBRARY = ["Sources/Relaybar/AccountCard.swift"]`; Before (`origin/main`) and After (branch) AppKit renders of `Render.row` and `DesktopApp.icon` are byte-identical (SHA-256 `45a2a6833b26`); `PoolDialogs.badged` (`Sources/Relaybar/PoolDialogs.swift:384`) is `private` and verified by universal release compilation and inspection (`Theme.badgeFill == .white`); `python3 .hooks/hard-eng.py check --base origin/main` passed lockfile, format, tests (96% RelaybarCore coverage), universal build, efficiency (15–16 MB footprint, 0.01 s idle CPU), secrets-files, secrets-history, vulnerabilities, zizmor, actionlint, shellcheck and security (0 findings).
+E2E: Passed — `scripts/efficiency.sh` launched the built `Relaybar.app` on a fixture home and stayed within memory (15–16 MB vs 30 MB budget) and idle CPU (0.01 s vs 0.1 s budget) limits; direct AppKit renders of `Render.row` and `DesktopApp.icon` matched byte-for-byte against `origin/main` (`45a2a6833b26`), while `PoolDialogs.badged` was not rendered live (private helper; verified by compilation and source inspection).
 Real service: N/A — no outside service calls are made or changed by this token refactor.
 Retro: None — clean refactor with no recurring failures or new process gaps.
 Delivery target: Merge
