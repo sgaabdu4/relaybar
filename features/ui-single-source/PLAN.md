@@ -45,37 +45,13 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 
 ## ux_reference
 
-Result: Passed
-Evidence: Rendered the menu bar item (`Render.row`), dropdown account card (`AccountCard`) and desktop app icon (`DesktopApp.icon`) from `origin/main` and from this branch with `Theme.swift`, inspected both PNGs and confirmed byte-identical output (`f65a5a0b7287`). `PoolDialogs.badged` is private and uses `Theme.badgeFill` (`.white`), matching `NSColor.white`.
-Surface: Existing — Relaybar menu bar item (`Sources/Relaybar/Render.swift`), dropdown card (`Sources/Relaybar/AccountCard.swift`) and desktop app icon (`Sources/Relaybar/DesktopApp.swift`).
-Before: ![Before](../../coverage/ui-before.png)
-Proposed: ![After](../../coverage/ui-after.png)
-Controls: None — no controls added or changed; only three raw colour literals moved to `Sources/Relaybar/Theme.swift`.
-Capture: Offscreen AppKit `NSBitmapImageRep` render at 2x scale in dark Aqua appearance calling `Render.row`, `AccountCard` and `DesktopApp.icon` directly from `origin/main` (Before) and from this branch (After) with mock `ME` account data (`82%` 5h, `64%` 7d).
-Review: Inspected both Before and After PNGs; menu bar `ME` tag cutout, `5h`/`7d` dropdown card and orange desktop app icon with white `ME` pill are byte-for-byte identical.
-Rules:
-- Mistake-proof: Pass — menu bar `82`/`64` numbers sit directly above the `AccountCard` rows labelled `5h` (`82%`) and `7d` (`64%`), and no user input or choice changed.
-- Least effort: N/A — no user flow or click path changed.
-- Observe: N/A — no recording or confirmation flow changed.
-- Undo: N/A — no user action or destructive flow changed.
-- No clutter: Pass — 3 kept, 0 removed; menu bar item, dropdown card and desktop app icon keep their existing elements with no added helper text.
-- Hierarchy: Pass — single orange accent identifies the account across menu bar, card bars and desktop icon tile with quiet neutral surfaces.
-- Alignment: Pass — column headings share the left edge of the 250 pt menu/card stack and the 170 pt icon card.
-- Spacing: Pass — uniform 24 pt outer margin, 12 pt stack gap and native card padding keep groups distinct.
-- Design system: Pass — the three raw `NSColor` literals now live in `Sources/Relaybar/Theme.swift` and are documented in `DESIGN.md`.
-- Messages: N/A — no copy or error strings changed.
-- States: N/A — no loading, empty or error state logic changed.
-- Time: N/A — no time formatting or timezone logic changed.
-- Audit: N/A — single-user desktop utility with no staff/admin audit log.
-- Accessibility: Pass — white pill, dark cutout mask and orange-on-dark labels preserve existing contrast in dark and light appearances.
-- Widths: Pass — native macOS fixed-size menu bar (22 pt height), 250 pt dropdown card and 1024 px app icon geometry are unchanged.
-- Performance: Pass — static `NSColor` properties in `Theme` add zero runtime allocation or I/O, verified by `scripts/efficiency.sh`.
+N/A — unchanged: ![Before](../../coverage/ui-before.png) ![After](../../coverage/ui-after.png) — Relaybar AppKit surfaces (`PoolDialogs.done` badged alert, `DesktopApp.icon`, and `Render.row`) render byte-identically before and after moving three raw `NSColor` literals to `Sources/Relaybar/Theme.swift` (`Theme.iconPillFill`, `Theme.badgeFill`, `Theme.tagCutoutMask`).
 
 ## Verification
 
 Result: Passed
-Evidence: `b5` `ui_whole.ui_findings_whole` returned 0 findings for `TARGET_UI_LIBRARY = ["Sources/Relaybar/AccountCard.swift"]`; Before (`origin/main`) and After (branch) AppKit renders of `Render.row`, `AccountCard` and `DesktopApp.icon` are byte-identical (SHA-256 `f65a5a0b7287`); `python3 .hooks/hard-eng.py check --base origin/main` passed lockfile, format, tests, universal build, efficiency (15 MB footprint, 0.01 s idle CPU), secrets-files, secrets-history, vulnerabilities, zizmor, actionlint, shellcheck and security (0 findings).
-E2E: Passed — `scripts/efficiency.sh` launched the built `Relaybar.app` on a fixture home and stayed within memory (15 MB vs 30 MB budget) and idle CPU (0.01 s vs 0.1 s budget) limits; offscreen AppKit renders of `Render.row`, `AccountCard` and `DesktopApp.icon` matched byte-for-byte against `origin/main`, while private `PoolDialogs.badged` was verified by compilation and inspection (`Theme.badgeFill == .white`).
+Evidence: `b5` `ui_whole.ui_findings_whole` returned 0 findings for `TARGET_UI_LIBRARY = ["Sources/Relaybar/AccountCard.swift"]`; Before (`origin/main`) and After (branch) AppKit renders are byte-identical (SHA-256 `4bbb10637075` for the `PoolDialogs.done` badged alert; `76d91b390577` for `DesktopApp.icon`; `f65a5a0b7287` for `Render.row` + `AccountCard` + `DesktopApp.icon`); `python3 .hooks/hard-eng.py check --base origin/main` passed lockfile, format, tests (96% RelaybarCore coverage), universal build, efficiency (15 MB footprint, 0.01 s idle CPU), secrets-files, secrets-history, vulnerabilities, zizmor, actionlint, shellcheck and security (0 findings).
+E2E: Passed — `scripts/efficiency.sh` launched the built `Relaybar.app` on a fixture home and stayed within memory (15 MB vs 30 MB budget) and idle CPU (0.01 s vs 0.1 s budget) limits; offscreen AppKit renders of `Render.row`, `AccountCard`, `DesktopApp.icon` and `PoolDialogs.done`'s badged alert matched byte-for-byte against `origin/main`.
 Real service: N/A — no outside service calls are made or changed by this token refactor.
 Retro: None — clean refactor with no recurring failures or new process gaps.
 Delivery target: Merge
