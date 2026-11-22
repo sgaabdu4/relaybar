@@ -26,6 +26,7 @@ Single source: `Sources/Relaybar/Theme.swift` is the single owner for shared lit
 Blockers: None.
 Authority: Maintainer authorization on 2026-11-22 to fix `sgaabdu4/relaybar` for Hard Eng `b5` UI Single Source of Truth and open a clean merge-ready PR to `main` (without modifying `hard-eng.gates.json` in this PR).
 Review declined: Native AppKit refactor using `N/A — unchanged` without a clean `look` record :: Visually redesigning Relaybar's existing native macOS UI (menu bar, `AccountCard`, desktop icon, `NSAlert`) to satisfy web-focused `look` rules is out of scope for this no-visual-change colour-token extraction PR; Before/After renders compiled from `origin/main` and this branch (covering all three changed call sites including the live `PoolDialogs.done` modal alert) are byte-identical (`fd06fb3be3cb`), CI `pr-text` accepts `N/A — unchanged` beside `UI appearance: unchanged`, and this PR is opened for maintainer CI merge rather than local browser-capture `ship`.
+Review declined: Full interactive Combine accounts GUI journey for `E2E` :: `Sources/Relaybar/PoolDialogs.swift` changed only line 384 (`NSColor.white.setFill()` to `Theme.badgeFill.setFill()` inside `badged`) with zero flow or action-wiring changes; invoking `PoolDialogs.done(host: nil, t3: true, note: nil)` directly from `origin/main` vs this branch proved byte-identical badged-icon output (`fd06fb3be3cb`), and running the full interactive Combine accounts flow requires live accounts/hosts (noted under `Not checked:` in the PR).
 
 ## Acceptance + steps
 
