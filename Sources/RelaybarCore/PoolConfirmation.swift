@@ -14,11 +14,8 @@ public struct PoolConfirmation: Equatable, Sendable {
     public let warning: String?
 
     public static func combined(host: String?, t3: Bool, note: String?, tailscale: Bool) -> PoolConfirmation {
-        let first =
-            t3
-            ? "New chats in T3 Code now use Claude+."
-            : "Use the claude+ and codex+ commands in a terminal to use your combined accounts."
-        let more = tailscale ? " It works on your home Wi-Fi." : t3 ? " T3 Code also shows what is left on each account." : ""
+        let first = t3 ? "New chats in T3 Code now use Claude+." : "Use claude+ and codex+ in a terminal."
+        let more = tailscale ? " It works on your home Wi-Fi." : ""
         return make(
             title: "Your accounts are combined on \(host ?? "this Mac")", detail: first + more, host: host, offer: tailscale,
             primary: t3 ? .openT3 : nil, secondary: .undo, seconds: 10, warning: note)

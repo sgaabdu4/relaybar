@@ -7,10 +7,11 @@ Status: Complete
 Prepare Relaybar for Hard Eng's upcoming UI Single Source of Truth (`b5`) release without modifying `hard-eng.gates.json`, and fix the success screens that the change touches:
 1. Move the raw `NSColor.white` and `NSColor.black` literals in `DesktopApp.swift` and `Render.swift` into a dedicated theme owner `Sources/Relaybar/Theme.swift`. The third literal, the white badge behind the tick in `PoolDialogs.swift`, goes away with the blocking success alert that drew it.
 1a. Replace the two blocking success alerts (accounts combined, helper moved) with a confirmation note under the menu bar icon: the title "Your accounts are combined on this Mac", one detail line, a quiet Undo button on the left and a filled Open T3 Code button on the right, both aligned to the text edge. It closes by itself after 10 seconds. An offer to set up Tailscale keeps the note open until the user answers. A warning that follows combining or moving shows in its own alert. Owners: `Sources/RelaybarCore/PoolConfirmation.swift` (decisions and text), `Sources/Relaybar/Toast.swift` (drawing), `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/PoolMoveFlow.swift` (use).
+1b. Draw the tag text of the desktop icon pill in the account colour mixed 45% with black, so it reads at 3:1 contrast or better on the white pill (`DesktopApp.icon`); the look review found the old colour below 3:1.
 2. Add valid, non-mismatched YAML front matter to `DESIGN.md` and document `Theme` and `[UI-LIBRARY.md](UI-LIBRARY.md)` there while keeping all existing prose intact.
 3. Generate `UI-LIBRARY.md` for `TARGET_UI_LIBRARY = ["Sources/Relaybar/AccountCard.swift"]`.
 
-Non-goals: adding `"ui_library"` to `hard-eng.gates.json` (the currently installed Hard Eng `0df6e524` rejects unknown shipping keys; `"ui_library"` is added in the post-`b5` Hard Eng update PR) and any change to the menu bar strip or the desktop icon. The combine and move flows keep their steps; only how they report success changes.
+Non-goals: adding `"ui_library"` to `hard-eng.gates.json` (the currently installed Hard Eng `0df6e524` rejects unknown shipping keys; `"ui_library"` is added in the post-`b5` Hard Eng update PR) and any change to the menu bar strip. The combine and move flows keep their steps; only how they report success changes.
 
 ## Sources + coverage
 
@@ -49,13 +50,13 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 ## ux_reference
 
 Result: Passed
-Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip and the icon are equal in each pair. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `d5067bb36b2b` (After).
+Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs only in the darker tag text. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `19961437e74c` (After).
 Surface: Existing — macOS menu bar strip, desktop icon pill and the combined-accounts success screen, no browser serves them; owners `Sources/Relaybar/Render.swift`, `Sources/Relaybar/DesktopApp.swift`, `Sources/Relaybar/Toast.swift`, `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/Theme.swift`
 Before: ![Before](ui-before.png)
 Proposed: ![Proposed](ui-after.png)
 Controls: Open T3 Code button — new `Sources/Relaybar/Toast.swift` — mockup ![Confirmation note](features/ui-single-source/confirmation.png); Undo button — new `Sources/Relaybar/Toast.swift` — mockup ![Confirmation note](features/ui-single-source/confirmation.png); Set Up Tailscale and Not Now buttons — new `Sources/Relaybar/Toast.swift` — mockup ![Confirmation note](features/ui-single-source/confirmation.png)
-Capture: Direct AppKit render, not a browser capture. One program drew the strip, the icon and the window at 2x from each checkout (merge base and head); the red ring marks the changed confirmation note. The stacked image holds the strip, the icon and the success screen. The PR carries one labeled pair for each surface.
-Review: Inspected the three pairs. The strip and the icon do not change. The success screen no longer blocks the user, offers Undo, has one filled primary action and lines up its buttons with the text.
+Capture: Direct AppKit render, not a browser capture. One program drew the strip, the icon and the window at 2x from each checkout (merge base and head); the strip shows one tagged account with sample numbers. The stacked image holds the strip, the icon and the success screen. The PR carries one labeled pair for each surface.
+Review: Inspected the three pairs. The strip does not change. The icon tag text is darker. The success screen no longer blocks the user, offers Undo, has one filled primary action and lines up its buttons with the text.
 Rules:
 
 - Mistake-proof: Pass — Undo reverses combining in one tap and the note is not modal, so no wrong answer can be forced.
@@ -71,7 +72,7 @@ Rules:
 - States: Pass — the offer state stays open with Set Up Tailscale and Not Now; the warning state shows its own alert.
 - Time: N/A — the 10 second close is the only timing and no clock or time zone is shown.
 - Audit: N/A — a single-user local menu bar app has no staff or admin roles.
-- Accessibility: Pass — the text uses system label colours on the system HUD material and the buttons are standard controls.
+- Accessibility: Pass — the icon tag text is now the account colour mixed 45% with black on white, and the note text uses system label colours with standard buttons.
 - Widths: N/A — the note has a fixed native width of about 350 pt and no responsive layout.
 - Performance: Pass — `scripts/efficiency.sh` stays at the 15 MB footprint and 0.01 s idle CPU.
 

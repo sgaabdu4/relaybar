@@ -10,6 +10,15 @@ import Testing
         #expect(note.secondary == .undo)
         #expect(note.closesAfter == 10)
         #expect(note.warning == nil)
+        #expect(note.detail == "New chats in T3 Code now use Claude+.")
+    }
+
+    @Test func theDetailOfAPlainConfirmationIsOneShortLine() {
+        for t3 in [true, false] {
+            let note = PoolConfirmation.combined(host: nil, t3: t3, note: nil, tailscale: false)
+            #expect(note.detail.contains("\n") == false)
+            #expect(note.detail.count <= 60)
+        }
     }
 
     @Test func combiningWithoutT3CodeKeepsOnlyUndo() {
