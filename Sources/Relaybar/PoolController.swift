@@ -21,7 +21,9 @@ final class PoolController: NSObject {
     private var settling = false
     private var passwordSkipped = false
     private var statuses: [String: PoolStatus] = [:]
-    var busy = false
+    var busy = false {
+        didSet { if busy { app.dismissNote() } }
+    }
     var generation = 0
     var signing = false
     var openingSignIn = false

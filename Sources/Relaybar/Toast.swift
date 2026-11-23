@@ -58,6 +58,8 @@ final class Toast {
         }
     }
 
+    func dismiss() { hide() }
+
     private func hide() {
         hiding?.cancel()
         guard let panel else { return }
