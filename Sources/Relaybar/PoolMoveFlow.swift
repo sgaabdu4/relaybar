@@ -30,22 +30,21 @@ extension PoolController {
             return
         }
         Task {
-            let wantsTailscale = await performMove(target)
+            await performMove(target)
             busy = false
-            if wantsTailscale { setUpTailscale() }
         }
     }
 
-    private func performMove(_ target: PoolMoveTarget) async -> Bool {
-        guard let start = state, start.canMoveHelper else { return false }
+    private func performMove(_ target: PoolMoveTarget) async {
+        guard let start = state, start.canMoveHelper else { return }
         if target == .thisMac {
             let hosts = start.linuxClients.map(\.host)
-            guard PoolDialogs.moveToThisMac(hosts: hosts) else { return false }
+            guard PoolDialogs.moveToThisMac(hosts: hosts) else { return }
             for host in hosts {
                 await removeComputerWork(host)
-                guard state?.linuxClients.contains(where: { $0.host == host }) == false else { return false }
+                guard state?.linuxClients.contains(where: { $0.host == host }) == false else { return }
             }
-            guard state?.linuxClients.isEmpty == true else { return false }
+            guard state?.linuxClients.isEmpty == true else { return }
         }
         let setup = PoolSetup(env: environment())
         if let old = start.ssh {
@@ -55,17 +54,17 @@ extension PoolController {
                     proceed = true
                 } else {
                     switch PoolDialogs.moveOldUnreachable(host: old) {
-                    case .cancel: return false
+                    case .cancel: return
                     case .again: break
                     case .anyway: proceed = true
                     }
                 }
             }
         }
-        return await runMove(to: target, from: start, setup: setup)
+        await runMove(to: target, from: start, setup: setup)
     }
 
-    private func runMove(to target: PoolMoveTarget, from start: PoolState, setup: PoolSetup) async -> Bool {
+    private func runMove(to target: PoolMoveTarget, from start: PoolState, setup: PoolSetup) async {
         var host: String?
         if case .computer(let name) = target { host = name }
         let computers = start.linuxClients.map(\.host)
@@ -95,7 +94,7 @@ extension PoolController {
             panel.close()
             clearCache()
             await fetch()
-            return false
+            return
         }
         var note: String?
         if report.sleep == .needsPassword, let host {
@@ -130,10 +129,10 @@ extension PoolController {
         let offer = old != nil && start.tailscale != nil && state?.needsTailscale == true
         let left = report.computersLeft
         let reached = computers.filter { !left.contains($0) }
-        let wantsTailscale = PoolDialogs.moved(
-            host: host, computers: host == nil ? [] : reached, old: old ?? "this Mac", pending: pending,
-            note: lines.isEmpty ? nil : lines.joined(separator: "\n\n"), tailscale: offer)
-        return wantsTailscale
+        confirm(
+            .moved(
+                host: host, computers: host == nil ? [] : reached, old: old ?? "this Mac", pending: pending,
+                note: lines.isEmpty ? nil : lines.joined(separator: "\n\n"), tailscale: offer))
     }
 
     private func signInAgain(panel: PoolProgressPanel, setup: PoolSetup, steps: [MoveStep], title: String) async -> [String] {

@@ -27,11 +27,11 @@ extension PoolController {
                 guard let exists = await hasRelaybarHub(host) else { return }
                 if exists {
                     guard PoolDialogs.useExistingHub(host: host) else { return }
-                    if await join(host) { setUpTailscale() }
+                    await join(host)
                     return
                 }
             }
-            if await combine(on: choice) { setUpTailscale() }
+            await combine(on: choice)
         }
     }
 
@@ -81,7 +81,7 @@ extension PoolController {
         }
     }
 
-    private func combine(on choice: CombineDialog.Choice) async -> Bool {
+    private func combine(on choice: CombineDialog.Choice) async {
         busy = true
         defer { busy = false }
         let title = "Combining your accounts"
@@ -99,14 +99,14 @@ extension PoolController {
                 try await setup.combineOnThisMac(progress: report)
             }
         }
-        guard worked else { return false }
+        guard worked else { return }
         var note: String?
         if sleep == .needsPassword, let host { note = await keepOn(host: host, setup: setup) }
         let ended = await signInAll(panel: panel, setup: setup)
         panel.close()
         if ended.stopped {
             await performStop(joined: false)
-            return false
+            return
         }
         markKnown()
         await fetch()
@@ -117,7 +117,7 @@ extension PoolController {
                 + ". Click them in All accounts to sign in."
             note = [note, text].compactMap { $0 }.joined(separator: "\n\n")
         }
-        return finish(host: host, note: note)
+        finish(host: host, note: note)
     }
 
     func keepOn(host: String, setup: PoolSetup) async -> String? {
@@ -130,19 +130,37 @@ extension PoolController {
         return "Sleep is still on for \(host). Turn it off there so the helper keeps running."
     }
 
-    private func finish(host: String?, note: String?) -> Bool {
+    private func finish(host: String?, note: String?) {
         let offer = host != nil && state?.needsTailscale == true
         var note = note
         if state?.defaultKept == true, T3Code.isInstalled {
             let text = "T3 Code still starts new chats with its own default. Pick Claude+ in its model menu."
             note = [note, text].compactMap { $0 }.joined(separator: "\n\n")
         }
-        switch PoolDialogs.done(host: host, t3: T3Code.isInstalled, note: note, tailscale: offer) {
-        case .openT3: T3Code.open()
-        case .tailscale: return true
-        case .close: break
+        confirm(.combined(host: host, t3: T3Code.isInstalled, note: note, tailscale: offer))
+    }
+
+    func confirm(_ confirmation: PoolConfirmation) {
+        app.note(
+            confirmation.title, confirmation.detail, mark: .saved, primary: choice(confirmation.primary),
+            secondary: choice(confirmation.secondary), closesAfter: confirmation.closesAfter)
+        if let warning = confirmation.warning { app.show("Check this", warning) }
+    }
+
+    private func choice(_ action: PoolConfirmation.Action?) -> Toast.Choice? {
+        switch action {
+        case .openT3: Toast.Choice(title: "Open T3 Code", run: { T3Code.open() })
+        case .tailscale: Toast.Choice(title: "Set Up Tailscale…", run: { [weak self] in self?.setUpTailscale() })
+        case .undo: Toast.Choice(title: "Undo", run: { [weak self] in self?.undoCombining() })
+        case .dismiss: Toast.Choice(title: "Not Now", run: {})
+        case nil: nil
         }
-        return false
+    }
+
+    private func undoCombining() {
+        guard isFree else { return }
+        let joined = state?.joined ?? false
+        Task { await performStop(joined: joined) }
     }
 
     private func checkTailscale(host: String?, panel: PoolProgressPanel, title: String) async {
@@ -164,12 +182,10 @@ extension PoolController {
 
     @objc func useOffer(_ sender: NSMenuItem) {
         guard let host = sender.representedObject as? String, !busy else { return }
-        Task {
-            if await join(host) { setUpTailscale() }
-        }
+        Task { await join(host) }
     }
 
-    private func join(_ host: String) async -> Bool {
+    private func join(_ host: String) async {
         busy = true
         defer { busy = false }
         let title = "Connecting this Mac"
@@ -178,12 +194,12 @@ extension PoolController {
         let setup = PoolSetup(env: environment())
         let report = progress(panel)
         let worked = await attempt(host: host, title: title, panel: panel) { try await setup.join(host: host, progress: report) }
-        guard worked else { return false }
+        guard worked else { return }
         panel.close()
         markKnown()
         await fetch()
         await checkTailscale(host: host, panel: panel, title: title)
-        return finish(host: host, note: nil)
+        finish(host: host, note: nil)
     }
 
     @objc func toggleAccount(_ sender: NSMenuItem) {

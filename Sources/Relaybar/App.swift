@@ -526,8 +526,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    func note(_ title: String, _ detail: String, mark: Toast.Mark) {
-        toast.show(title, detail, mark: mark, under: item.button)
+    func note(
+        _ title: String, _ detail: String, mark: Toast.Mark, primary: Toast.Choice? = nil, secondary: Toast.Choice? = nil,
+        closesAfter: Double? = 2
+    ) {
+        toast.show(title, detail, mark: mark, under: item.button, primary: primary, secondary: secondary, closesAfter: closesAfter)
     }
 
     func show(_ title: String, _ text: String) {
