@@ -533,6 +533,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toast.show(title, detail, mark: mark, under: item.button, primary: primary, secondary: secondary, closesAfter: closesAfter)
     }
 
+    func dismissNote() {
+        toast.dismiss()
+    }
+
     func show(_ title: String, _ text: String) {
         let alert = NSAlert()
         alert.messageText = title
