@@ -17,7 +17,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Low warning (10% left or less): light red, sRGB (1, 0.55, 0.55) in dark appearance and (0.88, 0.3, 0.3) in light. Owner: `Tint.low`.
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
 - Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
-- Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo and a white pill with the tag in the account colour mixed 45% with black, so the tag reads at 3:1 contrast or better on white. Owner: `DesktopApp.icon`.
+- Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo (centred at 58% of the tile; with a tag it sits higher at 50% so it never touches the pill) and a white pill with the tag in the account colour mixed 45% with black, so the tag reads at 3:1 contrast or better on white. Owner: `DesktopApp.icon`.
 - Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill) and `Theme.tagCutoutMask` (menu bar tag pill cutout mask). Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
 
 ## Typography
@@ -40,7 +40,7 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 
 ## Do's and Don'ts
 
-- Do treat the tag as the account's short name (such as WK for Work): the menu bar, the account card, the desktop app icon, T3 Code and the confirmation notes all show it, and the desktop app under it is named after the account ("Claude Work").
+- Do treat the tag as the account's short name (such as WK for Work). It is on the desktop app icon because the Dock and the app switcher show no name there, and two accounts of one kind share a logo. Notes name accounts by kind and tag, such as "Claude WK".
 - Do keep each menu bar group as narrow as the numbers allow.
 - Do use the account colour for its logo, tag and numbers; use light red only for low limits.
 - Do show "…" while waiting for numbers and "Login expired" only for a rejected or expired login.

@@ -4,8 +4,8 @@ import Testing
 
 @Suite struct PoolConfirmationTests {
     @Test func combiningOffersT3CodeAndUndoThenClosesByItself() {
-        let note = PoolConfirmation.combined(host: nil, accounts: ["WK", "PC"], t3: true, note: nil, tailscale: false)
-        #expect(note.title == "WK and PC are combined on this Mac")
+        let note = PoolConfirmation.combined(host: nil, accounts: ["Claude WK", "Codex PC"], t3: true, note: nil, tailscale: false)
+        #expect(note.title == "Claude WK and Codex PC are combined on this Mac")
         #expect(note.primary == .openT3)
         #expect(note.secondary == .undo)
         #expect(note.closesAfter == 10)
@@ -28,6 +28,11 @@ import Testing
         #expect(title(["WK"]) == "WK is combined on this Mac")
         #expect(title(["WK", "PC", "Claude", "Codex", "ZZ"]) == "WK, PC, Claude and 2 more are combined on this Mac")
         #expect(title([]) == "Your accounts are combined on this Mac")
+    }
+
+    @Test func accountsAreNamedByKindAndTag() {
+        let names = PoolConfirmation.names(for: [(.claude, "WK"), (.codex, "PC"), (.claude, ""), (.claude, ""), (.codex, "")])
+        #expect(names == ["Claude WK", "Codex PC", "Claude 1", "Claude 2", "Codex"])
     }
 
     @Test func combiningWithoutT3CodeKeepsOnlyUndo() {

@@ -21,6 +21,19 @@ public struct PoolConfirmation: Equatable, Sendable {
             primary: t3 ? .openT3 : nil, secondary: .undo, seconds: 10, warning: note)
     }
 
+    public static func names(for accounts: [(kind: PoolKind, tag: String)]) -> [String] {
+        let bases = accounts.map { account in
+            let kind = account.kind == .claude ? "Claude" : "Codex"
+            return account.tag.isEmpty ? kind : kind + " " + account.tag
+        }
+        var seen: [String: Int] = [:]
+        return zip(accounts, bases).map { account, base in
+            guard account.tag.isEmpty, bases.filter({ $0 == base }).count > 1 else { return base }
+            seen[base, default: 0] += 1
+            return "\(base) \(seen[base] ?? 0)"
+        }
+    }
+
     private static func who(_ accounts: [String]) -> String {
         guard !accounts.isEmpty else { return "Your accounts are" }
         let more = accounts.count > 3 ? ["\(accounts.count - 3) more"] : []

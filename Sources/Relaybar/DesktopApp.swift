@@ -99,7 +99,7 @@ enum DesktopApp {
             let top = fill.blended(withFraction: 0.18, of: .white) ?? fill
             let bottom = fill.blended(withFraction: 0.14, of: .black) ?? fill
             NSGradient(starting: top, ending: bottom)?.draw(in: tile, angle: -90)
-            Render.tint(logo, .white).draw(in: tile.insetBy(dx: unit * 0.21, dy: unit * 0.21))
+            Render.tint(logo, .white).draw(in: DesktopIconLayout.logo(in: tile, tagged: !tag.isEmpty))
             guard !tag.isEmpty else { return true }
             let size = unit * 0.16
             let font =
@@ -108,9 +108,8 @@ enum DesktopApp {
             let ink = fill.blended(withFraction: 0.45, of: .black) ?? fill
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink]
             let text = (tag as NSString).size(withAttributes: attributes)
-            let height = unit * 0.23
-            let pill = NSRect(
-                x: tile.minX + unit * 0.09, y: tile.minY + unit * 0.09, width: max(height, text.width + unit * 0.1), height: height)
+            let pill = DesktopIconLayout.pill(in: tile, textWidth: text.width)
+            let height = pill.height
             Theme.iconPillFill.setFill()
             NSBezierPath(roundedRect: pill, xRadius: height / 2, yRadius: height / 2).fill()
             (tag as NSString).draw(at: NSPoint(x: pill.midX - text.width / 2, y: pill.midY - text.height / 2), withAttributes: attributes)
