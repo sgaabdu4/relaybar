@@ -40,6 +40,7 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 
 ## Do's and Don'ts
 
+- Do treat the tag as the account's short name (such as WK for Work): the menu bar, the account card, the desktop app icon, T3 Code and the confirmation notes all show it, and the desktop app under it is named after the account ("Claude Work").
 - Do keep each menu bar group as narrow as the numbers allow.
 - Do use the account colour for its logo, tag and numbers; use light red only for low limits.
 - Do show "…" while waiting for numbers and "Login expired" only for a rejected or expired login.

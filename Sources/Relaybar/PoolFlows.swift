@@ -137,7 +137,7 @@ extension PoolController {
             let text = "T3 Code still starts new chats with its own default. Pick Claude+ in its model menu."
             note = [note, text].compactMap { $0 }.joined(separator: "\n\n")
         }
-        confirm(.combined(host: host, t3: T3Code.isInstalled, note: note, tailscale: offer))
+        confirm(.combined(host: host, accounts: combinedNames(), t3: T3Code.isInstalled, note: note, tailscale: offer))
     }
 
     func confirm(_ confirmation: PoolConfirmation) {

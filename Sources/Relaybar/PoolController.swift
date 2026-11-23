@@ -176,6 +176,12 @@ final class PoolController: NSObject {
         await fetch()
     }
 
+    func combinedNames() -> [String] {
+        PoolAccounts.rows(accounts: inputs(), members: members)
+            .filter { statuses[$0.account.id] != .signedOut && statuses[$0.account.id] != .paused }
+            .map(\.account.name)
+    }
+
     func inUseName(_ kind: PoolKind) -> String? {
         PoolAccounts.rows(accounts: inputs(), members: members).first {
             $0.account.kind == kind && statuses[$0.account.id] == .inUse
