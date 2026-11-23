@@ -50,7 +50,7 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 ## ux_reference
 
 Result: Passed
-Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs in the darker tag text and the higher logo. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `ccae3b4952b4` (After).
+Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs in the darker tag text and the higher logo. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `5f034089c891` (After).
 Surface: Existing — macOS menu bar strip, desktop icon pill and the combined-accounts success screen, no browser serves them; owners `Sources/Relaybar/Render.swift`, `Sources/Relaybar/DesktopApp.swift`, `Sources/Relaybar/Toast.swift`, `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/Theme.swift`
 Before: ![Before](ui-before.png)
 Proposed: ![Proposed](ui-after.png)
@@ -84,4 +84,4 @@ E2E: N/A — interactive Combine accounts GUI journey waived per declined review
 Real service: N/A — no outside service calls are made or changed by this token refactor.
 Retro: None — clean refactor with no recurring failures or new process gaps.
 Delivery target: Merge
-Delivery: Pending — PR to `main` awaiting CI and merge.
+Delivery: Pending — on hold. This PR waits for the Hard Eng release that carries the new `look` (it reads DESIGN.md), then for Relaybar's Hard Eng update PR. The installed `look` gave different answers for the same images at the same head, so `ship` and the merge wait for the new `look`. CI on the PR must pass first.
