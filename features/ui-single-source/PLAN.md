@@ -25,12 +25,11 @@ Single source: `Sources/Relaybar/Theme.swift` is the single owner for shared lit
 
 Blockers: None.
 Authority: Maintainer authorization on 2026-11-22 to fix `sgaabdu4/relaybar` for Hard Eng `b5` UI Single Source of Truth and open a clean merge-ready PR to `main` (without modifying `hard-eng.gates.json` in this PR).
-Review declined: Native AppKit refactor using `N/A — unchanged` without a clean `look` record :: Visually redesigning Relaybar's existing native macOS UI (menu bar, `AccountCard`, desktop icon, `NSAlert`) to satisfy web-focused `look` rules is out of scope for this no-visual-change colour-token extraction PR; Before/After renders compiled from `origin/main` and this branch (covering all three changed call sites including the live `PoolDialogs.done` modal alert) are byte-identical (`a93f7bf96a1f`), CI `pr-text` accepts `N/A — unchanged` beside `UI appearance: unchanged`, and this PR is opened for maintainer CI merge rather than local browser-capture `ship`.
 Review declined: Full interactive Combine accounts GUI journey for `E2E` :: `Sources/Relaybar/PoolDialogs.swift` changed only line 384 (`NSColor.white.setFill()` to `Theme.badgeFill.setFill()` inside `badged`) with zero flow or action-wiring changes; invoking `PoolDialogs.done(host: nil, t3: true, note: nil)` directly from `origin/main` vs this branch proved byte-identical alert output (`a93f7bf96a1f`), and running the full interactive Combine accounts flow requires live accounts/hosts (noted under `Not checked:` in the PR).
 
 ## Acceptance + steps
 
-- [x] Move raw `NSColor.white` / `NSColor.black` at `DesktopApp.swift:113`, `PoolDialogs.swift:384` and `Render.swift:100` into `Sources/Relaybar/Theme.swift` → N/A — verified by `b5` `ui_whole.ui_findings_whole` returning 0 hits and byte-identical Before/After AppKit renders covering `Render.row`, `DesktopApp.icon` and the live `PoolDialogs.done` modal alert (`a93f7bf96a1f`).
+- [x] Move raw `NSColor.white` / `NSColor.black` at `DesktopApp.swift:113`, `PoolDialogs.swift:384` and `Render.swift:100` into `Sources/Relaybar/Theme.swift` → N/A — verified by `b5` `ui_whole.ui_findings_whole` returning 0 hits and equal Before and After renders of `Render.row`, `DesktopApp.icon` and the live `PoolDialogs.done` modal alert (`e779120a21fc`).
 - [x] Add valid YAML front matter and `[UI-LIBRARY.md](UI-LIBRARY.md)` link to `DESIGN.md` keeping existing prose intact → N/A — verified by `b5` `ui_tokens.token_findings` returning 0 hits and `hard-eng.py check` confirming `UI-LIBRARY.md` has a reader.
 - [x] Generate `UI-LIBRARY.md` for `["Sources/Relaybar/AccountCard.swift"]` without editing `hard-eng.gates.json` → N/A — verified by `b5` `ui_whole.ui_findings_whole` returning 0 hits and `git diff` confirming `hard-eng.gates.json` is untouched.
 - [x] Pass all project gates (`python3 .hooks/hard-eng.py check --base origin/main`) → N/A — verified by the local check run recorded under Verification; independent review (`hard-eng.py challenge`) runs on the committed revision after the check.
@@ -47,7 +46,32 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 
 ## ux_reference
 
-N/A — unchanged: ![Before](ui-before.png) ![After](ui-after.png) — Menu bar strip (`Render.row`), desktop icon (`DesktopApp.icon`) and the live `PoolDialogs.done(host: nil, t3: true, note: nil)` modal alert, each compiled from `origin/main` (Before) and this branch (After), render byte-identically; both images stack the three renders (SHA-256 `a93f7bf96a1f`). The images are previews: they use a stand-in bolt logo and the default app icon, not the bundled Claude and Codex logos or the installed Relaybar icon. The changed fills (pill, badge, tag mask) draw the same pixels over any logo or icon.
+Result: Passed
+Evidence: Compiled `Render.swift`, `DesktopApp.swift` and `PoolDialogs.swift` from `origin/main` (Before) and this branch (After), with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon` and the live `PoolDialogs.done(host: nil, t3: true, note: nil)` modal alert. Inspected all three pairs. The PNGs are equal in each pair (SHA-256 of the stacked image `e779120a21fc`).
+Surface: Existing — macOS menu bar strip, desktop icon pill and the done alert, no browser serves them; owners `Sources/Relaybar/Render.swift`, `Sources/Relaybar/DesktopApp.swift`, `Sources/Relaybar/PoolDialogs.swift` and `Sources/Relaybar/Theme.swift`
+Before: ![Before](ui-before.png)
+Proposed: ![Proposed](ui-after.png)
+Controls: None — token extraction into `Sources/Relaybar/Theme.swift` adds and changes no control.
+Capture: Direct AppKit render, not a browser capture. One program drew the strip, the icon and the alert window at 2x from each checkout (merge base and head). The stacked image holds the strip, the icon and the alert. The PR carries one labeled Before and After pair for each surface.
+Review: Inspected the three pairs side by side. No visible difference, as the plan intends.
+Rules:
+
+- Mistake-proof: N/A — colour-token extraction changes no input or flow.
+- Least effort: N/A — colour-token extraction changes no user journey (0 clicks).
+- Observe: N/A — colour-token extraction changes no system state or automation.
+- Undo: N/A — colour-token extraction changes no destructive or reversible action.
+- No clutter: Pass — 3 surfaces kept, 0 removed (menu bar strip, desktop icon, alert).
+- Hierarchy: Pass — the strip keeps its tinted logo and numbers, and the alert keeps its title above its text and buttons.
+- Alignment: Pass — the tag pill sits at the lower left of each logo and the alert text aligns left.
+- Spacing: Pass — spacing is the same as the baseline in all three renders.
+- Design system: Pass — `Sources/Relaybar/Theme.swift` owns `iconPillFill`, `badgeFill` and `tagCutoutMask`, documented in `DESIGN.md` and indexed by `UI-LIBRARY.md`.
+- Messages: N/A — colour-token extraction changes no user-facing text.
+- States: N/A — colour-token extraction changes no loading, empty or error state.
+- Time: N/A — colour-token extraction changes no time display.
+- Audit: N/A — a single-user local menu bar app has no staff or admin roles.
+- Accessibility: Pass — the numbers and the tag keep the baseline contrast on the dark menu bar.
+- Widths: N/A — the strip, the icon and the alert have fixed native sizes and no responsive layout.
+- Performance: Pass — `scripts/efficiency.sh` stays at the 15 MB footprint and 0.01 s idle CPU.
 
 ## Verification
 
