@@ -59,15 +59,17 @@ final class Toast {
     private func hide() {
         hiding?.cancel()
         guard let panel else { return }
-        NSAnimationContext.runAnimationGroup({
-            $0.duration = 0.3
-            panel.animator().alphaValue = 0
-        }) {
-            Task { @MainActor in
-                panel.orderOut(nil)
-                if self.panel === panel { self.panel = nil }
-            }
-        }
+        NSAnimationContext.runAnimationGroup(
+            {
+                $0.duration = 0.3
+                panel.animator().alphaValue = 0
+            },
+            completionHandler: {
+                Task { @MainActor in
+                    panel.orderOut(nil)
+                    if self.panel === panel { self.panel = nil }
+                }
+            })
     }
 
     func content(
@@ -86,7 +88,9 @@ final class Toast {
         detailField.heightAnchor.constraint(equalToConstant: ceil(fit.height)).isActive = true
         var views: [NSView] = [titleField, detailField]
         if primary != nil || secondary != nil {
-            let buttons = NSStackView(views: [secondary, primary].compactMap { $0 }.map { choice in button(choice, filled: choice.title == primary?.title, hide: hide) })
+            let quiet = secondary.map { button($0, filled: false, hide: hide) }
+            let filled = primary.map { button($0, filled: true, hide: hide) }
+            let buttons = NSStackView(views: [quiet, filled].compactMap { $0 })
             buttons.spacing = 8
             views.append(buttons)
         }

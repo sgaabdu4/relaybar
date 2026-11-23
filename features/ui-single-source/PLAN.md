@@ -32,7 +32,7 @@ Review declined: Full interactive Combine accounts GUI journey for `E2E` :: the 
 ## Acceptance + steps
 
 - [x] Move raw `NSColor.white` / `NSColor.black` at `DesktopApp.swift:113` and `Render.swift:100` into `Sources/Relaybar/Theme.swift`, and remove the badge literal at `PoolDialogs.swift:384` with its blocking alert → N/A — verified by `b5` `ui_whole.ui_findings_whole` returning 0 hits and equal Before and After renders of `Render.row` and `DesktopApp.icon`.
-- [x] Show combining and moving as a non-blocking confirmation with Undo for combining and one primary action → `PoolConfirmationTests` (6 tests) and the rendered note in `ux_reference`.
+- [x] Show combining and moving as a non-blocking confirmation with Undo for combining and one primary action → `Tests/RelaybarCoreTests/PoolConfirmationTests.swift::combiningOffersT3CodeAndUndoThenClosesByItself`, `Tests/RelaybarCoreTests/PoolConfirmationTests.swift::movingTheHelperHasNoUndoAndAnOfferStaysOpen` and the rendered note in `ux_reference`.
 - [x] Add valid YAML front matter and `[UI-LIBRARY.md](UI-LIBRARY.md)` link to `DESIGN.md` keeping existing prose intact → N/A — verified by `b5` `ui_tokens.token_findings` returning 0 hits and `hard-eng.py check` confirming `UI-LIBRARY.md` has a reader.
 - [x] Generate `UI-LIBRARY.md` for `["Sources/Relaybar/AccountCard.swift"]` without editing `hard-eng.gates.json` → N/A — verified by `b5` `ui_whole.ui_findings_whole` returning 0 hits and `git diff` confirming `hard-eng.gates.json` is untouched.
 - [x] Pass all project gates (`python3 .hooks/hard-eng.py check --base origin/main`) → N/A — verified by the local check run recorded under Verification; independent review (`hard-eng.py challenge`) runs on the committed revision after the check.
