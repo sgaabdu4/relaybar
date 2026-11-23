@@ -18,7 +18,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
 - Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
 - Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo (centred; with a tag it sits above the pill, with a gap, so it never touches the pill; owner `DesktopIconLayout`) and a white pill with the tag in the account colour mixed 45% with black, so the tag reads at 3:1 contrast or better on white. Owner: `DesktopApp.icon`.
-- Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill) and `Theme.tagCutoutMask` (menu bar tag pill cutout mask). Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
+- Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill), `Theme.tagCutoutMask` (menu bar tag pill cutout mask), `Theme.primaryButtonFill` (the accent colour mixed 25% with black) and `Theme.primaryButtonText` (white) for the filled button of a confirmation note. Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
 
 ## Typography
 
