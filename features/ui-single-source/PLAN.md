@@ -60,7 +60,7 @@ Rules:
 - Least effort: N/A — colour-token extraction changes no user journey (0 clicks).
 - Observe: N/A — colour-token extraction changes no system state or automation.
 - Undo: N/A — colour-token extraction changes no destructive or reversible action.
-- No clutter: Pass — 3 surfaces kept, 0 removed (menu bar strip, desktop icon, alert).
+- No clutter: Pass — 3 kept, 0 removed (menu bar strip, desktop icon, alert).
 - Hierarchy: Pass — the strip keeps its tinted logo and numbers, and the alert keeps its title above its text and buttons.
 - Alignment: Pass — the tag pill sits at the lower left of each logo and the alert text aligns left.
 - Spacing: Pass — spacing is the same as the baseline in all three renders.
