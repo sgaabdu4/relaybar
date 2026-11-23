@@ -63,7 +63,7 @@ final class Toast {
         hiding = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.hide()
+            self?.fade()
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
             self?.offer?()
@@ -72,6 +72,10 @@ final class Toast {
 
     private func hide() {
         hiding?.cancel()
+        fade()
+    }
+
+    private func fade() {
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup(
             {
