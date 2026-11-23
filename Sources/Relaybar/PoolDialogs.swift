@@ -92,36 +92,6 @@ enum PoolDialogs {
             destructive: true)
     }
 
-    enum Done {
-        case openT3
-        case close
-        case tailscale
-    }
-
-    private static let tailscaleCode = NSApplication.ModalResponse(rawValue: 1001)
-
-    static func done(host: String?, t3: Bool, note: String?, tailscale: Bool = false) -> Done {
-        let alert = NSAlert()
-        alert.icon = badged(NSApp.applicationIconImage, symbol: "checkmark.circle.fill", color: .systemGreen)
-        alert.messageText = "Your accounts are combined on \(host ?? "this Mac")."
-        let first =
-            t3
-            ? "New chats in T3 Code now use Claude+."
-            : "Use the claude+ and codex+ commands in a terminal to use your combined accounts."
-        var text = first + (tailscale ? " It works on your home Wi-Fi." : t3 ? " T3 Code also shows what is left on each account." : "")
-        if let note { text += "\n\n" + note }
-        alert.informativeText = text
-        if tailscale, let host {
-            let box = TailscaleBox(host: host) { NSApp.stopModal(withCode: tailscaleCode) }
-            alert.accessoryView = box.view
-        }
-        if t3 { alert.addButton(withTitle: "Open T3 Code") }
-        alert.addButton(withTitle: "Close")
-        let response = run(alert)
-        if response == tailscaleCode { return .tailscale }
-        return t3 && response == .alertFirstButtonReturn ? .openT3 : .close
-    }
-
     enum MoveReach {
         case cancel
         case again
@@ -150,21 +120,6 @@ enum PoolDialogs {
         stopAlert(
             "Move the helper to this Mac?", PoolMove.thisMacWarning(computers: hosts),
             go: hosts.isEmpty ? "Move" : "Remove and Move", destructive: true)
-    }
-
-    static func moved(host: String?, computers: [String], old: String?, pending: Bool, note: String?, tailscale: Bool) -> Bool {
-        let alert = NSAlert()
-        alert.icon = badged(NSApp.applicationIconImage, symbol: "checkmark.circle.fill", color: .systemGreen)
-        alert.messageText = "Your accounts now run on \(host ?? "this Mac")"
-        var text = PoolMove.doneText(target: host, computers: computers, old: old, pending: pending)
-        if let note { text += "\n\n" + note }
-        alert.informativeText = text
-        if tailscale, let host {
-            let box = TailscaleBox(host: host) { NSApp.stopModal(withCode: tailscaleCode) }
-            alert.accessoryView = box.view
-        }
-        alert.addButton(withTitle: "OK")
-        return run(alert) == tailscaleCode
     }
 
     static func offer(_ offer: PoolAccountOffer) -> Bool {
@@ -376,64 +331,6 @@ enum PoolDialogs {
         return field.stringValue
     }
 
-    private static func badged(_ icon: NSImage, symbol: String, color: NSColor) -> NSImage {
-        let size = NSSize(width: 64, height: 64)
-        return NSImage(size: size, flipped: false) { rect in
-            icon.draw(in: rect)
-            let badge = NSRect(x: 36, y: 0, width: 28, height: 28)
-            Theme.badgeFill.setFill()
-            NSBezierPath(ovalIn: badge.insetBy(dx: 3, dy: 3)).fill()
-            let config = NSImage.SymbolConfiguration(pointSize: 28, weight: .regular).applying(.init(paletteColors: [.white, color]))
-            NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(config)?.draw(in: badge)
-            return true
-        }
-    }
-}
-
-@MainActor
-final class TailscaleBox: NSObject {
-    let view: NSView
-    private let action: () -> Void
-
-    init(host: String, action: @escaping () -> Void) {
-        self.action = action
-        let title = NSTextField(labelWithString: "Use it away from home too?")
-        title.font = .systemFont(ofSize: 13, weight: .bold)
-        let body = PoolDialogs.label(
-            "Relaybar sets up Tailscale on this Mac and on \(host). You type your Mac password, click Allow once and sign in once.",
-            size: 12, color: .labelColor, width: 280)
-        let button = NSButton(title: "Set Up Tailscale…", target: nil, action: nil)
-        let inner = NSStackView(views: [title, body, button])
-        inner.orientation = .vertical
-        inner.alignment = .leading
-        inner.spacing = 6
-        inner.translatesAutoresizingMaskIntoConstraints = false
-        body.widthAnchor.constraint(equalToConstant: 280).isActive = true
-        let box = NSBox()
-        box.boxType = .custom
-        box.cornerRadius = 8
-        box.borderWidth = 1
-        box.borderColor = .separatorColor
-        box.fillColor = .controlBackgroundColor
-        box.titlePosition = .noTitle
-        box.contentView = inner
-        box.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: 300),
-            inner.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
-            inner.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -10),
-            inner.topAnchor.constraint(equalTo: box.topAnchor, constant: 10),
-            inner.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -10),
-        ])
-        box.layoutSubtreeIfNeeded()
-        box.frame = NSRect(origin: .zero, size: box.fittingSize)
-        view = box
-        super.init()
-        button.target = self
-        button.action = #selector(pressed)
-    }
-
-    @objc private func pressed() { action() }
 }
 
 @MainActor

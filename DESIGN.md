@@ -18,7 +18,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
 - Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
 - Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo and a white pill with the tag in the darker colour. Owner: `DesktopApp.icon`.
-- Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill), `Theme.badgeFill` (alert status badge backing) and `Theme.tagCutoutMask` (menu bar tag pill cutout mask). Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
+- Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill) and `Theme.tagCutoutMask` (menu bar tag pill cutout mask). Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
 
 ## Typography
 
@@ -46,5 +46,7 @@ System font only. Menu bar: monospaced digits 9 pt medium (two stacked numbers) 
 - Do show a pooled account's state as words on the right of its card header ("in use", "paused", "signed out"); no extra summary cards.
 - Do build dialogs from native parts: `NSAlert` with the app icon, equal-width buttons, the default on the right, accessory views stacked with even spacing; destructive actions ask twice with Cancel as the default.
 - Do confirm a pause, resume or order change with a short note under the menu bar icon that fades after 2 seconds (cyan dot, outlined dot or cyan check); keep alerts for failures.
+- Do confirm combining accounts or moving the helper with the same note, never a blocking alert. When the note has a next step it holds its buttons under the text, aligned to the text edge, with one filled primary button on the right ("Open T3 Code", "Set Up Tailscale…") and a quiet secondary button on the left: "Undo" where the action can be undone, "Not Now" for an offer. The note closes by itself after 10 seconds, or stays until a button is pressed when it makes an offer.
+- Do show a problem that the user must read (a warning that follows combining or moving) in a standard `NSAlert` with one OK button.
 - Don't dim accounts with transparency; dark colours become unreadable.
 - Don't show emails or account details in the menu bar or in tooltips.

@@ -8,41 +8,22 @@ final class Toast {
         case saved
     }
 
+    struct Choice {
+        let title: String
+        let run: () -> Void
+    }
+
     private var panel: NSPanel?
     private var hiding: Task<Void, Never>?
 
-    func show(_ title: String, _ detail: String, mark: Mark, under button: NSStatusBarButton?) {
+    func show(
+        _ title: String, _ detail: String, mark: Mark, under button: NSStatusBarButton?, primary: Choice? = nil, secondary: Choice? = nil,
+        closesAfter seconds: Double? = 2
+    ) {
         hiding?.cancel()
         panel?.orderOut(nil)
-        let titleField = NSTextField(labelWithString: title)
-        titleField.font = .systemFont(ofSize: 13, weight: .medium)
-        let detailField = NSTextField(labelWithString: detail)
-        detailField.font = .systemFont(ofSize: 11.5)
-        detailField.textColor = .secondaryLabelColor
-        let text = NSStackView(views: [titleField, detailField])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 1
-        let row = NSStackView(views: [Self.image(mark), text])
-        row.spacing = 9
-        row.alignment = .centerY
-        row.edgeInsets = NSEdgeInsets(top: 9, left: 12, bottom: 9, right: 14)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        let background = NSVisualEffectView()
-        background.material = .hudWindow
-        background.blendingMode = .behindWindow
-        background.state = .active
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 12
-        background.layer?.masksToBounds = true
-        background.addSubview(row)
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            row.topAnchor.constraint(equalTo: background.topAnchor),
-            row.bottomAnchor.constraint(equalTo: background.bottomAnchor),
-        ])
-        let size = row.fittingSize
+        let background = content(title, detail, mark: mark, primary: primary, secondary: secondary) { [weak self] in self?.hide() }
+        let size = background.fittingSize
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
             defer: false)
@@ -50,7 +31,7 @@ final class Toast {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = .statusBar
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = primary == nil && secondary == nil
         panel.collectionBehavior = [.canJoinAllSpaces, .transient]
         panel.contentView = background
         if let icon = button?.window?.frame, let screen = button?.window?.screen ?? NSScreen.main {
@@ -67,18 +48,79 @@ final class Toast {
             panel.animator().alphaValue = 1
         }
         self.panel = panel
+        guard let seconds else { return }
         hiding = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            NSAnimationContext.runAnimationGroup({
-                $0.duration = 0.3
-                panel.animator().alphaValue = 0
-            }) {
-                Task { @MainActor in
-                    panel.orderOut(nil)
-                    if self?.panel === panel { self?.panel = nil }
-                }
+            self?.hide()
+        }
+    }
+
+    private func hide() {
+        hiding?.cancel()
+        guard let panel else { return }
+        NSAnimationContext.runAnimationGroup({
+            $0.duration = 0.3
+            panel.animator().alphaValue = 0
+        }) {
+            Task { @MainActor in
+                panel.orderOut(nil)
+                if self.panel === panel { self.panel = nil }
             }
+        }
+    }
+
+    func content(
+        _ title: String, _ detail: String, mark: Mark, primary: Choice?, secondary: Choice?, hide: @escaping () -> Void
+    ) -> NSView {
+        let titleField = NSTextField(labelWithString: title)
+        titleField.font = .systemFont(ofSize: 13, weight: .medium)
+        let detailField = NSTextField(wrappingLabelWithString: detail)
+        detailField.font = .systemFont(ofSize: 11.5)
+        detailField.textColor = .secondaryLabelColor
+        let fit = (detail as NSString).boundingRect(
+            with: NSSize(width: 300, height: CGFloat.greatestFiniteMagnitude), options: .usesLineFragmentOrigin,
+            attributes: [.font: detailField.font as Any])
+        detailField.preferredMaxLayoutWidth = ceil(fit.width)
+        detailField.widthAnchor.constraint(equalToConstant: ceil(fit.width)).isActive = true
+        detailField.heightAnchor.constraint(equalToConstant: ceil(fit.height)).isActive = true
+        var views: [NSView] = [titleField, detailField]
+        if primary != nil || secondary != nil {
+            let buttons = NSStackView(views: [secondary, primary].compactMap { $0 }.map { choice in button(choice, filled: choice.title == primary?.title, hide: hide) })
+            buttons.spacing = 8
+            views.append(buttons)
+        }
+        let text = NSStackView(views: views)
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 1
+        if views.count == 3 { text.setCustomSpacing(8, after: detailField) }
+        let row = NSStackView(views: [Self.image(mark), text])
+        row.spacing = 9
+        row.alignment = views.count == 3 ? .top : .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+        let background = NSVisualEffectView()
+        background.material = .hudWindow
+        background.blendingMode = .behindWindow
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.cornerRadius = 12
+        background.layer?.masksToBounds = true
+        background.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
+            row.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -14),
+            row.topAnchor.constraint(equalTo: background.topAnchor, constant: 9),
+            row.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -9),
+        ])
+        background.layoutSubtreeIfNeeded()
+        return background
+    }
+
+    private func button(_ choice: Choice, filled: Bool, hide: @escaping () -> Void) -> NSButton {
+        ToastButton(title: choice.title, filled: filled) {
+            choice.run()
+            hide()
         }
     }
 
@@ -96,4 +138,43 @@ final class Toast {
         view.setContentHuggingPriority(.required, for: .horizontal)
         return view
     }
+}
+
+@MainActor
+final class ToastButton: NSButton {
+    private let run: () -> Void
+    private let filled: Bool
+
+    init(title: String, filled: Bool, run: @escaping () -> Void) {
+        self.run = run
+        self.filled = filled
+        super.init(frame: .zero)
+        target = self
+        action = #selector(pressed)
+        if filled {
+            isBordered = false
+            wantsLayer = true
+            layer?.cornerRadius = 6
+            layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            attributedTitle = NSAttributedString(
+                string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white])
+            heightAnchor.constraint(equalToConstant: 22).isActive = true
+        } else {
+            self.title = title
+            bezelStyle = .rounded
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var intrinsicContentSize: NSSize {
+        let size = super.intrinsicContentSize
+        return filled ? NSSize(width: size.width + 20, height: size.height) : size
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        if filled { effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = NSColor.controlAccentColor.cgColor } }
+    }
+
+    @objc private func pressed() { run() }
 }
