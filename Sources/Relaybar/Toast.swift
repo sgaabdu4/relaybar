@@ -15,11 +15,14 @@ final class Toast {
 
     private var panel: NSPanel?
     private var hiding: Task<Void, Never>?
+    private var offerOpen = false
 
     func show(
         _ title: String, _ detail: String, mark: Mark?, under button: NSStatusBarButton?, primary: Choice? = nil, secondary: Choice? = nil,
         closesAfter seconds: Double? = 2
     ) {
+        if offerOpen, primary == nil, secondary == nil { return }
+        offerOpen = seconds == nil
         hiding?.cancel()
         panel?.orderOut(nil)
         let background = content(title, detail, mark: mark, primary: primary, secondary: secondary) { [weak self] in self?.hide() }
@@ -57,6 +60,7 @@ final class Toast {
     }
 
     private func hide() {
+        offerOpen = false
         hiding?.cancel()
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup(
@@ -123,8 +127,8 @@ final class Toast {
 
     private func button(_ choice: Choice, filled: Bool, hide: @escaping () -> Void) -> NSButton {
         ToastButton(title: choice.title, filled: filled) {
-            choice.run()
             hide()
+            choice.run()
         }
     }
 

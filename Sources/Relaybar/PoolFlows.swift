@@ -137,27 +137,33 @@ extension PoolController {
             let text = "T3 Code still starts new chats with its own default. Pick Claude+ in its model menu."
             note = [note, text].compactMap { $0 }.joined(separator: "\n\n")
         }
-        confirm(.combined(host: host, accounts: combinedNames(), t3: T3Code.isInstalled, note: note, tailscale: offer))
+        let names = combinedNames()
+        let t3 = T3Code.isInstalled
+        let afterNotNow = offer && t3 ? PoolConfirmation.combined(host: host, accounts: names, t3: t3, note: nil, tailscale: false) : nil
+        confirm(.combined(host: host, accounts: names, t3: t3, note: note, tailscale: offer), afterNotNow: afterNotNow)
     }
 
-    func confirm(_ confirmation: PoolConfirmation) {
+    func confirm(_ confirmation: PoolConfirmation, afterNotNow: PoolConfirmation? = nil) {
         app.note(
-            confirmation.title, confirmation.detail, mark: nil, primary: choice(confirmation.primary),
-            secondary: choice(confirmation.secondary), closesAfter: confirmation.closesAfter)
+            confirmation.title, confirmation.detail, mark: nil, primary: choice(confirmation.primary, afterNotNow: afterNotNow),
+            secondary: choice(confirmation.secondary, afterNotNow: afterNotNow), closesAfter: confirmation.closesAfter)
         if let warning = confirmation.warning { app.show("Check this", warning) }
     }
 
-    private func choice(_ action: PoolConfirmation.Action?) -> Toast.Choice? {
+    private func choice(_ action: PoolConfirmation.Action?, afterNotNow: PoolConfirmation?) -> Toast.Choice? {
         switch action {
         case .openT3: Toast.Choice(title: "Open T3 Code", run: { T3Code.open() })
         case .tailscale: Toast.Choice(title: "Set Up Tailscale…", run: { [weak self] in self?.setUpTailscale() })
         case .undo: Toast.Choice(title: "Undo", run: { [weak self] in self?.undoCombining() })
-        case .dismiss: Toast.Choice(title: "Not Now", run: {})
+        case .dismiss: Toast.Choice(title: "Not Now", run: { [weak self] in afterNotNow.map { self?.confirm($0) } })
         case nil: nil
         }
     }
 
     private func undoCombining() {
+        guard !signing, session?.active != true else {
+            return app.show("A sign-in is open", "Finish it in the browser, then choose Stop combining in the menu.")
+        }
         guard isFree else { return }
         let joined = state?.joined ?? false
         Task { await performStop(joined: joined) }

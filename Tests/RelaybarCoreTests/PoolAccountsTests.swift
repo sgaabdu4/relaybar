@@ -28,6 +28,18 @@ struct PoolAccountsTests {
         #expect(PoolAccounts.rows(accounts: [noEmail], members: [member("a@example.com", .claude)])[0].state == .notInHelper)
     }
 
+    @Test func onlyAccountsInTheHelperAndOnCountAsCombined() {
+        let dan = PoolAccountInput(id: "/h/.claude-dan", kind: .claude, name: "Dan", email: "dan@example.com")
+        let eve = PoolAccountInput(id: "/h/.codex-eve", kind: .codex, name: "Eve", email: "eve@example.com")
+        let combined = PoolAccounts.combined(
+            accounts: [ann, bob, cat, dan, eve],
+            members: [
+                member("ann@example.com", .claude), member("bob@example.com", .claude, disabled: true),
+                PoolMember(credential: credential("dan@example.com", .claude), state: .signedOut), member("eve@example.com", .codex),
+            ])
+        #expect(combined.map(\.name) == ["Ann", "Eve"])
+    }
+
     @Test func pausesAndResumes() async throws {
         let dan = PoolAccountInput(id: "/h/.claude-dan", kind: .claude, name: "Dan", email: "dan@example.com")
         let rows = PoolAccounts.rows(
