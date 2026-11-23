@@ -17,7 +17,7 @@ A menu bar item plus one dropdown menu, drawn with AppKit. Principles: compact w
 - Low warning (10% left or less): light red, sRGB (1, 0.55, 0.55) in dark appearance and (0.88, 0.3, 0.3) in light. Owner: `Tint.low`.
 - Text: `labelColor`, `secondaryLabelColor` and `tertiaryLabelColor`; bar track `quaternaryLabelColor`.
 - Combined accounts: system cyan (`#32ade6`, `PoolSetup.combinedColor`) for the "in use" dot and text and for the T3 Code "Claude+" and "Codex+" entries. "paused" uses `tertiaryLabelColor`; "signed out" uses system red.
-- Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo (58% of the tile wide and centred; with a tag it is 50% wide and sits above the pill, with a gap, so it never touches the pill) and a white pill with the tag in the account colour mixed 45% with black, so the tag reads at 3:1 contrast or better on white. Owner: `DesktopApp.icon`.
+- Desktop app icons: a tile filled with the account colour (18% lighter at the top, 14% darker at the bottom), a white logo (centred; with a tag it sits above the pill, with a gap, so it never touches the pill; owner `DesktopIconLayout`) and a white pill with the tag in the account colour mixed 45% with black, so the tag reads at 3:1 contrast or better on white. Owner: `DesktopApp.icon`.
 - Shared literal theme colours: `Theme.iconPillFill` (desktop app icon pill fill) and `Theme.tagCutoutMask` (menu bar tag pill cutout mask). Owner: `Theme` in `Sources/Relaybar/Theme.swift`.
 
 ## Typography
