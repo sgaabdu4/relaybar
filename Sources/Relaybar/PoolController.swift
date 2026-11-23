@@ -177,9 +177,10 @@ final class PoolController: NSObject {
     }
 
     func combinedNames() -> [String] {
-        PoolAccounts.rows(accounts: inputs(), members: members)
+        let rows = PoolAccounts.rows(accounts: inputs(), members: members)
             .filter { statuses[$0.account.id] != .signedOut && statuses[$0.account.id] != .paused }
-            .map(\.account.name)
+        let tags = rows.map { row in (kind: row.account.kind, tag: app.accounts.first { $0.id == row.account.id }?.tag ?? "") }
+        return PoolConfirmation.names(for: tags)
     }
 
     func inUseName(_ kind: PoolKind) -> String? {
