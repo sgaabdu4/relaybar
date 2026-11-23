@@ -47,7 +47,8 @@ import Testing
         #expect(note.primary == .tailscale)
         #expect(note.secondary == .dismiss)
         #expect(note.closesAfter == nil)
-        #expect(note.detail.contains("Tailscale on this Mac and on homebox"))
+        #expect(note.detail == "Use it away from home too?")
+        #expect(note.detail.contains("\n") == false)
     }
 
     @Test func aWarningGoesToAnAlertAndDoesNotChangeTheConfirmation() {
@@ -68,6 +69,7 @@ import Testing
         #expect(offer.primary == .tailscale)
         #expect(offer.secondary == .dismiss)
         #expect(offer.closesAfter == nil)
+        #expect(offer.detail.hasSuffix("\nUse it away from home too?"))
     }
 
     @Test func movingKeepsTheMoveSummary() {
