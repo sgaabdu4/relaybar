@@ -13,12 +13,18 @@ public struct PoolConfirmation: Equatable, Sendable {
     public let closesAfter: Double?
     public let warning: String?
 
-    public static func combined(host: String?, t3: Bool, note: String?, tailscale: Bool) -> PoolConfirmation {
+    public static func combined(host: String?, accounts: [String], t3: Bool, note: String?, tailscale: Bool) -> PoolConfirmation {
         let first = t3 ? "New chats in T3 Code now use Claude+." : "Use claude+ and codex+ in a terminal."
         let more = tailscale ? " It works on your home Wi-Fi." : ""
         return make(
-            title: "Your accounts are combined on \(host ?? "this Mac")", detail: first + more, host: host, offer: tailscale,
+            title: "\(who(accounts)) combined on \(host ?? "this Mac")", detail: first + more, host: host, offer: tailscale,
             primary: t3 ? .openT3 : nil, secondary: .undo, seconds: 10, warning: note)
+    }
+
+    private static func who(_ accounts: [String]) -> String {
+        guard !accounts.isEmpty else { return "Your accounts are" }
+        let more = accounts.count > 3 ? ["\(accounts.count - 3) more"] : []
+        return PoolMove.list(Array(accounts.prefix(3)) + more) + (accounts.count == 1 ? " is" : " are")
     }
 
     public static func moved(
