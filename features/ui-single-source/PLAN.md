@@ -6,7 +6,7 @@ Status: Complete
 
 Prepare Relaybar for Hard Eng's upcoming UI Single Source of Truth (`b5`) release without modifying `hard-eng.gates.json`, and fix the success screens that the change touches:
 1. Move the raw `NSColor.white` and `NSColor.black` literals in `DesktopApp.swift` and `Render.swift` into a dedicated theme owner `Sources/Relaybar/Theme.swift`. The third literal, the white badge behind the tick in `PoolDialogs.swift`, goes away with the blocking success alert that drew it.
-1a. Replace the two blocking success alerts (accounts combined, helper moved) with a confirmation note under the menu bar icon: the title "Your accounts are combined on this Mac", one detail line, a quiet Undo button on the left and a filled Open T3 Code button on the right, both aligned to the text edge. It closes by itself after 10 seconds. An offer to set up Tailscale keeps the note open until the user answers. A warning that follows combining or moving shows in its own alert. Owners: `Sources/RelaybarCore/PoolConfirmation.swift` (decisions and text), `Sources/Relaybar/Toast.swift` (drawing), `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/PoolMoveFlow.swift` (use).
+1a. Replace the two blocking success alerts (accounts combined, helper moved) with a confirmation note under the menu bar icon: the title "Your accounts are combined on this Mac" with no tick, one detail line, a plain-text Undo button on the left and a filled Open T3 Code button on the right, both aligned to the text edge. It closes by itself after 10 seconds. An offer to set up Tailscale keeps the note open until the user answers. A warning that follows combining or moving shows in its own alert. Owners: `Sources/RelaybarCore/PoolConfirmation.swift` (decisions and text), `Sources/Relaybar/Toast.swift` (drawing), `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/PoolMoveFlow.swift` (use).
 1b. Draw the tag text of the desktop icon pill in the account colour mixed 45% with black, so it reads at 3:1 contrast or better on the white pill (`DesktopApp.icon`); the look review found the old colour below 3:1.
 2. Add valid, non-mismatched YAML front matter to `DESIGN.md` and document `Theme` and `[UI-LIBRARY.md](UI-LIBRARY.md)` there while keeping all existing prose intact.
 3. Generate `UI-LIBRARY.md` for `TARGET_UI_LIBRARY = ["Sources/Relaybar/AccountCard.swift"]`.
@@ -50,7 +50,7 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 ## ux_reference
 
 Result: Passed
-Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs only in the darker tag text. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `19961437e74c` (After).
+Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs only in the darker tag text. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `0a9632c3122d` (After).
 Surface: Existing — macOS menu bar strip, desktop icon pill and the combined-accounts success screen, no browser serves them; owners `Sources/Relaybar/Render.swift`, `Sources/Relaybar/DesktopApp.swift`, `Sources/Relaybar/Toast.swift`, `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/Theme.swift`
 Before: ![Before](ui-before.png)
 Proposed: ![Proposed](ui-after.png)
@@ -64,7 +64,7 @@ Rules:
 - Observe: Pass — the title says the result and the detail says what happens next.
 - Undo: Pass — Undo is on the note for 10 seconds after combining; moving the helper has none because moving back is its own flow.
 - No clutter: Pass — 3 kept, 0 removed (menu bar strip, desktop icon, confirmation note).
-- Hierarchy: Pass — one filled accent button (Open T3 Code) and a quieter Undo.
+- Hierarchy: Pass — one filled accent button (Open T3 Code) and an Undo that is plain text with no fill.
 - Alignment: Pass — the buttons start at the text edge, under the title and the detail.
 - Spacing: Pass — 8 pt between the text and the buttons and 9 pt padding around the note.
 - Design system: Pass — `DESIGN.md` says to confirm with a note and keep alerts for failures; the note uses the system accent colour and the shared `Toast`.

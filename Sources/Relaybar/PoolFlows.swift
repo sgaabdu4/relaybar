@@ -142,7 +142,7 @@ extension PoolController {
 
     func confirm(_ confirmation: PoolConfirmation) {
         app.note(
-            confirmation.title, confirmation.detail, mark: .saved, primary: choice(confirmation.primary),
+            confirmation.title, confirmation.detail, mark: nil, primary: choice(confirmation.primary),
             secondary: choice(confirmation.secondary), closesAfter: confirmation.closesAfter)
         if let warning = confirmation.warning { app.show("Check this", warning) }
     }

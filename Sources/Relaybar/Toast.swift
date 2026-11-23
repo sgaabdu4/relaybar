@@ -17,7 +17,7 @@ final class Toast {
     private var hiding: Task<Void, Never>?
 
     func show(
-        _ title: String, _ detail: String, mark: Mark, under button: NSStatusBarButton?, primary: Choice? = nil, secondary: Choice? = nil,
+        _ title: String, _ detail: String, mark: Mark?, under button: NSStatusBarButton?, primary: Choice? = nil, secondary: Choice? = nil,
         closesAfter seconds: Double? = 2
     ) {
         hiding?.cancel()
@@ -71,7 +71,7 @@ final class Toast {
     }
 
     func content(
-        _ title: String, _ detail: String, mark: Mark, primary: Choice?, secondary: Choice?, hide: @escaping () -> Void
+        _ title: String, _ detail: String, mark: Mark?, primary: Choice?, secondary: Choice?, hide: @escaping () -> Void
     ) -> NSView {
         let titleField = NSTextField(labelWithString: title)
         titleField.font = .systemFont(ofSize: 13, weight: .medium)
@@ -95,7 +95,7 @@ final class Toast {
         text.alignment = .leading
         text.spacing = 1
         if views.count == 3 { text.setCustomSpacing(8, after: detailField) }
-        let row = NSStackView(views: [Self.image(mark), text])
+        let row = NSStackView(views: (mark.map { [Self.image($0)] } ?? []) + [text])
         row.spacing = 9
         row.alignment = views.count == 3 ? .top : .centerY
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -160,12 +160,18 @@ final class ToastButton: NSButton {
                 string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white])
             heightAnchor.constraint(equalToConstant: 22).isActive = true
         } else {
-            self.title = title
-            bezelStyle = .rounded
+            isBordered = false
+            attributedTitle = NSAttributedString(
+                string: title,
+                attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
         }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var alignmentRectInsets: NSEdgeInsets {
+        filled ? NSEdgeInsets() : NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 0)
+    }
 
     override var intrinsicContentSize: NSSize {
         let size = super.intrinsicContentSize
