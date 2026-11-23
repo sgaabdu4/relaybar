@@ -15,23 +15,14 @@ final class Toast {
 
     private var panel: NSPanel?
     private var hiding: Task<Void, Never>?
-    private var offer: (() -> Void)?
 
     func show(
         _ title: String, _ detail: String, mark: Mark?, under button: NSStatusBarButton?, primary: Choice? = nil, secondary: Choice? = nil,
         closesAfter seconds: Double? = 2
     ) {
-        if seconds == nil {
-            offer = { [weak self] in
-                self?.show(title, detail, mark: mark, under: button, primary: primary, secondary: secondary, closesAfter: nil)
-            }
-        } else if primary != nil || secondary != nil {
-            offer = nil
-        }
         hiding?.cancel()
         panel?.orderOut(nil)
         let background = content(title, detail, mark: mark, primary: primary, secondary: secondary) { [weak self] in
-            self?.offer = nil
             self?.hide()
         }
         let size = background.fittingSize
@@ -63,19 +54,12 @@ final class Toast {
         hiding = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.fade()
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard !Task.isCancelled else { return }
-            self?.offer?()
+            self?.hide()
         }
     }
 
     private func hide() {
         hiding?.cancel()
-        fade()
-    }
-
-    private func fade() {
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup(
             {

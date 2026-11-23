@@ -147,33 +147,23 @@ extension PoolController {
     }
 
     func confirm(_ confirmation: PoolConfirmation, afterNotNow: PoolConfirmation? = nil) {
-        let id = UUID()
-        latestConfirmation = id
-        present(confirmation, id: id, afterNotNow: afterNotNow)
-    }
-
-    private func present(_ confirmation: PoolConfirmation, id: UUID, afterNotNow: PoolConfirmation?) {
         app.note(
-            confirmation.title, confirmation.detail, mark: nil, primary: choice(confirmation.primary, id: id, afterNotNow: afterNotNow),
-            secondary: choice(confirmation.secondary, id: id, afterNotNow: afterNotNow), closesAfter: confirmation.closesAfter)
+            confirmation.title, confirmation.detail, mark: nil, primary: choice(confirmation.primary, afterNotNow: afterNotNow),
+            secondary: choice(confirmation.secondary, afterNotNow: afterNotNow), closesAfter: confirmation.closesAfter)
         if let warning = confirmation.warning { app.show("Check this", warning) }
     }
 
-    private func choice(_ action: PoolConfirmation.Action?, id: UUID, afterNotNow: PoolConfirmation?) -> Toast.Choice? {
+    private func choice(_ action: PoolConfirmation.Action?, afterNotNow: PoolConfirmation?) -> Toast.Choice? {
         switch action {
         case .openT3: Toast.Choice(title: "Open T3 Code", run: { T3Code.open() })
         case .tailscale: Toast.Choice(title: "Set Up Tailscale…", run: { [weak self] in self?.setUpTailscale() })
-        case .undo: Toast.Choice(title: "Undo", run: { [weak self] in self?.undoCombining(id) })
-        case .dismiss:
-            Toast.Choice(title: "Not Now", run: { [weak self] in afterNotNow.map { self?.present($0, id: id, afterNotNow: nil) } })
+        case .undo: Toast.Choice(title: "Undo", run: { [weak self] in self?.undoCombining() })
+        case .dismiss: Toast.Choice(title: "Not Now", run: { [weak self] in afterNotNow.map { self?.confirm($0) } })
         case nil: nil
         }
     }
 
-    private func undoCombining(_ id: UUID) {
-        guard id == latestConfirmation else {
-            return app.show("Your accounts changed", "Choose Stop combining in the menu if you still want to stop.")
-        }
+    private func undoCombining() {
         guard !signing, !openingSignIn, session?.active != true else {
             return app.show("A sign-in is open", "Finish it in the browser, then choose Stop combining in the menu.")
         }
