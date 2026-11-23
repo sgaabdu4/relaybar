@@ -81,6 +81,10 @@ public enum PoolAccounts {
         }
     }
 
+    public static func combined(accounts: [PoolAccountInput], members: [PoolMember]) -> [PoolAccountInput] {
+        rows(accounts: accounts, members: members).filter { $0.state == .active }.map(\.account)
+    }
+
     public static func lastAccountMessage(_ kind: PoolKind) -> String {
         "This is the last \(kind.rawValue.capitalized) account in use. Keep at least one account on."
     }
