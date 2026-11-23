@@ -15,17 +15,25 @@ final class Toast {
 
     private var panel: NSPanel?
     private var hiding: Task<Void, Never>?
-    private var offerOpen = false
+    private var offer: (() -> Void)?
 
     func show(
         _ title: String, _ detail: String, mark: Mark?, under button: NSStatusBarButton?, primary: Choice? = nil, secondary: Choice? = nil,
         closesAfter seconds: Double? = 2
     ) {
-        if offerOpen, primary == nil, secondary == nil { return }
-        offerOpen = seconds == nil
+        if seconds == nil {
+            offer = { [weak self] in
+                self?.show(title, detail, mark: mark, under: button, primary: primary, secondary: secondary, closesAfter: nil)
+            }
+        } else if primary != nil || secondary != nil {
+            offer = nil
+        }
         hiding?.cancel()
         panel?.orderOut(nil)
-        let background = content(title, detail, mark: mark, primary: primary, secondary: secondary) { [weak self] in self?.hide() }
+        let background = content(title, detail, mark: mark, primary: primary, secondary: secondary) { [weak self] in
+            self?.offer = nil
+            self?.hide()
+        }
         let size = background.fittingSize
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
@@ -56,11 +64,13 @@ final class Toast {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.hide()
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            self?.offer?()
         }
     }
 
     private func hide() {
-        offerOpen = false
         hiding?.cancel()
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup(
