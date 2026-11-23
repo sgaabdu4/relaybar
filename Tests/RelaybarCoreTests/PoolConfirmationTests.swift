@@ -4,7 +4,8 @@ import Testing
 
 @Suite struct PoolConfirmationTests {
     @Test func combiningOffersT3CodeAndUndoThenClosesByItself() {
-        let note = PoolConfirmation.combined(host: nil, accounts: ["Claude WK", "Codex PC"], t3: true, note: nil, tailscale: false)
+        let note = PoolConfirmation.combined(
+            host: nil, accounts: ["Claude WK", "Codex PC"], t3: true, claudePlusIsDefault: true, note: nil, tailscale: false)
         #expect(note.title == "Claude WK and Codex PC are combined on this Mac")
         #expect(note.primary == .openT3)
         #expect(note.secondary == .undo)
@@ -13,9 +14,17 @@ import Testing
         #expect(note.detail == "New chats in T3 Code now use Claude+.")
     }
 
+    @Test func whenT3CodeKeepsItsOwnDefaultTheNoteTellsTheUserToPickClaudePlus() {
+        let note = PoolConfirmation.combined(
+            host: nil, accounts: ["Claude WK"], t3: true, claudePlusIsDefault: false, note: nil, tailscale: false)
+        #expect(note.detail == "Pick Claude+ in the T3 Code model menu.")
+        #expect(note.primary == .openT3)
+    }
+
     @Test func theDetailOfAPlainConfirmationIsOneShortLine() {
         for t3 in [true, false] {
-            let note = PoolConfirmation.combined(host: nil, accounts: ["WK"], t3: t3, note: nil, tailscale: false)
+            let note = PoolConfirmation.combined(
+                host: nil, accounts: ["WK"], t3: t3, claudePlusIsDefault: true, note: nil, tailscale: false)
             #expect(note.detail.contains("\n") == false)
             #expect(note.detail.count <= 60)
         }
@@ -23,7 +32,7 @@ import Testing
 
     @Test func theTitleNamesTheCombinedAccounts() {
         func title(_ names: [String]) -> String {
-            PoolConfirmation.combined(host: nil, accounts: names, t3: true, note: nil, tailscale: false).title
+            PoolConfirmation.combined(host: nil, accounts: names, t3: true, claudePlusIsDefault: true, note: nil, tailscale: false).title
         }
         #expect(title(["WK"]) == "WK is combined on this Mac")
         #expect(title(["WK", "PC", "Claude", "Codex", "ZZ"]) == "WK, PC, Claude and 2 more are combined on this Mac")
@@ -36,14 +45,16 @@ import Testing
     }
 
     @Test func combiningWithoutT3CodeKeepsOnlyUndo() {
-        let note = PoolConfirmation.combined(host: "homebox", accounts: ["WK", "PC", "Claude"], t3: false, note: nil, tailscale: false)
+        let note = PoolConfirmation.combined(
+            host: "homebox", accounts: ["WK", "PC", "Claude"], t3: false, claudePlusIsDefault: true, note: nil, tailscale: false)
         #expect(note.title == "WK, PC and Claude are combined on homebox")
         #expect(note.primary == nil)
         #expect(note.secondary == .undo)
     }
 
     @Test func aTailscaleOfferStaysUntilTheUserAnswersAndOffersNoUndo() {
-        let note = PoolConfirmation.combined(host: "homebox", accounts: ["WK"], t3: true, note: nil, tailscale: true)
+        let note = PoolConfirmation.combined(
+            host: "homebox", accounts: ["WK"], t3: true, claudePlusIsDefault: true, note: nil, tailscale: true)
         #expect(note.primary == .tailscale)
         #expect(note.secondary == .dismiss)
         #expect(note.closesAfter == nil)
@@ -53,7 +64,8 @@ import Testing
 
     @Test func aWarningGoesToAnAlertAndDoesNotChangeTheConfirmation() {
         let warning = "Sleep is still on for homebox."
-        let note = PoolConfirmation.combined(host: "homebox", accounts: ["WK"], t3: true, note: warning, tailscale: false)
+        let note = PoolConfirmation.combined(
+            host: "homebox", accounts: ["WK"], t3: true, claudePlusIsDefault: true, note: warning, tailscale: false)
         #expect(note.warning == warning)
         #expect(note.detail.contains(warning) == false)
         #expect(note.closesAfter == 10)

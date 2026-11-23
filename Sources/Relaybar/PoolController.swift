@@ -24,6 +24,8 @@ final class PoolController: NSObject {
     var busy = false
     var generation = 0
     var signing = false
+    var openingSignIn = false
+    var latestConfirmation: UUID?
     var session: SignInSession?
 
     init(app: App) {

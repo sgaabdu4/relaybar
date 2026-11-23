@@ -13,8 +13,15 @@ public struct PoolConfirmation: Equatable, Sendable {
     public let closesAfter: Double?
     public let warning: String?
 
-    public static func combined(host: String?, accounts: [String], t3: Bool, note: String?, tailscale: Bool) -> PoolConfirmation {
-        let first = t3 ? "New chats in T3 Code now use Claude+." : "Use claude+ and codex+ in a terminal."
+    public static func combined(
+        host: String?, accounts: [String], t3: Bool, claudePlusIsDefault: Bool, note: String?, tailscale: Bool
+    ) -> PoolConfirmation {
+        let first =
+            switch (t3, claudePlusIsDefault) {
+            case (true, true): "New chats in T3 Code now use Claude+."
+            case (true, false): "Pick Claude+ in the T3 Code model menu."
+            case (false, _): "Use claude+ and codex+ in a terminal."
+            }
         let offer = tailscale && host != nil
         return make(
             title: "\(who(accounts)) combined on \(host ?? "this Mac")",
