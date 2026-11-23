@@ -60,7 +60,7 @@ Before: ![Before](ui-before.png)
 Proposed: ![Proposed](ui-after.png)
 Controls: Open T3 Code button — new `Sources/Relaybar/Toast.swift` — mockup ![Confirmation note](features/ui-single-source/confirmation.png); Undo button — new `Sources/Relaybar/Toast.swift` — mockup ![Confirmation note](features/ui-single-source/confirmation.png); Set Up Tailscale and Not Now buttons — new `Sources/Relaybar/Toast.swift` — mockup ![Tailscale offer](features/ui-single-source/offer.png)
 Capture: Direct AppKit render, not a browser capture. One program drew the strip, the icon and the window at 2x from each checkout (merge base and head); the strip shows one tagged account with sample numbers, and the icons are drawn in a row on a Dock-like shelf with no name label under them, because the Dock and the app switcher show a name only under the pointer; the pointer is over the first icon, so it is magnified and the Dock shows its name in a bubble above, as the Dock does, while the other icon shows no name; the two icons share the Claude logo, so the tag and the colour are what tell them apart. The stacked image holds the strip, the icon and the success screen. `offer.png` shows the note when Tailscale is offered (After only; Before had no such note). The PR carries one labeled pair for each surface.
-Review: Inspected the three pairs and `offer.png`. The strip does not change. The icon tag text is darker and the logo clears the pill. The success screen no longer blocks the user, offers Undo, has one filled primary action and lines up its buttons with the text. The installed `look` (Hard Eng 421b70ec) was clean in two runs at the final head.
+Review: Inspected the three pairs and `offer.png`. The strip does not change. The icon tag text is darker and the logo clears the pill. The success screen no longer blocks the user, offers Undo, has one filled primary action and lines up its buttons with the text. The installed `look` (Hard Eng 222f3818) was clean in two runs at the final head.
 Rules:
 
 - Mistake-proof: Pass — the title names each combined account by kind and tag ("Claude WK"), Undo reverses combining in one tap and the note is not modal.
@@ -88,4 +88,4 @@ E2E: N/A — interactive Combine accounts GUI journey waived per declined review
 Real service: N/A — no outside service calls are made or changed by this token refactor.
 Retro: None — clean refactor with no recurring failures or new process gaps.
 Delivery target: Merge
-Delivery: Pending — Relaybar's Hard Eng update (421b70ec) is merged and this branch is rebased on it. CI on the PR must pass, then `ship` and the merge.
+Delivery: Pending — Relaybar's Hard Eng update (222f3818) is merged and this branch is rebased on it. CI on the PR must pass, then `ship` and the merge.
