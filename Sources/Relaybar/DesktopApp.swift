@@ -105,7 +105,8 @@ enum DesktopApp {
             let font =
                 NSFont.systemFont(ofSize: size, weight: .heavy).fontDescriptor.withDesign(.rounded)
                 .flatMap { NSFont(descriptor: $0, size: size) } ?? NSFont.systemFont(ofSize: size, weight: .heavy)
-            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: bottom]
+            let ink = fill.blended(withFraction: 0.45, of: .black) ?? fill
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink]
             let text = (tag as NSString).size(withAttributes: attributes)
             let height = unit * 0.23
             let pill = NSRect(
