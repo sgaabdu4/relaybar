@@ -47,31 +47,7 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 
 ## ux_reference
 
-Result: Passed
-Evidence: Compiled `Render.swift`, `DesktopApp.swift`, and `PoolDialogs.swift` from `origin/main` and this branch and rendered `Render.row`, `DesktopApp.icon`, and the live `PoolDialogs.done(host: nil, t3: true, note: nil)` modal alert icon; Before and After PNGs are byte-identical (SHA-256 `fd06fb3be3cb`).
-Surface: Existing — macOS menu bar strip, desktop icon pill, and PoolDialogs alert icon, rendered by Sources/Relaybar/Render.swift, Sources/Relaybar/DesktopApp.swift, and Sources/Relaybar/PoolDialogs.swift
-Before: ![Before](../../coverage/ui-before.png)
-Proposed: ![Proposed](../../coverage/ui-after.png)
-Controls: None — token extraction into Sources/Relaybar/Theme.swift keeps every existing native control unchanged.
-Capture: Direct AppKit render of Render.row, DesktopApp.icon, and live PoolDialogs.done modal alert icon produced byte-identical Before and After PNGs (`coverage/ui-before.png` and `coverage/ui-after.png`, SHA-256 `fd06fb3be3cb`).
-Review: Inspected both renders side-by-side at macOS native resolution; zero visual, contrast, spacing, or alignment differences.
-Rules:
-- Mistake-proof: N/A — colour-token extraction changes no flow or input controls.
-- Least effort: N/A — colour-token extraction changes no user journey clicks.
-- Observe: N/A — colour-token extraction changes no system observation or automation.
-- Undo: N/A — colour-token extraction changes no destructive or reversible actions.
-- No clutter: Pass — inspected render shows 3 kept, 0 removed (menu bar strip, desktop icon, badged alert icon), matching baseline cleanly.
-- Hierarchy: Pass — inspected render keeps the existing orange/blue/green meter hierarchy and single white `ME` pill badge on the icon.
-- Alignment: Pass — inspected render preserves the menu bar horizontal alignment and badge positioning.
-- Spacing: Pass — inspected render preserves padding inside the menu bar pill and icon margins.
-- Design system: Pass — `Sources/Relaybar/Theme.swift` owns `iconPillFill`, `badgeFill`, and `tagCutoutMask`, documented in `DESIGN.md` with `UI-LIBRARY.md` indexing `AccountCard.swift`.
-- Messages: N/A — colour-token extraction changes no user-facing text or messages.
-- States: N/A — colour-token extraction changes no loading, empty, or error states.
-- Time: N/A — colour-token extraction changes no time display or time-zone logic.
-- Audit: N/A — single-user local macOS menu bar utility has no staff or admin roles.
-- Accessibility: Pass — inspected render maintains high-contrast white-on-orange pill, bright green checkmark badge, and crisp menu bar numerals on dark surface.
-- Widths: Pass — macOS native menu bar strip and fixed-size desktop/alert icons render cleanly at native AppKit points.
-- Performance: Pass — `scripts/efficiency.sh` verified 15 MB memory footprint and 0.01 s idle CPU with zero extra runtime work.
+N/A — unchanged: ![Before](../../coverage/ui-before.png) ![After](../../coverage/ui-after.png) — All three changed AppKit call sites (`Render.row`, `DesktopApp.icon`, and the live `PoolDialogs.done(host: nil, t3: true, note: nil)` modal alert icon with `["Open T3 Code", "Close"]` buttons) compiled directly from `origin/main` and this branch render byte-identically (SHA-256 `fd06fb3be3cb`).
 
 ## Verification
 
