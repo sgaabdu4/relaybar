@@ -50,7 +50,7 @@ Adding `"ui_library"` to `hard-eng.gates.json` early would break `0df6e524` CI �
 ## ux_reference
 
 Result: Passed
-Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs only in the darker tag text. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `0a9632c3122d` (After).
+Evidence: Compiled the changed Swift files from `origin/main` (Before) and this branch (After) with the bundled Claude and Codex logos and the real Relaybar icon. Rendered `Render.row`, `DesktopApp.icon`, the old blocking alert from `PoolDialogs.done` and the new confirmation note. The strip is equal in its pair. The icon differs only in the darker tag text. The success screen differs: Before an alert with two stacked equal buttons, After the note with Undo and a filled Open T3 Code. Stacked image SHA-256 `c40107711a68` (After).
 Surface: Existing — macOS menu bar strip, desktop icon pill and the combined-accounts success screen, no browser serves them; owners `Sources/Relaybar/Render.swift`, `Sources/Relaybar/DesktopApp.swift`, `Sources/Relaybar/Toast.swift`, `Sources/Relaybar/PoolFlows.swift` and `Sources/Relaybar/Theme.swift`
 Before: ![Before](ui-before.png)
 Proposed: ![Proposed](ui-after.png)
@@ -72,7 +72,7 @@ Rules:
 - States: Pass — the offer state stays open with Set Up Tailscale and Not Now; the warning state shows its own alert.
 - Time: N/A — the 10 second close is the only timing and no clock or time zone is shown.
 - Audit: N/A — a single-user local menu bar app has no staff or admin roles.
-- Accessibility: Pass — the icon tag text is now the account colour mixed 45% with black on white, and the note text uses system label colours with standard buttons.
+- Accessibility: Pass — the icon tag text is now the account colour mixed 45% with black on white, and the note text uses system label colours; the white text on the Open T3 Code button reads at 4.5:1 or better because the fill is the accent colour mixed 25% with black.
 - Widths: N/A — the note has a fixed native width of about 350 pt and no responsive layout.
 - Performance: Pass — `scripts/efficiency.sh` stays at the 15 MB footprint and 0.01 s idle CPU.
 

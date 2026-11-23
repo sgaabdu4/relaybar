@@ -148,6 +148,7 @@ final class Toast {
 final class ToastButton: NSButton {
     private let run: () -> Void
     private let filled: Bool
+    private static let fill = NSColor.controlAccentColor.blended(withFraction: 0.25, of: .black) ?? .controlAccentColor
 
     init(title: String, filled: Bool, run: @escaping () -> Void) {
         self.run = run
@@ -159,7 +160,7 @@ final class ToastButton: NSButton {
             isBordered = false
             wantsLayer = true
             layer?.cornerRadius = 6
-            layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            layer?.backgroundColor = Self.fill.cgColor
             attributedTitle = NSAttributedString(
                 string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white])
             heightAnchor.constraint(equalToConstant: 22).isActive = true
@@ -183,7 +184,7 @@ final class ToastButton: NSButton {
     }
 
     override func viewDidChangeEffectiveAppearance() {
-        if filled { effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = NSColor.controlAccentColor.cgColor } }
+        if filled { effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = Self.fill.cgColor } }
     }
 
     @objc private func pressed() { run() }
