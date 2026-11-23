@@ -139,7 +139,7 @@ extension PoolController {
         }
         let names = combinedNames()
         let t3 = T3Code.isInstalled
-        let afterNotNow = offer && t3 ? PoolConfirmation.combined(host: host, accounts: names, t3: t3, note: nil, tailscale: false) : nil
+        let afterNotNow = offer ? PoolConfirmation.combined(host: host, accounts: names, t3: t3, note: nil, tailscale: false) : nil
         confirm(.combined(host: host, accounts: names, t3: t3, note: note, tailscale: offer), afterNotNow: afterNotNow)
     }
 

@@ -15,9 +15,10 @@ public struct PoolConfirmation: Equatable, Sendable {
 
     public static func combined(host: String?, accounts: [String], t3: Bool, note: String?, tailscale: Bool) -> PoolConfirmation {
         let first = t3 ? "New chats in T3 Code now use Claude+." : "Use claude+ and codex+ in a terminal."
-        let more = tailscale ? " It works on your home Wi-Fi." : ""
+        let offer = tailscale && host != nil
         return make(
-            title: "\(who(accounts)) combined on \(host ?? "this Mac")", detail: first + more, host: host, offer: tailscale,
+            title: "\(who(accounts)) combined on \(host ?? "this Mac")",
+            detail: offer ? askAway : first, offer: offer,
             primary: t3 ? .openT3 : nil, secondary: .undo, seconds: 10, warning: note)
     }
 
@@ -43,23 +44,23 @@ public struct PoolConfirmation: Equatable, Sendable {
     public static func moved(
         host: String?, computers: [String], old: String?, pending: Bool, note: String?, tailscale: Bool
     ) -> PoolConfirmation {
-        make(
-            title: "Your accounts now run on \(host ?? "this Mac")",
-            detail: PoolMove.doneText(target: host, computers: computers, old: old, pending: pending), host: host,
-            offer: tailscale, primary: nil, secondary: nil, seconds: 12, warning: note)
+        let done = PoolMove.doneText(target: host, computers: computers, old: old, pending: pending)
+        let offer = tailscale && host != nil
+        return make(
+            title: "Your accounts now run on \(host ?? "this Mac")", detail: offer ? done + "\n" + askAway : done, offer: offer,
+            primary: nil, secondary: nil, seconds: 12, warning: note)
     }
 
+    private static let askAway = "Use it away from home too?"
+
     private static func make(
-        title: String, detail: String, host: String?, offer: Bool, primary: Action?, secondary: Action?, seconds: Double,
-        warning: String?
+        title: String, detail: String, offer: Bool, primary: Action?, secondary: Action?, seconds: Double, warning: String?
     ) -> PoolConfirmation {
-        guard offer, let host else {
+        guard offer else {
             return PoolConfirmation(
                 title: title, detail: detail, primary: primary, secondary: secondary, closesAfter: seconds, warning: warning)
         }
-        let ask =
-            "Use it away from home too? Relaybar sets up Tailscale on this Mac and on \(host). You type your Mac password, click Allow once and sign in once."
         return PoolConfirmation(
-            title: title, detail: detail + "\n" + ask, primary: .tailscale, secondary: .dismiss, closesAfter: nil, warning: warning)
+            title: title, detail: detail, primary: .tailscale, secondary: .dismiss, closesAfter: nil, warning: warning)
     }
 }
